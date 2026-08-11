@@ -40,8 +40,23 @@ def test_generic_arithmetic_and_logical_lowering() -> None:
     arithmetic = parse_expression("(a * a) + (b * b)")
     logical = parse_expression("(a < b) *. (c <: y)")
 
-    assert render_fortran_expression(arithmetic) == "(a * a) + (b * b)"
-    assert render_fortran_expression(logical) == "(a < b) .and. (c <= y)"
+    assert render_fortran_expression(arithmetic) == "a**2 + b**2"
+    assert render_fortran_expression(logical) == "a < b .and. c <= y"
+
+
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    [
+        ("(a + b) * c", "(a + b) * c"),
+        ("a * (b + c)", "a * (b + c)"),
+        ("(a * b) + (c * d)", "a * b + c * d"),
+        ("a - (b - c)", "a - (b - c)"),
+        ("*: x", "x**2"),
+        ("(a + b) * (a + b)", "(a + b)**2"),
+    ],
+)
+def test_parentheses_are_emitted_only_when_required(source: str, expected: str) -> None:
+    assert render_fortran_expression(parse_expression(source)) == expected
 
 
 def test_type_inference_propagates_array_rank() -> None:

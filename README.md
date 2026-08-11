@@ -92,6 +92,33 @@ J uses zero-based indexing and row-major array order; the lowering adjusts
 indices and constructs cartesian-product rows so the generated Fortran retains
 the same observable ordering.
 
+## Generated Fortran policy
+
+The emitter applies these rules to generated procedures:
+
+- Procedures are declared `pure`; procedures are declared explicitly
+  `pure elemental` only when every dummy and any function result are scalar.
+- A function's dummy arguments are declared first. Its result is declared on a
+  separate line immediately afterward.
+- Local entities with identical complete declaration specifications share a
+  declaration when practical.
+- Repeated products are emitted as powers (`x**2`), and expression parentheses
+  are retained only when required to preserve evaluation semantics.
+- J names that collide with Fortran construct words, selected common
+  intrinsics, or explicitly avoided identifiers such as `mask` receive a
+  readable `_j` suffix.
+- Every generated `use` statement has an `only:` clause.
+- Printing a rank-2 result with a statically known column count uses one
+  formatted `write` over its transpose, allowing format reversion to emit one
+  original row per record without a temporary matrix or explicit output loop.
+- Adjacent assignments that fill a leading row section and then its immediately
+  following scalar element are coalesced into one array-constructor assignment.
+
+The reserved-name policy, conservative elemental eligibility checks, and
+declaration-grouping approach are adapted from the sibling C-to-Fortran and
+R-to-Fortran `fortran_scan.py` and `fortran_post.py` implementations. They are
+implemented locally so `xj2f` does not depend on either neighboring project.
+
 ## Architecture
 
 The implementation has four stages:

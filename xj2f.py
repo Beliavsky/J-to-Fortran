@@ -23,6 +23,12 @@ from typing import Sequence
 
 from j2fortran.ast import Name, ast_to_dict
 from j2fortran.expression_parser import ExpressionParseError, parse_expression
+from j2fortran.fortran_style import (
+    combine_adjacent_row_extension_assignments,
+    combine_declarations,
+    procedure_prefix,
+    safe_fortran_identifier,
+)
 from j2fortran.lexer import LexerError
 from j2fortran.lowering import (
     LoweringError,
@@ -233,10 +239,7 @@ def parse_j_source(path: Path, text: str) -> Program:
 
 
 def _fortran_name(name: str) -> str:
-    cleaned = re.sub(r"[^A-Za-z0-9_]", "_", name)
-    if not cleaned or not cleaned[0].isalpha():
-        cleaned = "j_" + cleaned
-    return cleaned.lower()
+    return safe_fortran_identifier(name)
 
 
 def _normalized_expression(expression: str) -> str:
@@ -248,14 +251,16 @@ class FunctionEmitter:
         self.definition = definition
         self.declarations: dict[str, str] = {}
         self.types: dict[str, ValueType] = {}
+        self.matrix_columns: dict[str, int | None] = {}
         self.body: list[str] = []
         self.indent = 1
         self.returned = False
         self.needs_append = False
         self.needs_cartesian = False
         self.needs_compress_hcat = False
+        self.result_columns: int | None = None
 
-    def emit(self) -> tuple[list[str], set[str]]:
+    def emit(self) -> tuple[list[str], set[str], int | None]:
         self._declare(self.definition.argument, "integer, intent(in)")
         for statement in self.definition.body:
             self._emit_statement(statement)
@@ -267,10 +272,21 @@ class FunctionEmitter:
             )
 
         name = _fortran_name(self.definition.name)
-        result = [f"function {name}(y) result(j_result)"]
-        result.append("  integer, allocatable :: j_result(:,:)")
+        purity = procedure_prefix([0], result_rank=2)
+        result = [f"{purity} function {name}(y) result(j_result)"]
+        argument_names = {_fortran_name(self.definition.argument)}
+        arguments: list[tuple[str, str]] = []
+        locals_: list[tuple[str, str]] = []
         for variable, declaration in self.declarations.items():
-            result.append(f"  {declaration} :: {variable}{self._shape_suffix(declaration)}")
+            specification = self._clean_declaration(declaration)
+            entity = variable + self._shape_suffix(declaration)
+            target = arguments if variable in argument_names else locals_
+            target.append((specification, entity))
+        result.extend(f"  {line}" for line in combine_declarations(arguments))
+        # Keep the function result declaration separate and immediately after
+        # dummy argument declarations, even when a local has the same type.
+        result.append("  integer, allocatable :: j_result(:,:)")
+        result.extend(f"  {line}" for line in combine_declarations(locals_))
         result.append("")
         result.extend(self.body)
         result.append(f"end function {name}")
@@ -281,7 +297,7 @@ class FunctionEmitter:
             helpers.add("cartesian")
         if self.needs_compress_hcat:
             helpers.add("compress_hcat")
-        return result, helpers
+        return result, helpers, self.result_columns
 
     @staticmethod
     def _shape_suffix(declaration: str) -> str:
@@ -312,6 +328,8 @@ class FunctionEmitter:
         }.get(declaration)
         if value_type is not None:
             self.types[name] = value_type
+        if value_type is ValueType.INTEGER_MATRIX:
+            self.matrix_columns.setdefault(name, None)
 
     def _write(self, text: str) -> None:
         self.body.append("  " * self.indent + text)
@@ -333,12 +351,14 @@ class FunctionEmitter:
         columns = match_zero_integer_matrix(expression)
         if columns is not None:
             self._declare(name, "integer, allocatable-matrix")
+            self.matrix_columns[name] = columns
             self._write(f"allocate({name}(0, {columns}))")
             return
 
         cartesian_bound = match_cartesian_square(expression)
         if cartesian_bound is not None:
             self._declare(name, "integer, allocatable-matrix")
+            self.matrix_columns[name] = 2
             bound = _fortran_name(cartesian_bound)
             self._write(f"{name} = j_cartesian_square({bound})")
             self.needs_cartesian = True
@@ -370,7 +390,7 @@ class FunctionEmitter:
             self._require_vector(source, assignment.line)
             self._declare(name, "integer, allocatable-vector")
             self._write(
-                f"{name} = int(floor(sqrt(real({source}, kind=real64))))"
+                f"{name} = floor(sqrt(real({source}, kind=real64)))"
             )
             return
 
@@ -388,8 +408,8 @@ class FunctionEmitter:
             return
 
         try:
-            value_type = infer_type(expression, self.types)
-            rendered = render_fortran_expression(expression)
+            value_type = infer_type(expression, self.types, _fortran_name)
+            rendered = render_fortran_expression(expression, _fortran_name)
         except LoweringError as exc:
             raise _error_at(UnsupportedJError, assignment.line, str(exc)) from exc
         if value_type is ValueType.INTEGER_VECTOR:
@@ -423,7 +443,7 @@ class FunctionEmitter:
         variable = _fortran_name(loop.variable)
         self._declare(variable, "integer")
         try:
-            upper = render_fortran_expression(sequence_bound)
+            upper = render_fortran_expression(sequence_bound, _fortran_name)
         except LoweringError as exc:
             raise _error_at(UnsupportedJError, loop.line, str(exc)) from exc
         self._write(f"do {variable} = 1, {upper}")
@@ -436,7 +456,7 @@ class FunctionEmitter:
     def _emit_if(self, conditional: IfStatement) -> None:
         expression = self._parse_expression(conditional.condition, conditional.line)
         try:
-            condition = render_fortran_expression(expression)
+            condition = render_fortran_expression(expression, _fortran_name)
         except LoweringError as exc:
             raise _error_at(UnsupportedJError, conditional.line, str(exc)) from exc
         self._write(f"if ({condition}) then")
@@ -452,6 +472,7 @@ class FunctionEmitter:
         if isinstance(bare, Name) and self._is_matrix(_fortran_name(bare.identifier)):
             name = _fortran_name(bare.identifier)
             self._write(f"j_result = {name}")
+            self.result_columns = self.matrix_columns.get(name)
             self.returned = True
             return
         compressed = match_compress_hcat(expression)
@@ -467,6 +488,10 @@ class FunctionEmitter:
                 )
             self._require_vector(column, statement.line)
             self._write(f"j_result = j_compress_hcat({matrix}, {column}, {mask})")
+            source_columns = self.matrix_columns.get(matrix)
+            self.result_columns = (
+                source_columns + 1 if source_columns is not None else None
+            )
             self.needs_compress_hcat = True
             self.returned = True
             return
@@ -502,21 +527,12 @@ class FunctionEmitter:
             )
 
 
-def _clean_function_declarations(lines: list[str]) -> list[str]:
-    return [
-        line.replace("allocatable-vector", "allocatable").replace(
-            "allocatable-matrix", "allocatable"
-        )
-        for line in lines
-    ]
-
-
 def _runtime_helpers(helpers: set[str]) -> list[str]:
     result: list[str] = []
     if "append" in helpers:
         result.extend(
             [
-                "subroutine j_append_int_row(matrix, row)",
+                "pure subroutine j_append_int_row(matrix, row)",
                 "  integer, allocatable, intent(inout) :: matrix(:,:)",
                 "  integer, intent(in) :: row(:)",
                 "  integer, allocatable :: grown(:,:)",
@@ -536,7 +552,7 @@ def _runtime_helpers(helpers: set[str]) -> list[str]:
     if "cartesian" in helpers:
         result.extend(
             [
-                "function j_cartesian_square(n) result(values)",
+                "pure function j_cartesian_square(n) result(values)",
                 "  integer, intent(in) :: n",
                 "  integer, allocatable :: values(:,:)",
                 "  integer :: a, b, row",
@@ -557,19 +573,19 @@ def _runtime_helpers(helpers: set[str]) -> list[str]:
     if "compress_hcat" in helpers:
         result.extend(
             [
-                "function j_compress_hcat(matrix, column, mask) result(values)",
+                "pure function j_compress_hcat(matrix, column, row_selector) result(values)",
                 "  integer, intent(in) :: matrix(:,:), column(:)",
-                "  logical, intent(in) :: mask(:)",
+                "  logical, intent(in) :: row_selector(:)",
                 "  integer, allocatable :: values(:,:)",
                 "  integer :: source_row, target_row",
                 "",
                 "  if (size(matrix, 1) /= size(column) .or. &",
-                "      size(column) /= size(mask)) error stop &",
+                "      size(column) /= size(row_selector)) error stop &",
                 '    "J compress shape mismatch"',
-                "  allocate(values(count(mask), size(matrix, 2) + 1))",
+                "  allocate(values(count(row_selector), size(matrix, 2) + 1))",
                 "  target_row = 0",
-                "  do source_row = 1, size(mask)",
-                "    if (mask(source_row)) then",
+                "  do source_row = 1, size(row_selector)",
+                "    if (row_selector(source_row)) then",
                 "      target_row = target_row + 1",
                 "      values(target_row, 1:size(matrix, 2)) = matrix(source_row, :)",
                 "      values(target_row, size(matrix, 2) + 1) = column(source_row)",
@@ -609,12 +625,15 @@ def emit_fortran(program: Program) -> str:
 
     helpers: set[str] = set()
     function_names: set[str] = set()
+    function_columns: dict[str, int | None] = {}
     for definition in definitions:
-        emitted, required = FunctionEmitter(definition).emit()
-        lines.extend(_clean_function_declarations(emitted))
+        emitted, required, result_columns = FunctionEmitter(definition).emit()
+        lines.extend(emitted)
         lines.append("")
         helpers.update(required)
-        function_names.add(_fortran_name(definition.name))
+        function_name = _fortran_name(definition.name)
+        function_names.add(function_name)
+        function_columns[function_name] = result_columns
     lines.extend(_runtime_helpers(helpers))
     lines.append(f"end module {module_name}")
     lines.append("")
@@ -633,11 +652,12 @@ def emit_fortran(program: Program) -> str:
     lines.extend(
         [
             f"program {program_name}",
-            f"  use {module_name}",
+            f"  use {module_name}, only: {', '.join(sorted(function_names))}",
             "  implicit none",
         ]
     )
-    for index, echo in enumerate(echos, 1):
+    echo_calls: list[tuple[str, str, int | None]] = []
+    for echo in echos:
         match = re.fullmatch(
             r"([A-Za-z][A-Za-z0-9_]*)\s+([0-9]+)",
             _normalized_expression(echo.expression),
@@ -648,23 +668,29 @@ def emit_fortran(program: Program) -> str:
                 echo.line,
                 "echo currently supports 'verb integer' for a translated verb",
             )
+        function = _fortran_name(match.group(1))
+        echo_calls.append((function, match.group(2), function_columns[function]))
+    unknown_echoes = [
+        index for index, (_, _, columns) in enumerate(echo_calls, 1) if columns is None
+    ]
+    for index in unknown_echoes:
         lines.append(f"  integer, allocatable :: j_echo_{index}(:,:)")
-    if echos:
+    if unknown_echoes:
         lines.append("  integer :: j_row")
     lines.append("")
-    for index, echo in enumerate(echos, 1):
-        match = re.fullmatch(
-            r"([A-Za-z][A-Za-z0-9_]*)\s+([0-9]+)",
-            _normalized_expression(echo.expression),
-        )
-        assert match is not None
-        function = _fortran_name(match.group(1))
-        lines.append(f"  j_echo_{index} = {function}({match.group(2)})")
+    for index, (function, argument, columns) in enumerate(echo_calls, 1):
+        if columns is not None:
+            lines.append(
+                f'  write (*,"({columns}(i0, 1x))") transpose({function}({argument}))'
+            )
+            continue
+        lines.append(f"  j_echo_{index} = {function}({argument})")
         lines.append(f"  do j_row = 1, size(j_echo_{index}, 1)")
-        lines.append(f'    write(*, "(*(i0,1x))") j_echo_{index}(j_row, :)')
+        lines.append(f'    write (*,"(*(i0, 1x))") j_echo_{index}(j_row, :)')
         lines.append("  end do")
     lines.append(f"end program {program_name}")
     lines.append("")
+    lines = combine_adjacent_row_extension_assignments(lines)
     return "\n".join(lines)
 
 

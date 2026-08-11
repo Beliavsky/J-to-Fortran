@@ -19,7 +19,7 @@ def test_examples_transpile_to_standalone_fortran(filename: str) -> None:
     assert "module " in generated
     assert "function triples(y) result(j_result)" in generated
     assert "program " in generated
-    assert "j_echo_1 = triples(100)" in generated
+    assert 'write (*,"(3(i0, 1x))") transpose(triples(100))' in generated
 
 
 def test_loop_example_preserves_control_flow() -> None:
@@ -28,8 +28,8 @@ def test_loop_example_preserves_control_flow() -> None:
     assert "do c = 1, y" in generated
     assert "do b = 1, c - 1" in generated
     assert "do a = 1, b - 1" in generated
-    assert "if (((a * a) + (b * b)) == c * c) then" in generated
-    assert "call j_append_int_row(result, [a, b, c])" in generated
+    assert "if (a**2 + b**2 == c**2) then" in generated
+    assert "call j_append_int_row(result_j, [a, b, c])" in generated
 
 
 def test_array_example_lowers_supported_primitives() -> None:
@@ -38,8 +38,64 @@ def test_array_example_lowers_supported_primitives() -> None:
     assert "ab = j_cartesian_square(y)" in generated
     assert "a = ab(:, 1)" in generated
     assert "b = ab(:, 2)" in generated
-    assert "c = int(floor(sqrt(real(sumsq, kind=real64))))" in generated
+    assert "c = floor(sqrt(real(sumsq, kind=real64)))" in generated
+    assert "int(floor(" not in generated
+    assert "sumsq = a**2 + b**2" in generated
     assert "j_result = j_compress_hcat(ab, c, keep)" in generated
+
+
+@pytest.mark.parametrize("filename", ["pythag.ijs", "pythag_array.ijs"])
+def test_generated_fortran_follows_procedure_and_use_style(filename: str) -> None:
+    generated = xj2f.transpile_path(ROOT / filename)
+    lines = generated.splitlines()
+
+    assert "pure function triples(y) result(j_result)" in lines
+    assert "pure" in generated
+    assert all("only:" in line.lower() for line in lines if line.strip().lower().startswith("use"))
+    assert not any(":: mask" in line.lower() for line in lines)
+
+
+def test_function_result_follows_arguments_and_locals_are_combined() -> None:
+    generated = xj2f.transpile_path(ROOT / "pythag.ijs")
+    lines = generated.splitlines()
+    header = lines.index("pure function triples(y) result(j_result)")
+
+    assert lines[header + 1] == "  integer, intent(in) :: y"
+    assert lines[header + 2] == "  integer, allocatable :: j_result(:,:)"
+    assert "  integer :: c, b, a" in lines
+
+
+def test_array_declarations_with_one_specification_are_combined() -> None:
+    generated = xj2f.transpile_path(ROOT / "pythag_array.ijs")
+
+    assert "  integer, allocatable :: ab(:,:), a(:), b(:), sumsq(:), c(:)" in generated
+    assert "pure function j_compress_hcat(matrix, column, row_selector)" in generated
+    assert (
+        "values(target_row, :) = [matrix(source_row, :), column(source_row)]"
+        in generated
+    )
+    assert "values(target_row, 1:size(matrix, 2))" not in generated
+
+
+@pytest.mark.parametrize("filename", ["pythag.ijs", "pythag_array.ijs"])
+def test_known_matrix_columns_simplify_echo_to_one_write(filename: str) -> None:
+    generated = xj2f.transpile_path(ROOT / filename)
+    main = generated.split("program ", 1)[1]
+
+    assert 'write (*,"(3(i0, 1x))") transpose(triples(100))' in main
+    assert "j_echo_" not in main
+    assert "do j_row" not in main
+
+
+def test_avoided_j_variable_names_are_renamed_consistently() -> None:
+    source = (ROOT / "pythag_array.ijs").read_text(encoding="utf-8").replace("keep", "mask")
+    program = xj2f.parse_j_source(Path("renamed.ijs"), source)
+    generated = xj2f.emit_fortran(program)
+
+    assert "logical, allocatable :: mask_j(:)" in generated
+    assert "mask_j =" in generated
+    assert "j_compress_hcat(ab, c, mask_j)" in generated
+    assert ":: mask(" not in generated
 
 
 def test_unsupported_j_reports_the_source_line() -> None:

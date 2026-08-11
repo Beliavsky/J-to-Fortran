@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from enum import Enum, auto
-from typing import Mapping
+from typing import Callable, Mapping
 
 from .ast import (
     AdverbApplication,
@@ -158,7 +158,11 @@ def match_compress_hcat(expression: Expression) -> tuple[str, str, str] | None:
     return mask, matrix, column
 
 
-def infer_type(expression: Expression, names: Mapping[str, ValueType]) -> ValueType:
+def infer_type(
+    expression: Expression,
+    names: Mapping[str, ValueType],
+    name_transform: Callable[[str], str] = str.lower,
+) -> ValueType:
     expression = ungroup(expression)
     if isinstance(expression, NumberLiteral):
         return ValueType.INTEGER_SCALAR
@@ -166,14 +170,14 @@ def infer_type(expression: Expression, names: Mapping[str, ValueType]) -> ValueT
         return ValueType.INTEGER_VECTOR
     if isinstance(expression, Name):
         try:
-            return names[expression.identifier.lower()]
+            return names[name_transform(expression.identifier)]
         except KeyError as exc:
             raise LoweringError(f"type of name {expression.identifier!r} is unknown") from exc
     if isinstance(expression, StringLiteral):
         raise LoweringError("character arrays are not supported by the Fortran lowerer yet")
     if isinstance(expression, MonadicApply):
         spelling = primitive_spelling(expression.verb)
-        operand_type = infer_type(expression.operand, names)
+        operand_type = infer_type(expression.operand, names, name_transform)
         if spelling in {"+", "-", "<.", ">.", "*:", "%:"}:
             return operand_type
         raise LoweringError(f"cannot infer the result type of monadic {spelling!r}")
@@ -181,8 +185,8 @@ def infer_type(expression: Expression, names: Mapping[str, ValueType]) -> ValueT
         spelling = primitive_spelling(expression.verb)
         if spelling is None:
             raise LoweringError("modified verbs require a dedicated lowering rule")
-        left_type = infer_type(expression.left, names)
-        right_type = infer_type(expression.right, names)
+        left_type = infer_type(expression.left, names, name_transform)
+        right_type = infer_type(expression.right, names, name_transform)
         vector = ValueType.INTEGER_VECTOR in {left_type, right_type}
         matrix = ValueType.INTEGER_MATRIX in {left_type, right_type}
         if spelling in {"=", "~:", "<", "<:", ">", ">:"}:
@@ -216,6 +220,24 @@ _DYADIC_FORTRAN = {
     "+.": ".or.",
 }
 
+_FORTRAN_PRECEDENCE = {
+    ".or.": 10,
+    ".and.": 20,
+    "==": 30,
+    "/=": 30,
+    "<": 30,
+    "<=": 30,
+    ">": 30,
+    ">=": 30,
+    "+": 40,
+    "-": 40,
+    "*": 50,
+    "/": 50,
+}
+_ATOM_PRECEDENCE = 100
+_POWER_PRECEDENCE = 60
+_UNARY_PRECEDENCE = 55
+
 
 def _fortran_number(spelling: str) -> str:
     if spelling in {"_", "_."}:
@@ -223,42 +245,108 @@ def _fortran_number(spelling: str) -> str:
     return spelling.replace("e_", "e-").replace("E_", "E-").replace("_", "-")
 
 
-def render_fortran_expression(expression: Expression) -> str:
+def _same_expression(left: Expression, right: Expression) -> bool:
+    """Compare expression structure while ignoring grouping and source spans."""
+
+    left = ungroup(left)
+    right = ungroup(right)
+    if isinstance(left, Name) and isinstance(right, Name):
+        return left.identifier.lower() == right.identifier.lower()
+    if isinstance(left, NumberLiteral) and isinstance(right, NumberLiteral):
+        return left.text == right.text
+    if isinstance(left, Strand) and isinstance(right, Strand):
+        return [item.text for item in left.items] == [item.text for item in right.items]
+    if isinstance(left, MonadicApply) and isinstance(right, MonadicApply):
+        return (
+            primitive_spelling(left.verb) == primitive_spelling(right.verb)
+            and _same_expression(left.operand, right.operand)
+        )
+    if isinstance(left, DyadicApply) and isinstance(right, DyadicApply):
+        return (
+            primitive_spelling(left.verb) == primitive_spelling(right.verb)
+            and _same_expression(left.left, right.left)
+            and _same_expression(left.right, right.right)
+        )
+    return False
+
+
+def _parenthesize(text: str, precedence: int, required: int) -> str:
+    return f"({text})" if precedence < required else text
+
+
+def _render_fortran_expression(
+    expression: Expression,
+    name_transform: Callable[[str], str],
+) -> tuple[str, int, str | None]:
     if isinstance(expression, Group):
-        return f"({render_fortran_expression(expression.expression)})"
+        return _render_fortran_expression(expression.expression, name_transform)
     if isinstance(expression, NumberLiteral):
-        return _fortran_number(expression.text)
+        return _fortran_number(expression.text), _ATOM_PRECEDENCE, None
     if isinstance(expression, Name):
-        return expression.identifier.lower()
+        return name_transform(expression.identifier), _ATOM_PRECEDENCE, None
     if isinstance(expression, Strand):
         values = ", ".join(_fortran_number(item.text) for item in expression.items)
-        return f"[{values}]"
+        return f"[{values}]", _ATOM_PRECEDENCE, None
     if isinstance(expression, StringLiteral):
         escaped = expression.value.replace("'", "''")
-        return f"'{escaped}'"
+        return f"'{escaped}'", _ATOM_PRECEDENCE, None
     if isinstance(expression, MonadicApply):
         spelling = primitive_spelling(expression.verb)
-        operand = render_fortran_expression(expression.operand)
+        operand, operand_precedence, _ = _render_fortran_expression(
+            expression.operand, name_transform
+        )
         if spelling == "+":
-            return f"(+{operand})"
+            operand = _parenthesize(operand, operand_precedence, _UNARY_PRECEDENCE)
+            return f"+{operand}", _UNARY_PRECEDENCE, "unary+"
         if spelling == "-":
-            return f"(-{operand})"
+            operand = _parenthesize(operand, operand_precedence, _UNARY_PRECEDENCE)
+            return f"-{operand}", _UNARY_PRECEDENCE, "unary-"
         if spelling == "*:":
-            return f"({operand} * {operand})"
+            operand = _parenthesize(operand, operand_precedence, _POWER_PRECEDENCE)
+            return f"{operand}**2", _POWER_PRECEDENCE, "**"
         if spelling == "%:":
-            return f"sqrt({operand})"
+            return f"sqrt({operand})", _ATOM_PRECEDENCE, "call"
         if spelling == "<.":
-            return f"floor({operand})"
+            return f"floor({operand})", _ATOM_PRECEDENCE, "call"
         if spelling == ">.":
-            return f"ceiling({operand})"
+            return f"ceiling({operand})", _ATOM_PRECEDENCE, "call"
         raise LoweringError(f"monadic verb {spelling!r} needs a dedicated lowering rule")
     if isinstance(expression, DyadicApply):
         spelling = primitive_spelling(expression.verb)
         if spelling not in _DYADIC_FORTRAN:
             raise LoweringError(f"dyadic verb {spelling!r} needs a dedicated lowering rule")
-        left = render_fortran_expression(expression.left)
-        right = render_fortran_expression(expression.right)
-        return f"{left} {_DYADIC_FORTRAN[spelling]} {right}"
+        if spelling == "*" and _same_expression(expression.left, expression.right):
+            base, base_precedence, _ = _render_fortran_expression(
+                expression.left, name_transform
+            )
+            base = _parenthesize(base, base_precedence, _POWER_PRECEDENCE)
+            return f"{base}**2", _POWER_PRECEDENCE, "**"
+
+        operator = _DYADIC_FORTRAN[spelling]
+        precedence = _FORTRAN_PRECEDENCE[operator]
+        left, left_precedence, left_operator = _render_fortran_expression(
+            expression.left, name_transform
+        )
+        right, right_precedence, right_operator = _render_fortran_expression(
+            expression.right, name_transform
+        )
+        left = _parenthesize(left, left_precedence, precedence)
+        right_requires = precedence
+        if right_precedence == precedence:
+            associative = operator in {"+", "*", ".and.", ".or."}
+            same_operator = right_operator == operator
+            if not (associative and same_operator):
+                right_requires += 1
+        right = _parenthesize(right, right_precedence, right_requires)
+        return f"{left} {operator} {right}", precedence, operator
     if isinstance(expression, (AdverbApplication, RankApplication, PrimitiveVerb)):
         raise LoweringError("a verb cannot be rendered as a noun expression")
     raise LoweringError(f"cannot render {type(expression).__name__}")
+
+
+def render_fortran_expression(
+    expression: Expression,
+    name_transform: Callable[[str], str] = str.lower,
+) -> str:
+    rendered, _, _ = _render_fortran_expression(expression, name_transform)
+    return rendered
