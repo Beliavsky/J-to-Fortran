@@ -95,6 +95,41 @@ def test_general_integer_copy_keeps_runtime_helper() -> None:
     assert required_runtime_helpers(expression, names) == {"copy_int_vector"}
 
 
+def test_integer_vector_match_lowers_to_scalar_all() -> None:
+    expression = parse_expression("result -: expected")
+    names = {
+        "result": TypeInfo(AtomType.INTEGER, Shape.vector(3)),
+        "expected": TypeInfo(AtomType.INTEGER, Shape.vector(3)),
+    }
+
+    assert infer_type(expression, names) == TypeInfo(AtomType.LOGICAL)
+    assert (
+        render_fortran_expression(expression, names=names)
+        == "all(result == expected)"
+    )
+
+
+def test_match_of_provably_different_shapes_is_false() -> None:
+    expression = parse_expression("result -: expected")
+    names = {
+        "result": TypeInfo(AtomType.INTEGER, Shape.vector(2)),
+        "expected": TypeInfo(AtomType.INTEGER, Shape.vector(3)),
+    }
+
+    assert render_fortran_expression(expression, names=names) == ".false."
+
+
+def test_floating_match_waits_for_j_tolerance_semantics() -> None:
+    expression = parse_expression("result -: expected")
+    names = {
+        "result": TypeInfo(AtomType.REAL),
+        "expected": TypeInfo(AtomType.REAL),
+    }
+
+    with pytest.raises(LoweringError, match="tolerance"):
+        infer_type(expression, names)
+
+
 @pytest.mark.parametrize(
     ("source", "expected"),
     [

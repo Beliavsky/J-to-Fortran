@@ -262,6 +262,16 @@ def infer_type(
         right_type = infer_type(
             expression.right, names, name_transform, named_verbs=named_verbs
         )
+        if spelling == "-:":
+            if AtomType.REAL in {left_type.atom_type, right_type.atom_type}:
+                raise LoweringError(
+                    "floating-point match requires J tolerance support"
+                )
+            if left_type.atom_type is not right_type.atom_type:
+                raise LoweringError(
+                    "match between different atom types is not supported yet"
+                )
+            return TypeInfo(AtomType.LOGICAL)
         try:
             shape = agree_shapes(left_type.shape, right_type.shape)
         except ShapeMismatchError as exc:
@@ -476,6 +486,30 @@ def render_fortran_expression(
     names: Mapping[str, TypeInfo] | None = None,
     named_verbs: Mapping[str, TypeInfo] | None = None,
 ) -> str:
+    matched = dyad(expression, "-:")
+    if matched is not None and names is not None:
+        left_type = infer_type(
+            matched[0], names, name_transform, named_verbs=named_verbs
+        )
+        right_type = infer_type(
+            matched[1], names, name_transform, named_verbs=named_verbs
+        )
+        if left_type.shape != right_type.shape:
+            return ".false."
+        left = render_fortran_expression(
+            matched[0],
+            name_transform,
+            names=names,
+            named_verbs=named_verbs,
+        )
+        right = render_fortran_expression(
+            matched[1],
+            name_transform,
+            names=names,
+            named_verbs=named_verbs,
+        )
+        comparison = f"{left} == {right}"
+        return comparison if left_type.is_scalar else f"all({comparison})"
     copied = dyad(expression, "#")
     if copied is not None and names is not None:
         selector_type = infer_type(

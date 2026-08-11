@@ -12,6 +12,12 @@ import xj2f
 ROOT = Path(__file__).resolve().parents[1]
 
 
+TOP_LEVEL_TEST_PROGRAM = """result =: 10 20 30
+expected =: 10 20 30
+ok =: result -: expected
+"""
+
+
 @pytest.mark.parametrize("filename", ["pythag.ijs", "pythag_array.ijs"])
 def test_examples_transpile_to_standalone_fortran(filename: str) -> None:
     generated = xj2f.transpile_path(ROOT / filename)
@@ -20,6 +26,18 @@ def test_examples_transpile_to_standalone_fortran(filename: str) -> None:
     assert "function triples(y) result(j_result)" in generated
     assert "program " in generated
     assert 'write (*,"(3(i0, 1x))") transpose(triples(100))' in generated
+
+
+def test_top_level_only_test_program_emits_an_executable_assertion() -> None:
+    program = xj2f.parse_j_source(Path("integer_vector.ijs"), TOP_LEVEL_TEST_PROGRAM)
+    generated = xj2f.emit_fortran(program)
+    main = generated.split("program integer_vector_j", 1)[1]
+
+    assert "integer, allocatable :: result_j(:), expected(:)" in main
+    assert "logical :: ok" in main
+    assert "ok = all(result_j == expected)" in main
+    assert 'if (.not. ok) error stop "J test assertion failed"' in main
+    assert "use integer_vector_j_mod" not in main
 
 
 def test_loop_example_preserves_control_flow() -> None:
@@ -267,3 +285,36 @@ def test_primes_example_compiles_and_runs(tmp_path: Path) -> None:
     )
     assert completed.returncode == 0, completed.stdout + completed.stderr
     assert completed.stdout.split() == ["2", "3", "5", "7", "11", "13", "17", "19"]
+
+
+@pytest.mark.parametrize(
+    ("expected", "succeeds"),
+    [("10 20 30", True), ("10 20 99", False)],
+)
+@pytest.mark.requires_gfortran
+def test_top_level_ok_controls_program_status(
+    tmp_path: Path, expected: str, succeeds: bool
+) -> None:
+    compiler = shutil.which("gfortran")
+    if compiler is None:
+        pytest.skip("gfortran is not installed")
+    text = TOP_LEVEL_TEST_PROGRAM.replace(
+        "expected =: 10 20 30", f"expected =: {expected}"
+    )
+    source = tmp_path / "corpus_j.f90"
+    executable = tmp_path / "corpus.exe"
+    program = xj2f.parse_j_source(Path("corpus.ijs"), text)
+    source.write_text(xj2f.emit_fortran(program), encoding="utf-8")
+    compiled = subprocess.run(
+        [compiler, "-std=f2018", str(source), "-o", str(executable)],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert compiled.returncode == 0, compiled.stdout + compiled.stderr
+
+    completed = subprocess.run(
+        [str(executable)], capture_output=True, text=True, check=False
+    )
+    assert (completed.returncode == 0) is succeeds

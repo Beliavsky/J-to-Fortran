@@ -95,6 +95,7 @@ use `--runtime-file FILE` to select another copy.
 
 The parser currently recognizes:
 
+- standalone top-level noun programs without an explicit verb definition;
 - monadic explicit verb definitions using `name =: 3 : 0 ... )`;
 - local and global copulas as syntax (`=.` and `=:`), with local assignments
   supported inside translated verbs;
@@ -113,6 +114,7 @@ The parser currently recognizes:
   logical results and emitted with `.false.`/`.true.` literals;
 - rank-0 application of a translated scalar verb to an integer vector;
 - top-level scalar and vector assignments, including integer copy `#`;
+- exact integer and logical scalar/vector match using dyadic `-:`;
 - a final noun as an array-valued verb result;
 - top-level `echo` of translated verb calls and assigned nouns, plus `exit 0`.
 
@@ -147,6 +149,8 @@ The emitter applies these rules to generated procedures:
   the pure `j_copy_int_vector` helper so repeated values preserve J semantics.
 - Runtime-sized iota helpers use an explicitly allocated result and a regular
   loop, avoiding slow compilation of implied-do constructors with unknown bounds.
+- A top-level logical scalar named `ok`, when no values are echoed, becomes an
+  `error stop` assertion so corpus programs cannot pass through empty output.
 
 The reserved-name policy, conservative elemental eligibility checks, and
 declaration-grouping approach are adapted from the sibling C-to-Fortran and
