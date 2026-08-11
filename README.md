@@ -85,7 +85,9 @@ The parser currently recognizes:
 - row append using `,` in the demonstrated explicit-loop form;
 - the array pipeline used by `pythag_array.ijs`: catalogue/cartesian product,
   rank-1 column selection, square root, floor, laminate, and compression;
-- a final noun as a verb result;
+- scalar integer, real, and logical verb results, including results selected by
+  total `if.`/`elseif.`/`else.` control flow;
+- a final noun as an array-valued verb result;
 - top-level `echo verb integer` and `exit 0`.
 
 J uses zero-based indexing and row-major array order; the lowering adjusts

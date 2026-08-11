@@ -102,7 +102,7 @@ def test_unsupported_j_reports_the_source_line() -> None:
     source = "mystery =: 3 : 0\n  +/ y\n)\n"
     program = xj2f.parse_j_source(Path("mystery.ijs"), source)
 
-    with pytest.raises(xj2f.UnsupportedJError, match=r"2: unsupported result expression"):
+    with pytest.raises(xj2f.UnsupportedJError, match=r"2: cannot infer the result type"):
         xj2f.emit_fortran(program)
 
 

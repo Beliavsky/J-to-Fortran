@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from pathlib import Path
+import shutil
+import subprocess
 
 import pytest
 
@@ -63,3 +65,68 @@ def test_stray_else_is_rejected_at_its_source_line() -> None:
 
     with pytest.raises(xj2f.ParseError, match=r"2: unexpected conditional branch"):
         xj2f.parse_j_source(Path("broken.ijs"), source)
+
+
+SCALAR_CONDITIONAL = """classify =: 3 : 0
+  if. y < 0 do.
+    _1
+  elseif. y = 0 do.
+    0
+  else.
+    1
+  end.
+)
+
+echo classify 3
+exit 0
+"""
+
+
+def test_scalar_conditional_emits_elemental_function_and_direct_echo() -> None:
+    program = xj2f.parse_j_source(Path("classify.ijs"), SCALAR_CONDITIONAL)
+    generated = xj2f.emit_fortran(program)
+
+    assert "pure elemental function classify(y) result(j_result)" in generated
+    assert "  integer, intent(in) :: y" in generated
+    assert "  integer :: j_result" in generated
+    assert "    j_result = -1" in generated
+    assert "  else if (y == 0) then" in generated
+    assert 'write (*,"(i0)") classify(3)' in generated
+
+
+def test_conditional_without_else_is_not_a_total_result() -> None:
+    source = """f =: 3 : 0
+  if. y > 0 do.
+    1
+  end.
+)
+"""
+    program = xj2f.parse_j_source(Path("partial.ijs"), source)
+
+    with pytest.raises(xj2f.UnsupportedJError, match="does not produce a result on every path"):
+        xj2f.emit_fortran(program)
+
+
+@pytest.mark.requires_gfortran
+def test_scalar_conditional_compiles_and_runs(tmp_path: Path) -> None:
+    compiler = shutil.which("gfortran")
+    if compiler is None:
+        pytest.skip("gfortran is not installed")
+    source = tmp_path / "classify_j.f90"
+    executable = tmp_path / "classify.exe"
+    program = xj2f.parse_j_source(Path("classify.ijs"), SCALAR_CONDITIONAL)
+    source.write_text(xj2f.emit_fortran(program), encoding="utf-8")
+
+    compiled = subprocess.run(
+        [compiler, "-std=f2018", str(source), "-o", str(executable)],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert compiled.returncode == 0, compiled.stdout + compiled.stderr
+    completed = subprocess.run(
+        [str(executable)], cwd=tmp_path, capture_output=True, text=True, check=False
+    )
+    assert completed.returncode == 0
+    assert completed.stdout.split() == ["1"]

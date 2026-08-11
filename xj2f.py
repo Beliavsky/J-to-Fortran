@@ -48,6 +48,7 @@ from j2fortran.type_system import (
     Shape,
     ShapeMismatchError,
     TypeInfo,
+    agree_shapes,
     appended_column_shape,
     compressed_shape,
 )
@@ -312,13 +313,18 @@ class FunctionEmitter:
         self._declare(self.definition.argument, "integer, intent(in)")
         for statement in self.definition.body:
             self._emit_statement(statement)
-        if not self.returned:
+        if self.result_type is None:
             raise _error_at(
                 UnsupportedJError,
                 self.definition.line,
                 f"verb {self.definition.name!r} has no supported result expression",
             )
-        assert self.result_type is not None
+        if not self._body_defines_result(self.definition.body):
+            raise _error_at(
+                UnsupportedJError,
+                self.definition.line,
+                f"verb {self.definition.name!r} does not produce a result on every path",
+            )
 
         name = _fortran_name(self.definition.name)
         argument_type = self.types[_fortran_name(self.definition.argument)]
@@ -335,7 +341,7 @@ class FunctionEmitter:
         result.extend(f"  {line}" for line in combine_declarations(arguments))
         # Keep the function result declaration separate and immediately after
         # dummy argument declarations, even when a local has the same type.
-        result.append("  integer, allocatable :: j_result(:,:)")
+        result.append(f"  {self._result_declaration(self.result_type)} :: j_result{self._result_shape(self.result_type)}")
         result.extend(f"  {line}" for line in combine_declarations(locals_))
         result.append("")
         result.extend(self.body)
@@ -348,6 +354,42 @@ class FunctionEmitter:
         if self.needs_compress_hcat:
             helpers.add("compress_hcat")
         return result, helpers, self.result_type
+
+    @staticmethod
+    def _result_declaration(type_info: TypeInfo) -> str:
+        intrinsic = {
+            AtomType.INTEGER: "integer",
+            AtomType.REAL: "real(kind=real64)",
+            AtomType.LOGICAL: "logical",
+        }.get(type_info.atom_type)
+        if intrinsic is None:
+            raise UnsupportedJError(
+                f"unsupported function result atom type {type_info.atom_type.name.lower()}"
+            )
+        return f"{intrinsic}, allocatable" if type_info.rank > 0 else intrinsic
+
+    @staticmethod
+    def _result_shape(type_info: TypeInfo) -> str:
+        return {0: "", 1: "(:)", 2: "(:,:)"}.get(type_info.rank, "")
+
+    @classmethod
+    def _body_defines_result(cls, body: tuple[Statement, ...]) -> bool:
+        if not body:
+            return False
+        final = body[-1]
+        if isinstance(final, ExpressionStatement):
+            return True
+        if isinstance(final, IfStatement):
+            return (
+                final.else_body is not None
+                and cls._body_defines_result(final.body)
+                and all(
+                    cls._body_defines_result(branch.body)
+                    for branch in final.elseif_branches
+                )
+                and cls._body_defines_result(final.else_body)
+            )
+        return False
 
     @staticmethod
     def _shape_suffix(declaration: str) -> str:
@@ -546,7 +588,7 @@ class FunctionEmitter:
         if isinstance(bare, Name) and self._is_matrix(_fortran_name(bare.identifier)):
             name = _fortran_name(bare.identifier)
             self._write(f"j_result = {name}")
-            self.result_type = self.types[name]
+            self._record_result_type(self.types[name], statement.line)
             self.returned = True
             return
         compressed = match_compress_hcat(expression)
@@ -569,8 +611,24 @@ class FunctionEmitter:
                 result_shape = compressed_shape(self.types[mask].shape, joined)
             except ShapeMismatchError as exc:
                 raise _error_at(UnsupportedJError, statement.line, str(exc)) from exc
-            self.result_type = TypeInfo(AtomType.INTEGER, result_shape)
+            self._record_result_type(
+                TypeInfo(AtomType.INTEGER, result_shape), statement.line
+            )
             self.needs_compress_hcat = True
+            self.returned = True
+            return
+        try:
+            result_type = infer_type(expression, self.types, _fortran_name)
+            rendered = render_fortran_expression(expression, _fortran_name)
+        except LoweringError as exc:
+            raise _error_at(UnsupportedJError, statement.line, str(exc)) from exc
+        if result_type.rank == 0 and result_type.atom_type in {
+            AtomType.INTEGER,
+            AtomType.REAL,
+            AtomType.LOGICAL,
+        }:
+            self._record_result_type(result_type, statement.line)
+            self._write(f"j_result = {rendered}")
             self.returned = True
             return
         raise _error_at(
@@ -578,6 +636,24 @@ class FunctionEmitter:
             statement.line,
             f"unsupported result expression {statement.expression!r}",
         )
+
+    def _record_result_type(self, result_type: TypeInfo, line: SourceLine) -> None:
+        if self.result_type is None:
+            self.result_type = result_type
+            return
+        if self.result_type.atom_type is not result_type.atom_type:
+            raise _error_at(
+                UnsupportedJError,
+                line,
+                "function branches produce incompatible atom types: "
+                f"{self.result_type.atom_type.name.lower()} and "
+                f"{result_type.atom_type.name.lower()}",
+            )
+        try:
+            shape = agree_shapes(self.result_type.shape, result_type.shape)
+        except ShapeMismatchError as exc:
+            raise _error_at(UnsupportedJError, line, str(exc)) from exc
+        self.result_type = TypeInfo(result_type.atom_type, shape)
 
     @staticmethod
     def _parse_expression(expression: str, line: SourceLine):
@@ -738,7 +814,7 @@ def emit_fortran(program: Program) -> str:
             "  implicit none",
         ]
     )
-    echo_calls: list[tuple[str, str, int | None]] = []
+    echo_calls: list[tuple[str, str, TypeInfo]] = []
     for echo in echos:
         match = re.fullmatch(
             r"([A-Za-z][A-Za-z0-9_]*)\s+([0-9]+)",
@@ -752,22 +828,36 @@ def emit_fortran(program: Program) -> str:
             )
         function = _fortran_name(match.group(1))
         result_type = function_types[function]
-        columns = (
-            result_type.shape.extents[1]
-            if result_type.rank == 2 and isinstance(result_type.shape.extents[1], int)
-            else None
-        )
-        echo_calls.append((function, match.group(2), columns))
+        echo_calls.append((function, match.group(2), result_type))
     unknown_echoes = [
-        index for index, (_, _, columns) in enumerate(echo_calls, 1) if columns is None
+        index
+        for index, (_, _, result_type) in enumerate(echo_calls, 1)
+        if result_type.rank == 2
+        and not isinstance(result_type.shape.extents[1], int)
     ]
     for index in unknown_echoes:
         lines.append(f"  integer, allocatable :: j_echo_{index}(:,:)")
     if unknown_echoes:
         lines.append("  integer :: j_row")
     lines.append("")
-    for index, (function, argument, columns) in enumerate(echo_calls, 1):
-        if columns is not None:
+    for index, (function, argument, result_type) in enumerate(echo_calls, 1):
+        if result_type.rank == 0:
+            if result_type.atom_type is AtomType.LOGICAL:
+                lines.append(
+                    f'  write (*,"(i0)") merge(1, 0, {function}({argument}))'
+                )
+            else:
+                descriptor = "g0" if result_type.atom_type is AtomType.REAL else "i0"
+                lines.append(f'  write (*,"({descriptor})") {function}({argument})')
+            continue
+        if result_type.rank == 1:
+            descriptor = "g0" if result_type.atom_type is AtomType.REAL else "i0"
+            lines.append(
+                f'  write (*,"(*({descriptor}, 1x))") {function}({argument})'
+            )
+            continue
+        columns = result_type.shape.extents[1]
+        if isinstance(columns, int):
             lines.append(
                 f'  write (*,"({columns}(i0, 1x))") transpose({function}({argument}))'
             )
