@@ -32,7 +32,6 @@ from j2fortran.fortran_style import (
 from j2fortran.lexer import LexerError
 from j2fortran.lowering import (
     LoweringError,
-    ValueType,
     infer_type,
     match_append_row,
     match_cartesian_square,
@@ -43,6 +42,14 @@ from j2fortran.lowering import (
     match_zero_integer_matrix,
     render_fortran_expression,
     ungroup,
+)
+from j2fortran.type_system import (
+    AtomType,
+    Shape,
+    ShapeMismatchError,
+    TypeInfo,
+    appended_column_shape,
+    compressed_shape,
 )
 
 
@@ -250,17 +257,16 @@ class FunctionEmitter:
     def __init__(self, definition: VerbDefinition):
         self.definition = definition
         self.declarations: dict[str, str] = {}
-        self.types: dict[str, ValueType] = {}
-        self.matrix_columns: dict[str, int | None] = {}
+        self.types: dict[str, TypeInfo] = {}
         self.body: list[str] = []
         self.indent = 1
         self.returned = False
         self.needs_append = False
         self.needs_cartesian = False
         self.needs_compress_hcat = False
-        self.result_columns: int | None = None
+        self.result_type: TypeInfo | None = None
 
-    def emit(self) -> tuple[list[str], set[str], int | None]:
+    def emit(self) -> tuple[list[str], set[str], TypeInfo]:
         self._declare(self.definition.argument, "integer, intent(in)")
         for statement in self.definition.body:
             self._emit_statement(statement)
@@ -270,9 +276,11 @@ class FunctionEmitter:
                 self.definition.line,
                 f"verb {self.definition.name!r} has no supported result expression",
             )
+        assert self.result_type is not None
 
         name = _fortran_name(self.definition.name)
-        purity = procedure_prefix([0], result_rank=2)
+        argument_type = self.types[_fortran_name(self.definition.argument)]
+        purity = procedure_prefix([argument_type.rank], result_rank=self.result_type.rank)
         result = [f"{purity} function {name}(y) result(j_result)"]
         argument_names = {_fortran_name(self.definition.argument)}
         arguments: list[tuple[str, str]] = []
@@ -297,7 +305,7 @@ class FunctionEmitter:
             helpers.add("cartesian")
         if self.needs_compress_hcat:
             helpers.add("compress_hcat")
-        return result, helpers, self.result_columns
+        return result, helpers, self.result_type
 
     @staticmethod
     def _shape_suffix(declaration: str) -> str:
@@ -319,17 +327,15 @@ class FunctionEmitter:
                 f"variable {name!r} changes type/rank from {old!r} to {declaration!r}"
             )
         self.declarations[name] = declaration
-        value_type = {
-            "integer, intent(in)": ValueType.INTEGER_SCALAR,
-            "integer": ValueType.INTEGER_SCALAR,
-            "integer, allocatable-vector": ValueType.INTEGER_VECTOR,
-            "integer, allocatable-matrix": ValueType.INTEGER_MATRIX,
-            "logical, allocatable-vector": ValueType.LOGICAL_VECTOR,
+        type_info = {
+            "integer, intent(in)": TypeInfo(AtomType.INTEGER),
+            "integer": TypeInfo(AtomType.INTEGER),
+            "integer, allocatable-vector": TypeInfo(AtomType.INTEGER, Shape.vector()),
+            "integer, allocatable-matrix": TypeInfo(AtomType.INTEGER, Shape.matrix()),
+            "logical, allocatable-vector": TypeInfo(AtomType.LOGICAL, Shape.vector()),
         }.get(declaration)
-        if value_type is not None:
-            self.types[name] = value_type
-        if value_type is ValueType.INTEGER_MATRIX:
-            self.matrix_columns.setdefault(name, None)
+        if type_info is not None:
+            self.types[name] = type_info
 
     def _write(self, text: str) -> None:
         self.body.append("  " * self.indent + text)
@@ -351,15 +357,17 @@ class FunctionEmitter:
         columns = match_zero_integer_matrix(expression)
         if columns is not None:
             self._declare(name, "integer, allocatable-matrix")
-            self.matrix_columns[name] = columns
+            self.types[name] = TypeInfo(AtomType.INTEGER, Shape.matrix(0, columns))
             self._write(f"allocate({name}(0, {columns}))")
             return
 
         cartesian_bound = match_cartesian_square(expression)
         if cartesian_bound is not None:
             self._declare(name, "integer, allocatable-matrix")
-            self.matrix_columns[name] = 2
             bound = _fortran_name(cartesian_bound)
+            self.types[name] = TypeInfo(
+                AtomType.INTEGER, Shape.matrix(f"{bound} * {bound}", 2)
+            )
             self._write(f"{name} = j_cartesian_square({bound})")
             self.needs_cartesian = True
             return
@@ -381,6 +389,8 @@ class FunctionEmitter:
                     "negative J indices are not supported yet",
                 )
             self._declare(name, "integer, allocatable-vector")
+            source_rows = self.types[source].shape.extents[0]
+            self.types[name] = TypeInfo(AtomType.INTEGER, Shape.vector(source_rows))
             self._write(f"{name} = {source}(:, {index + 1})")
             return
 
@@ -389,6 +399,7 @@ class FunctionEmitter:
             source = _fortran_name(floor_sqrt)
             self._require_vector(source, assignment.line)
             self._declare(name, "integer, allocatable-vector")
+            self.types[name] = TypeInfo(AtomType.INTEGER, self.types[source].shape)
             self._write(
                 f"{name} = floor(sqrt(real({source}, kind=real64)))"
             )
@@ -404,6 +415,8 @@ class FunctionEmitter:
                 )
             values = ", ".join(_fortran_name(value) for value in append[1])
             self._write(f"call j_append_int_row({name}, [{values}])")
+            columns = self.types[name].shape.extents[1]
+            self.types[name] = TypeInfo(AtomType.INTEGER, Shape.matrix(None, columns))
             self.needs_append = True
             return
 
@@ -412,16 +425,19 @@ class FunctionEmitter:
             rendered = render_fortran_expression(expression, _fortran_name)
         except LoweringError as exc:
             raise _error_at(UnsupportedJError, assignment.line, str(exc)) from exc
-        if value_type is ValueType.INTEGER_VECTOR:
+        if value_type.atom_type is AtomType.INTEGER and value_type.rank == 1:
             self._declare(name, "integer, allocatable-vector")
+            self.types[name] = value_type
             self._write(f"{name} = {rendered}")
             return
-        if value_type is ValueType.LOGICAL_VECTOR:
+        if value_type.atom_type is AtomType.LOGICAL and value_type.rank == 1:
             self._declare(name, "logical, allocatable-vector")
+            self.types[name] = value_type
             self._write(f"{name} = {rendered}")
             return
-        if value_type is ValueType.INTEGER_SCALAR:
+        if value_type.atom_type is AtomType.INTEGER and value_type.rank == 0:
             self._declare(name, "integer")
+            self.types[name] = value_type
             self._write(f"{name} = {rendered}")
             return
 
@@ -472,7 +488,7 @@ class FunctionEmitter:
         if isinstance(bare, Name) and self._is_matrix(_fortran_name(bare.identifier)):
             name = _fortran_name(bare.identifier)
             self._write(f"j_result = {name}")
-            self.result_columns = self.matrix_columns.get(name)
+            self.result_type = self.types[name]
             self.returned = True
             return
         compressed = match_compress_hcat(expression)
@@ -488,10 +504,14 @@ class FunctionEmitter:
                 )
             self._require_vector(column, statement.line)
             self._write(f"j_result = j_compress_hcat({matrix}, {column}, {mask})")
-            source_columns = self.matrix_columns.get(matrix)
-            self.result_columns = (
-                source_columns + 1 if source_columns is not None else None
-            )
+            try:
+                joined = appended_column_shape(
+                    self.types[matrix].shape, self.types[column].shape
+                )
+                result_shape = compressed_shape(self.types[mask].shape, joined)
+            except ShapeMismatchError as exc:
+                raise _error_at(UnsupportedJError, statement.line, str(exc)) from exc
+            self.result_type = TypeInfo(AtomType.INTEGER, result_shape)
             self.needs_compress_hcat = True
             self.returned = True
             return
@@ -513,13 +533,17 @@ class FunctionEmitter:
             ) from exc
 
     def _is_matrix(self, name: str) -> bool:
-        return self.declarations.get(name, "").endswith("allocatable-matrix")
+        return name in self.types and self.types[name].rank == 2
 
     def _is_logical_vector(self, name: str) -> bool:
-        return self.declarations.get(name) == "logical, allocatable-vector"
+        return (
+            name in self.types
+            and self.types[name].atom_type is AtomType.LOGICAL
+            and self.types[name].rank == 1
+        )
 
     def _require_vector(self, name: str, line: SourceLine) -> None:
-        if not self.declarations.get(name, "").endswith("allocatable-vector"):
+        if name not in self.types or self.types[name].rank != 1:
             raise _error_at(
                 UnsupportedJError,
                 line,
@@ -625,15 +649,15 @@ def emit_fortran(program: Program) -> str:
 
     helpers: set[str] = set()
     function_names: set[str] = set()
-    function_columns: dict[str, int | None] = {}
+    function_types: dict[str, TypeInfo] = {}
     for definition in definitions:
-        emitted, required, result_columns = FunctionEmitter(definition).emit()
+        emitted, required, result_type = FunctionEmitter(definition).emit()
         lines.extend(emitted)
         lines.append("")
         helpers.update(required)
         function_name = _fortran_name(definition.name)
         function_names.add(function_name)
-        function_columns[function_name] = result_columns
+        function_types[function_name] = result_type
     lines.extend(_runtime_helpers(helpers))
     lines.append(f"end module {module_name}")
     lines.append("")
@@ -669,7 +693,13 @@ def emit_fortran(program: Program) -> str:
                 "echo currently supports 'verb integer' for a translated verb",
             )
         function = _fortran_name(match.group(1))
-        echo_calls.append((function, match.group(2), function_columns[function]))
+        result_type = function_types[function]
+        columns = (
+            result_type.shape.extents[1]
+            if result_type.rank == 2 and isinstance(result_type.shape.extents[1], int)
+            else None
+        )
+        echo_calls.append((function, match.group(2), columns))
     unknown_echoes = [
         index for index, (_, _, columns) in enumerate(echo_calls, 1) if columns is None
     ]

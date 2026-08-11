@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from enum import Enum, auto
 from typing import Callable, Mapping
 
 from .ast import (
@@ -19,18 +18,17 @@ from .ast import (
     StringLiteral,
     Verb,
 )
+from .type_system import (
+    AtomType,
+    Shape,
+    ShapeMismatchError,
+    TypeInfo,
+    agree_shapes,
+)
 
 
 class LoweringError(ValueError):
     pass
-
-
-class ValueType(Enum):
-    INTEGER_SCALAR = auto()
-    INTEGER_VECTOR = auto()
-    INTEGER_MATRIX = auto()
-    LOGICAL_SCALAR = auto()
-    LOGICAL_VECTOR = auto()
 
 
 def ungroup(expression: Expression) -> Expression:
@@ -160,14 +158,20 @@ def match_compress_hcat(expression: Expression) -> tuple[str, str, str] | None:
 
 def infer_type(
     expression: Expression,
-    names: Mapping[str, ValueType],
+    names: Mapping[str, TypeInfo],
     name_transform: Callable[[str], str] = str.lower,
-) -> ValueType:
+) -> TypeInfo:
     expression = ungroup(expression)
     if isinstance(expression, NumberLiteral):
-        return ValueType.INTEGER_SCALAR
+        atom_type = AtomType.REAL if any(c in expression.text for c in ".eE") else AtomType.INTEGER
+        return TypeInfo(atom_type)
     if isinstance(expression, Strand):
-        return ValueType.INTEGER_VECTOR
+        atom_type = (
+            AtomType.REAL
+            if any(any(c in item.text for c in ".eE") for item in expression.items)
+            else AtomType.INTEGER
+        )
+        return TypeInfo(atom_type, Shape.vector(len(expression.items)))
     if isinstance(expression, Name):
         try:
             return names[name_transform(expression.identifier)]
@@ -178,8 +182,12 @@ def infer_type(
     if isinstance(expression, MonadicApply):
         spelling = primitive_spelling(expression.verb)
         operand_type = infer_type(expression.operand, names, name_transform)
-        if spelling in {"+", "-", "<.", ">.", "*:", "%:"}:
+        if spelling in {"+", "-", "*:"}:
             return operand_type
+        if spelling == "%:":
+            return TypeInfo(AtomType.REAL, operand_type.shape)
+        if spelling in {"<.", ">."}:
+            return TypeInfo(AtomType.INTEGER, operand_type.shape)
         raise LoweringError(f"cannot infer the result type of monadic {spelling!r}")
     if isinstance(expression, DyadicApply):
         spelling = primitive_spelling(expression.verb)
@@ -187,20 +195,21 @@ def infer_type(
             raise LoweringError("modified verbs require a dedicated lowering rule")
         left_type = infer_type(expression.left, names, name_transform)
         right_type = infer_type(expression.right, names, name_transform)
-        vector = ValueType.INTEGER_VECTOR in {left_type, right_type}
-        matrix = ValueType.INTEGER_MATRIX in {left_type, right_type}
+        try:
+            shape = agree_shapes(left_type.shape, right_type.shape)
+        except ShapeMismatchError as exc:
+            raise LoweringError(str(exc)) from exc
         if spelling in {"=", "~:", "<", "<:", ">", ">:"}:
-            return ValueType.LOGICAL_VECTOR if vector or matrix else ValueType.LOGICAL_SCALAR
+            return TypeInfo(AtomType.LOGICAL, shape)
         if spelling in {"*.", "+."}:
-            return (
-                ValueType.LOGICAL_VECTOR
-                if ValueType.LOGICAL_VECTOR in {left_type, right_type}
-                else ValueType.LOGICAL_SCALAR
-            )
+            return TypeInfo(AtomType.LOGICAL, shape)
         if spelling in {"+", "-", "*", "%"}:
-            if matrix:
-                return ValueType.INTEGER_MATRIX
-            return ValueType.INTEGER_VECTOR if vector else ValueType.INTEGER_SCALAR
+            atom_type = (
+                AtomType.REAL
+                if spelling == "%" or AtomType.REAL in {left_type.atom_type, right_type.atom_type}
+                else AtomType.INTEGER
+            )
+            return TypeInfo(atom_type, shape)
         raise LoweringError(f"cannot infer the result type of dyadic {spelling!r}")
     raise LoweringError(f"cannot infer type for {type(expression).__name__}")
 

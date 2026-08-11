@@ -5,7 +5,6 @@ import pytest
 from j2fortran.expression_parser import parse_expression
 from j2fortran.lowering import (
     LoweringError,
-    ValueType,
     infer_type,
     match_append_row,
     match_cartesian_square,
@@ -17,6 +16,7 @@ from j2fortran.lowering import (
     name_value,
     render_fortran_expression,
 )
+from j2fortran.type_system import AtomType, Shape, TypeInfo
 
 
 def test_structural_patterns_used_by_both_examples() -> None:
@@ -61,14 +61,26 @@ def test_parentheses_are_emitted_only_when_required(source: str, expected: str) 
 
 def test_type_inference_propagates_array_rank() -> None:
     names = {
-        "a": ValueType.INTEGER_VECTOR,
-        "b": ValueType.INTEGER_VECTOR,
-        "c": ValueType.INTEGER_VECTOR,
-        "y": ValueType.INTEGER_SCALAR,
+        "a": TypeInfo(AtomType.INTEGER, Shape.vector("n")),
+        "b": TypeInfo(AtomType.INTEGER, Shape.vector("n")),
+        "c": TypeInfo(AtomType.INTEGER, Shape.vector("n")),
+        "y": TypeInfo(AtomType.INTEGER),
     }
 
-    assert infer_type(parse_expression("(a * a) + (b * b)"), names) is ValueType.INTEGER_VECTOR
-    assert infer_type(parse_expression("(a < b) *. (c <: y)"), names) is ValueType.LOGICAL_VECTOR
+    arithmetic = infer_type(parse_expression("(a * a) + (b * b)"), names)
+    logical = infer_type(parse_expression("(a < b) *. (c <: y)"), names)
+    assert arithmetic == TypeInfo(AtomType.INTEGER, Shape.vector("n"))
+    assert logical == TypeInfo(AtomType.LOGICAL, Shape.vector("n"))
+
+
+def test_type_inference_rejects_provable_shape_mismatch() -> None:
+    names = {
+        "a": TypeInfo(AtomType.INTEGER, Shape.vector(3)),
+        "b": TypeInfo(AtomType.INTEGER, Shape.vector(4)),
+    }
+
+    with pytest.raises(LoweringError, match="axis 0: 3 versus 4"):
+        infer_type(parse_expression("a + b"), names)
 
 
 def test_j_negative_numbers_are_rendered_as_fortran_signs() -> None:
