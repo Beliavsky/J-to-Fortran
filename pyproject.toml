@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "j-to-fortran"
+version = "0.1.0"
+description = "Experimental transpiler from a numeric subset of J to modern Fortran"
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [{ name = "J-to-Fortran contributors" }]
+classifiers = [
+  "Development Status :: 2 - Pre-Alpha",
+  "Environment :: Console",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Fortran",
+  "Topic :: Software Development :: Compilers",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "ruff>=0.9"]
+
+[project.scripts]
+xj2f = "xj2f:main"
+
+[tool.setuptools]
+py-modules = ["xj2f"]
+
+[tool.setuptools.packages.find]
+include = ["j2fortran*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+  "requires_gfortran: integration test requiring gfortran",
+  "requires_j: integration test requiring jconsole",
+]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100

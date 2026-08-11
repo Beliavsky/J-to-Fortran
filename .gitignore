@@ -1,0 +1,13 @@
+__pycache__/
+.pytest_cache/
+*.py[cod]
+*.mod
+*.o
+*.obj
+*_j.f90
+*_j.exe
+build/
+build_*/
+build*_output.txt
+dist/
+*.egg-info/

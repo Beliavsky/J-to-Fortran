@@ -1,0 +1,45 @@
+name: tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  python:
+    name: Python ${{ matrix.python-version }} on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python-version: ["3.11", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+      - name: Install project and development tools
+        run: python -m pip install -e ".[dev]"
+      - name: Check formatting and lint
+        run: python -m ruff check .
+      - name: Run pure-Python tests
+        run: python -m pytest -m "not requires_gfortran and not requires_j"
+      - name: Check installed command
+        run: xj2f --version
+
+  gfortran:
+    name: Generated Fortran integration tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+      - name: Install gfortran
+        run: sudo apt-get update && sudo apt-get install --yes gfortran
+      - name: Install project and test tools
+        run: python -m pip install -e ".[dev]"
+      - name: Compile and run generated Fortran tests
+        run: python -m pytest -m requires_gfortran
