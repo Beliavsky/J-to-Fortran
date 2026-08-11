@@ -5,10 +5,11 @@ small, numeric subset of J to modern Fortran.  It follows the command-line
 workflow of the neighboring R-to-Fortran project, while using a J-specific
 parser and lowering layer.
 
-This is not a J implementation.  The first milestone translates the explicit
-loop and array-oriented Pythagorean-triple examples in this repository.  When
-it encounters syntax outside the supported subset, it stops with the J source
-line and an explanation rather than silently guessing.
+This is not a J implementation. The first milestone translates the explicit
+loop and array-oriented Pythagorean-triple examples and the array-oriented
+prime-number example in this repository. When it encounters syntax outside
+the supported subset, it stops with the J source line and an explanation
+rather than silently guessing.
 
 ## Quick start
 
@@ -24,6 +25,7 @@ Generate Fortran:
 ```powershell
 python xj2f.py pythag.ijs
 python xj2f.py pythag_array.ijs
+python xj2f.py primes.ijs
 ```
 
 This writes `pythag_j.f90` or `pythag_array_j.f90` beside the input.  Select a
@@ -41,6 +43,7 @@ Run J and Fortran and compare their whitespace-normalized output:
 ```powershell
 python xj2f.py pythag.ijs --run-diff
 python xj2f.py pythag_array.ijs --run-diff
+python xj2f.py primes.ijs --run-diff
 ```
 
 `xj2f.py` finds an adjacent `jj.bat` first on Windows, then a `jconsole`
@@ -106,10 +109,12 @@ The parser currently recognizes:
   rank-1 column selection, square root, floor, laminate, and compression;
 - scalar integer, real, and logical verb results, including results selected by
   total `if.`/`elseif.`/`else.` control flow;
-- mixed integer and Boolean scalar branches, with Boolean values converted to
-  J-compatible integer zero or one when required;
+- mixed Boolean expressions and integer literal `0`/`1` branches, inferred as
+  logical results and emitted with `.false.`/`.true.` literals;
+- rank-0 application of a translated scalar verb to an integer vector;
+- top-level scalar and vector assignments, including integer copy `#`;
 - a final noun as an array-valued verb result;
-- top-level `echo verb integer` and `exit 0`.
+- top-level `echo` of translated verb calls and assigned nouns, plus `exit 0`.
 
 J uses zero-based indexing and row-major array order; the lowering adjusts
 indices and constructs cartesian-product rows so the generated Fortran retains
@@ -136,6 +141,12 @@ The emitter applies these rules to generated procedures:
   original row per record without a temporary matrix or explicit output loop.
 - Adjacent assignments that fill a leading row section and then its immediately
   following scalar element are coalesced into one array-constructor assignment.
+- A top-level value used only by `echo` is printed from its defining expression
+  without emitting an unnecessary variable declaration and assignment.
+- Logical `#` selectors use Fortran's `pack`; general integer copy counts retain
+  the pure `j_copy_int_vector` helper so repeated values preserve J semantics.
+- Runtime-sized iota helpers use an explicitly allocated result and a regular
+  loop, avoiding slow compilation of implied-do constructors with unknown bounds.
 
 The reserved-name policy, conservative elemental eligibility checks, and
 declaration-grouping approach are adapted from the sibling C-to-Fortran and

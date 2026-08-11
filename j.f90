@@ -1,7 +1,8 @@
 module j2f_runtime
   implicit none
   private
-  public :: j_append_int_row, j_cartesian_square, j_compress_hcat, j_iota
+  public :: j_append_int_row, j_cartesian_square, j_compress_hcat
+  public :: j_copy_int_vector, j_iota
 
 contains
 
@@ -11,8 +12,29 @@ pure function j_iota(n) result(values)
   integer :: value_index
 
   if (n < 0) error stop "negative J iota bound"
-  values = [(value_index, value_index = 0, n - 1)]
+  allocate(values(n))
+  do value_index = 1, n
+    values(value_index) = value_index - 1
+  end do
 end function j_iota
+
+pure function j_copy_int_vector(values, counts) result(copied)
+  integer, intent(in) :: values(:), counts(:)
+  integer, allocatable :: copied(:)
+  integer :: source_index, target_index, repetition
+
+  if (size(values) /= size(counts)) error stop &
+    "J copy shape mismatch"
+  if (any(counts < 0)) error stop "negative J copy count"
+  allocate(copied(sum(counts)))
+  target_index = 0
+  do source_index = 1, size(values)
+    do repetition = 1, counts(source_index)
+      target_index = target_index + 1
+      copied(target_index) = values(source_index)
+    end do
+  end do
+end function j_copy_int_vector
 
 pure subroutine j_append_int_row(matrix, row)
   integer, allocatable, intent(inout) :: matrix(:,:)

@@ -53,6 +53,12 @@ class PrimitiveVerb:
 
 
 @dataclass(frozen=True, slots=True)
+class NamedVerb:
+    identifier: str
+    span: SourceSpan
+
+
+@dataclass(frozen=True, slots=True)
 class AdverbApplication:
     adverb: str
     operand: Verb
@@ -66,7 +72,7 @@ class RankApplication:
     span: SourceSpan
 
 
-Verb: TypeAlias = PrimitiveVerb | AdverbApplication | RankApplication
+Verb: TypeAlias = NamedVerb | PrimitiveVerb | AdverbApplication | RankApplication
 
 
 @dataclass(frozen=True, slots=True)

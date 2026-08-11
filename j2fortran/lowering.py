@@ -11,6 +11,7 @@ from .ast import (
     Group,
     MonadicApply,
     Name,
+    NamedVerb,
     NumberLiteral,
     PrimitiveVerb,
     RankApplication,
@@ -156,10 +157,28 @@ def match_compress_hcat(expression: Expression) -> tuple[str, str, str] | None:
     return mask, matrix, column
 
 
+def match_ranked_named_application(
+    expression: Expression,
+) -> tuple[str, Expression] | None:
+    expression = ungroup(expression)
+    if not isinstance(expression, MonadicApply) or not isinstance(
+        expression.verb, RankApplication
+    ):
+        return None
+    ranked_verb = expression.verb
+    if not isinstance(ranked_verb.operand, NamedVerb):
+        return None
+    if integer_value(ranked_verb.rank) != 0:
+        return None
+    return ranked_verb.operand.identifier, expression.operand
+
+
 def infer_type(
     expression: Expression,
     names: Mapping[str, TypeInfo],
     name_transform: Callable[[str], str] = str.lower,
+    *,
+    named_verbs: Mapping[str, TypeInfo] | None = None,
 ) -> TypeInfo:
     expression = ungroup(expression)
     if isinstance(expression, NumberLiteral):
@@ -180,8 +199,25 @@ def infer_type(
     if isinstance(expression, StringLiteral):
         raise LoweringError("character arrays are not supported by the Fortran lowerer yet")
     if isinstance(expression, MonadicApply):
+        ranked_application = match_ranked_named_application(expression)
+        if ranked_application is not None:
+            verb_name, operand = ranked_application
+            if named_verbs is None:
+                raise LoweringError(f"type of verb {verb_name!r} is unknown")
+            try:
+                result_type = named_verbs[name_transform(verb_name)]
+            except KeyError as exc:
+                raise LoweringError(f"type of verb {verb_name!r} is unknown") from exc
+            if not result_type.is_scalar:
+                raise LoweringError("rank-0 application requires a scalar verb result")
+            operand_type = infer_type(
+                operand, names, name_transform, named_verbs=named_verbs
+            )
+            return TypeInfo(result_type.atom_type, operand_type.shape)
         if isinstance(expression.verb, AdverbApplication):
-            operand_type = infer_type(expression.operand, names, name_transform)
+            operand_type = infer_type(
+                expression.operand, names, name_transform, named_verbs=named_verbs
+            )
             reduction = primitive_spelling(expression.verb.operand)
             if expression.verb.adverb == "/" and reduction == "+.":
                 if operand_type.atom_type is not AtomType.LOGICAL:
@@ -195,7 +231,9 @@ def infer_type(
                 "cannot infer the result type of this adverb-derived verb"
             )
         spelling = primitive_spelling(expression.verb)
-        operand_type = infer_type(expression.operand, names, name_transform)
+        operand_type = infer_type(
+            expression.operand, names, name_transform, named_verbs=named_verbs
+        )
         if spelling in {"+", "-", "*:"}:
             return operand_type
         if spelling == "i.":
@@ -218,8 +256,12 @@ def infer_type(
         spelling = primitive_spelling(expression.verb)
         if spelling is None:
             raise LoweringError("modified verbs require a dedicated lowering rule")
-        left_type = infer_type(expression.left, names, name_transform)
-        right_type = infer_type(expression.right, names, name_transform)
+        left_type = infer_type(
+            expression.left, names, name_transform, named_verbs=named_verbs
+        )
+        right_type = infer_type(
+            expression.right, names, name_transform, named_verbs=named_verbs
+        )
         try:
             shape = agree_shapes(left_type.shape, right_type.shape)
         except ShapeMismatchError as exc:
@@ -228,6 +270,16 @@ def infer_type(
             return TypeInfo(AtomType.LOGICAL, shape)
         if spelling in {"*.", "+."}:
             return TypeInfo(AtomType.LOGICAL, shape)
+        if spelling == "#":
+            if left_type.atom_type not in {AtomType.INTEGER, AtomType.LOGICAL} or left_type.rank != 1:
+                raise LoweringError(
+                    "copy currently requires a rank-1 integer or logical selector"
+                )
+            if right_type.atom_type is not AtomType.INTEGER or right_type.rank != 1:
+                raise LoweringError(
+                    "integer copy currently requires a rank-1 integer value array"
+                )
+            return TypeInfo(AtomType.INTEGER, Shape.vector())
         if spelling in {"+", "-", "*", "%", "|"}:
             atom_type = (
                 AtomType.REAL
@@ -326,6 +378,15 @@ def _render_fortran_expression(
         escaped = expression.value.replace("'", "''")
         return f"'{escaped}'", _ATOM_PRECEDENCE, None
     if isinstance(expression, MonadicApply):
+        ranked_application = match_ranked_named_application(expression)
+        if ranked_application is not None:
+            verb_name, argument = ranked_application
+            rendered, _, _ = _render_fortran_expression(argument, name_transform)
+            return (
+                f"{name_transform(verb_name)}({rendered})",
+                _ATOM_PRECEDENCE,
+                "call",
+            )
         if isinstance(expression.verb, AdverbApplication):
             reduction = primitive_spelling(expression.verb.operand)
             if expression.verb.adverb == "/" and reduction == "+.":
@@ -365,6 +426,14 @@ def _render_fortran_expression(
         raise LoweringError(f"monadic verb {spelling!r} needs a dedicated lowering rule")
     if isinstance(expression, DyadicApply):
         spelling = primitive_spelling(expression.verb)
+        if spelling == "#":
+            counts, _, _ = _render_fortran_expression(expression.left, name_transform)
+            values, _, _ = _render_fortran_expression(expression.right, name_transform)
+            return (
+                f"j_copy_int_vector({values}, {counts})",
+                _ATOM_PRECEDENCE,
+                "call",
+            )
         if spelling == "|":
             left, _, _ = _render_fortran_expression(expression.left, name_transform)
             right, _, _ = _render_fortran_expression(expression.right, name_transform)
@@ -403,12 +472,40 @@ def _render_fortran_expression(
 def render_fortran_expression(
     expression: Expression,
     name_transform: Callable[[str], str] = str.lower,
+    *,
+    names: Mapping[str, TypeInfo] | None = None,
+    named_verbs: Mapping[str, TypeInfo] | None = None,
 ) -> str:
+    copied = dyad(expression, "#")
+    if copied is not None and names is not None:
+        selector_type = infer_type(
+            copied[0], names, name_transform, named_verbs=named_verbs
+        )
+        if selector_type.atom_type is AtomType.LOGICAL:
+            selector = render_fortran_expression(
+                copied[0],
+                name_transform,
+                names=names,
+                named_verbs=named_verbs,
+            )
+            values = render_fortran_expression(
+                copied[1],
+                name_transform,
+                names=names,
+                named_verbs=named_verbs,
+            )
+            return f"pack({values}, {selector})"
     rendered, _, _ = _render_fortran_expression(expression, name_transform)
     return rendered
 
 
-def required_runtime_helpers(expression: Expression) -> set[str]:
+def required_runtime_helpers(
+    expression: Expression,
+    names: Mapping[str, TypeInfo] | None = None,
+    name_transform: Callable[[str], str] = str.lower,
+    *,
+    named_verbs: Mapping[str, TypeInfo] | None = None,
+) -> set[str]:
     """Return runtime helpers referenced by a generically lowered expression."""
 
     expression = ungroup(expression)
@@ -416,8 +513,42 @@ def required_runtime_helpers(expression: Expression) -> set[str]:
     if isinstance(expression, MonadicApply):
         if primitive_spelling(expression.verb) == "i.":
             helpers.add("iota")
-        helpers.update(required_runtime_helpers(expression.operand))
+        helpers.update(
+            required_runtime_helpers(
+                expression.operand,
+                names,
+                name_transform,
+                named_verbs=named_verbs,
+            )
+        )
     elif isinstance(expression, DyadicApply):
-        helpers.update(required_runtime_helpers(expression.left))
-        helpers.update(required_runtime_helpers(expression.right))
+        if primitive_spelling(expression.verb) == "#":
+            selector_type = (
+                infer_type(
+                    expression.left,
+                    names,
+                    name_transform,
+                    named_verbs=named_verbs,
+                )
+                if names is not None
+                else None
+            )
+            if selector_type is None or selector_type.atom_type is not AtomType.LOGICAL:
+                helpers.add("copy_int_vector")
+        helpers.update(
+            required_runtime_helpers(
+                expression.left,
+                names,
+                name_transform,
+                named_verbs=named_verbs,
+            )
+        )
+        helpers.update(
+            required_runtime_helpers(
+                expression.right,
+                names,
+                name_transform,
+                named_verbs=named_verbs,
+            )
+        )
     return helpers

@@ -132,10 +132,37 @@ def test_isprime_body_lowers_to_intrinsics_and_iota_helper() -> None:
     generated = xj2f.emit_fortran(program)
 
     assert "pure elemental function isprime(y) result(j_result)" in generated
+    assert "logical :: j_result" in generated
+    assert "j_result = .false." in generated
+    assert "j_result = .true." in generated
     assert "limit = floor(sqrt(real(y, kind=real64)))" in generated
     assert "divisors = 2 + j_iota(limit - 1)" in generated
-    assert "j_result = merge(1, 0, .not. any(0 == modulo(y, divisors)))" in generated
+    assert "j_result = .not. any(0 == modulo(y, divisors))" in generated
     assert "pure function j_iota(n) result(values)" in generated
+    assert "allocate(values(n))" in generated
+    assert "do value_index = 1, n" in generated
+    assert "values(value_index) = value_index - 1" in generated
+    assert "[(value_index" not in generated
+
+
+def test_boolean_result_inference_is_independent_of_branch_order() -> None:
+    source = """predicate =: 3 : 0
+  if. y < 0 do.
+    y = _1
+  else.
+    1
+  end.
+)
+
+echo predicate 2
+exit 0
+"""
+    program = xj2f.parse_j_source(Path("predicate.ijs"), source)
+    generated = xj2f.emit_fortran(program)
+
+    assert "logical :: j_result" in generated
+    assert "j_result = y == -1" in generated
+    assert "j_result = .true." in generated
 
 
 @pytest.mark.requires_gfortran

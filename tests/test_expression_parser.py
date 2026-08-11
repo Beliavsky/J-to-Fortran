@@ -8,6 +8,7 @@ from j2fortran.ast import (
     Group,
     MonadicApply,
     Name,
+    NamedVerb,
     NumberLiteral,
     PrimitiveVerb,
     RankApplication,
@@ -21,6 +22,18 @@ def primitive(node: PrimitiveVerb | AdverbApplication | RankApplication) -> str:
     if isinstance(node, PrimitiveVerb):
         return node.spelling
     return primitive(node.operand)
+
+
+def test_ranked_named_verb_application() -> None:
+    expression = parse_expression('(isprime"0 nums) # nums')
+
+    assert isinstance(expression, DyadicApply)
+    assert isinstance(expression.left, Group)
+    application = expression.left.expression
+    assert isinstance(application, MonadicApply)
+    assert isinstance(application.verb, RankApplication)
+    assert isinstance(application.verb.operand, NamedVerb)
+    assert application.verb.operand.identifier == "isprime"
 
 
 def test_j_evaluation_is_parsed_right_to_left() -> None:

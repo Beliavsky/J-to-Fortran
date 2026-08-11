@@ -34,6 +34,7 @@ from j2fortran.lexer import LexerError
 from j2fortran.lowering import (
     LoweringError,
     infer_type,
+    integer_value,
     match_append_row,
     match_cartesian_square,
     match_column_selection,
@@ -61,6 +62,7 @@ RUNTIME_PROCEDURES = {
     "append": "j_append_int_row",
     "cartesian": "j_cartesian_square",
     "compress_hcat": "j_compress_hcat",
+    "copy_int_vector": "j_copy_int_vector",
     "iota": "j_iota",
 }
 
@@ -151,6 +153,15 @@ TopLevel = VerbDefinition | Assign | EchoStatement | ExitStatement
 class Program:
     source_path: Path
     items: tuple[TopLevel, ...]
+
+
+@dataclasses.dataclass(frozen=True)
+class LoweredTopAssignment:
+    line: SourceLine
+    name: str
+    expression: str
+    type_info: TypeInfo
+    print_only: bool
 
 
 def _error_at(kind: type[J2FError], line: SourceLine, message: str) -> J2FError:
@@ -317,6 +328,7 @@ class FunctionEmitter:
         self.needs_compress_hcat = False
         self.expression_helpers: set[str] = set()
         self.result_type: TypeInfo | None = None
+        self.integer_results_boolean_compatible = True
 
     def emit(self) -> tuple[list[str], set[str], TypeInfo]:
         self._declare(self.definition.argument, "integer, intent(in)")
@@ -628,7 +640,9 @@ class FunctionEmitter:
             AtomType.REAL,
             AtomType.LOGICAL,
         }:
-            rendered = self._coerce_scalar_result(result_type, rendered, statement.line)
+            rendered = self._coerce_scalar_result(
+                result_type, rendered, statement.line, expression
+            )
             self._write(f"j_result = {rendered}")
             self.returned = True
             return
@@ -639,25 +653,43 @@ class FunctionEmitter:
         )
 
     def _coerce_scalar_result(
-        self, result_type: TypeInfo, rendered: str, line: SourceLine
+        self,
+        result_type: TypeInfo,
+        rendered: str,
+        line: SourceLine,
+        expression,
     ) -> str:
-        if self.result_type is None or self.result_type.atom_type is result_type.atom_type:
+        boolean_integer = integer_value(expression)
+        boolean_integer = boolean_integer if boolean_integer in {0, 1} else None
+        if self.result_type is None:
             self._record_result_type(result_type, line)
+            if result_type.atom_type is AtomType.INTEGER:
+                self.integer_results_boolean_compatible = boolean_integer is not None
+            return rendered
+        if self.result_type.atom_type is result_type.atom_type:
+            self._record_result_type(result_type, line)
+            if result_type.atom_type is AtomType.INTEGER:
+                self.integer_results_boolean_compatible &= boolean_integer is not None
             return rendered
         atom_types = {self.result_type.atom_type, result_type.atom_type}
         if atom_types != {AtomType.INTEGER, AtomType.LOGICAL}:
             self._record_result_type(result_type, line)
             return rendered
-        if self.result_type.atom_type is AtomType.INTEGER:
-            return f"merge(1, 0, {rendered})"
+        if self.result_type.atom_type is AtomType.LOGICAL:
+            if boolean_integer is None:
+                self._record_result_type(result_type, line)
+            return ".true." if boolean_integer == 1 else ".false."
+        if not self.integer_results_boolean_compatible:
+            self._record_result_type(result_type, line)
 
-        # J Boolean atoms are numeric 0/1 values. If an integer branch is seen
-        # after logical branches, promote the already-emitted scalar results.
+        # Logical expressions establish that preceding integer zero/one branch
+        # results represent J Boolean atoms rather than general integers.
         for index, body_line in enumerate(self.body):
-            indentation, separator, expression = body_line.partition("j_result = ")
-            if separator:
-                self.body[index] = f"{indentation}{separator}merge(1, 0, {expression})"
-        self.result_type = TypeInfo(AtomType.INTEGER)
+            prefix, separator, previous = body_line.partition("j_result = ")
+            if separator and previous in {"0", "1"}:
+                logical = ".true." if previous == "1" else ".false."
+                self.body[index] = f"{prefix}{separator}{logical}"
+        self.result_type = TypeInfo(AtomType.LOGICAL)
         return rendered
 
     def _record_result_type(self, result_type: TypeInfo, line: SourceLine) -> None:
@@ -719,8 +751,34 @@ def _runtime_helpers(helpers: set[str]) -> list[str]:
                 "  integer :: value_index",
                 "",
                 '  if (n < 0) error stop "negative J iota bound"',
-                "  values = [(value_index, value_index = 0, n - 1)]",
+                "  allocate(values(n))",
+                "  do value_index = 1, n",
+                "    values(value_index) = value_index - 1",
+                "  end do",
                 "end function j_iota",
+                "",
+            ]
+        )
+    if "copy_int_vector" in helpers:
+        result.extend(
+            [
+                "pure function j_copy_int_vector(values, counts) result(copied)",
+                "  integer, intent(in) :: values(:), counts(:)",
+                "  integer, allocatable :: copied(:)",
+                "  integer :: source_index, target_index, repetition",
+                "",
+                "  if (size(values) /= size(counts)) error stop &",
+                '    "J copy shape mismatch"',
+                "  if (any(counts < 0)) error stop \"negative J copy count\"",
+                "  allocate(copied(sum(counts)))",
+                "  target_index = 0",
+                "  do source_index = 1, size(values)",
+                "    do repetition = 1, counts(source_index)",
+                "      target_index = target_index + 1",
+                "      copied(target_index) = values(source_index)",
+                "    end do",
+                "  end do",
+                "end function j_copy_int_vector",
                 "",
             ]
         )
@@ -793,21 +851,106 @@ def _runtime_helpers(helpers: set[str]) -> list[str]:
     return result
 
 
+def _print_only_top_names(program: Program) -> set[str]:
+    assignments = [item for item in program.items if isinstance(item, Assign)]
+    result: set[str] = set()
+    for assignment in assignments:
+        name = assignment.name
+        name_pattern = re.compile(rf"\b{re.escape(name)}\b")
+        uses = sum(
+            len(name_pattern.findall(item.expression))
+            for item in program.items
+            if isinstance(item, (Assign, EchoStatement)) and item is not assignment
+        )
+        directly_echoed = any(
+            isinstance(item, EchoStatement)
+            and _normalized_expression(item.expression) == name
+            for item in program.items
+        )
+        if uses == 1 and directly_echoed:
+            result.add(_fortran_name(name))
+    return result
+
+
+def _lower_top_assignments(
+    program: Program, function_types: dict[str, TypeInfo]
+) -> tuple[list[LoweredTopAssignment], set[str]]:
+    types: dict[str, TypeInfo] = {}
+    lowered: list[LoweredTopAssignment] = []
+    helpers: set[str] = set()
+    print_only = _print_only_top_names(program)
+    for assignment in (item for item in program.items if isinstance(item, Assign)):
+        try:
+            expression = parse_expression(assignment.expression)
+            type_info = infer_type(
+                expression,
+                types,
+                _fortran_name,
+                named_verbs=function_types,
+            )
+            rendered = render_fortran_expression(
+                expression,
+                _fortran_name,
+                names=types,
+                named_verbs=function_types,
+            )
+        except (LexerError, ExpressionParseError, LoweringError, ValueError) as exc:
+            raise _error_at(UnsupportedJError, assignment.line, str(exc)) from exc
+        if type_info.atom_type not in {
+            AtomType.INTEGER,
+            AtomType.REAL,
+            AtomType.LOGICAL,
+        } or type_info.rank not in {0, 1}:
+            raise _error_at(
+                UnsupportedJError,
+                assignment.line,
+                "top-level assignments currently require a scalar or vector value",
+            )
+        name = _fortran_name(assignment.name)
+        if name in types:
+            raise _error_at(
+                UnsupportedJError,
+                assignment.line,
+                f"top-level reassignment of {assignment.name!r} is not supported",
+            )
+        types[name] = type_info
+        helpers.update(
+            required_runtime_helpers(
+                expression,
+                types,
+                _fortran_name,
+                named_verbs=function_types,
+            )
+        )
+        lowered.append(
+            LoweredTopAssignment(
+                assignment.line,
+                name,
+                rendered,
+                type_info,
+                name in print_only,
+            )
+        )
+    return lowered, helpers
+
+
+def _main_entity_declaration(assignment: LoweredTopAssignment) -> tuple[str, str]:
+    intrinsic = {
+        AtomType.INTEGER: "integer",
+        AtomType.REAL: "real(kind=real64)",
+        AtomType.LOGICAL: "logical",
+    }[assignment.type_info.atom_type]
+    if assignment.type_info.rank == 1:
+        return f"{intrinsic}, allocatable", f"{assignment.name}(:)"
+    return intrinsic, assignment.name
+
+
 def emit_fortran(program: Program, *, runtime: str = "embedded") -> str:
     if runtime not in {"embedded", "external"}:
         raise J2FError(f"unknown runtime mode {runtime!r}")
     definitions = [item for item in program.items if isinstance(item, VerbDefinition)]
     if not definitions:
         raise UnsupportedJError("no explicit monadic verb definitions were found")
-    global_assignments = [item for item in program.items if isinstance(item, Assign)]
-    if global_assignments:
-        first = global_assignments[0]
-        raise _error_at(
-            UnsupportedJError,
-            first.line,
-            "top-level assignments are not supported in the first milestone",
-        )
-
     module_name = _fortran_name(program.source_path.stem) + "_j_mod"
     lines = [
         f"! Generated by xj2f.py {VERSION} from {program.source_path.name}",
@@ -831,6 +974,11 @@ def emit_fortran(program: Program, *, runtime: str = "embedded") -> str:
         function_name = _fortran_name(definition.name)
         function_names.add(function_name)
         function_types[function_name] = result_type
+    top_assignments, top_helpers = _lower_top_assignments(program, function_types)
+    helpers.update(top_helpers)
+    exported_helpers = sorted(RUNTIME_PROCEDURES[helper] for helper in top_helpers)
+    if exported_helpers:
+        lines.insert(lines.index(""), f"  public :: {', '.join(exported_helpers)}")
     if runtime == "external" and helpers:
         procedures = ", ".join(sorted(RUNTIME_PROCEDURES[helper] for helper in helpers))
         lines.insert(3, f"  use {RUNTIME_MODULE}, only: {procedures}")
@@ -850,15 +998,35 @@ def emit_fortran(program: Program, *, runtime: str = "embedded") -> str:
             )
 
     program_name = _fortran_name(program.source_path.stem) + "_j"
+    active_assignments = [assignment for assignment in top_assignments if not assignment.print_only]
+    main_imports = sorted(function_names | set(exported_helpers))
     lines.extend(
         [
             f"program {program_name}",
-            f"  use {module_name}, only: {', '.join(sorted(function_names))}",
-            "  implicit none",
+            f"  use {module_name}, only: {', '.join(main_imports)}",
         ]
     )
-    echo_calls: list[tuple[str, str, TypeInfo]] = []
+    if any(
+        assignment.type_info.atom_type is AtomType.REAL
+        for assignment in active_assignments
+    ):
+        lines.append("  use, intrinsic :: iso_fortran_env, only: real64")
+    lines.append("  implicit none")
+    declarations = [_main_entity_declaration(assignment) for assignment in active_assignments]
+    lines.extend(f"  {line}" for line in combine_declarations(declarations))
+    assignment_by_name = {assignment.name: assignment for assignment in top_assignments}
+    echo_calls: list[tuple[str, TypeInfo]] = []
     for echo in echos:
+        normalized_echo = _normalized_expression(echo.expression)
+        noun_match = re.fullmatch(r"[A-Za-z][A-Za-z0-9_]*", normalized_echo)
+        noun_name = _fortran_name(normalized_echo) if noun_match else ""
+        noun_assignment = assignment_by_name.get(noun_name)
+        if noun_assignment is not None:
+            expression = (
+                noun_assignment.expression if noun_assignment.print_only else noun_name
+            )
+            echo_calls.append((expression, noun_assignment.type_info))
+            continue
         match = re.fullmatch(
             r"([A-Za-z][A-Za-z0-9_]*)\s+([0-9]+)",
             _normalized_expression(echo.expression),
@@ -871,10 +1039,10 @@ def emit_fortran(program: Program, *, runtime: str = "embedded") -> str:
             )
         function = _fortran_name(match.group(1))
         result_type = function_types[function]
-        echo_calls.append((function, match.group(2), result_type))
+        echo_calls.append((f"{function}({match.group(2)})", result_type))
     unknown_echoes = [
         index
-        for index, (_, _, result_type) in enumerate(echo_calls, 1)
+        for index, (_, result_type) in enumerate(echo_calls, 1)
         if result_type.rank == 2
         and not isinstance(result_type.shape.extents[1], int)
     ]
@@ -883,29 +1051,31 @@ def emit_fortran(program: Program, *, runtime: str = "embedded") -> str:
     if unknown_echoes:
         lines.append("  integer :: j_row")
     lines.append("")
-    for index, (function, argument, result_type) in enumerate(echo_calls, 1):
+    for assignment in active_assignments:
+        lines.append(f"  {assignment.name} = {assignment.expression}")
+    for index, (expression, result_type) in enumerate(echo_calls, 1):
         if result_type.rank == 0:
             if result_type.atom_type is AtomType.LOGICAL:
                 lines.append(
-                    f'  write (*,"(i0)") merge(1, 0, {function}({argument}))'
+                    f'  write (*,"(i0)") merge(1, 0, {expression})'
                 )
             else:
                 descriptor = "g0" if result_type.atom_type is AtomType.REAL else "i0"
-                lines.append(f'  write (*,"({descriptor})") {function}({argument})')
+                lines.append(f'  write (*,"({descriptor})") {expression}')
             continue
         if result_type.rank == 1:
             descriptor = "g0" if result_type.atom_type is AtomType.REAL else "i0"
             lines.append(
-                f'  write (*,"(*({descriptor}, 1x))") {function}({argument})'
+                f'  write (*,"(*({descriptor}, 1x))") {expression}'
             )
             continue
         columns = result_type.shape.extents[1]
         if isinstance(columns, int):
             lines.append(
-                f'  write (*,"({columns}(i0, 1x))") transpose({function}({argument}))'
+                f'  write (*,"({columns}(i0, 1x))") transpose({expression})'
             )
             continue
-        lines.append(f"  j_echo_{index} = {function}({argument})")
+        lines.append(f"  j_echo_{index} = {expression}")
         lines.append(f"  do j_row = 1, size(j_echo_{index}, 1)")
         lines.append(f'    write (*,"(*(i0, 1x))") j_echo_{index}(j_row, :)')
         lines.append("  end do")
@@ -989,12 +1159,25 @@ def expression_ast_report(program: Program) -> dict[str, object]:
         "verbs": verbs,
         "top_level": [
             {
-                "kind": "echo" if isinstance(item, EchoStatement) else "exit",
+                "kind": (
+                    "assignment"
+                    if isinstance(item, Assign)
+                    else "echo" if isinstance(item, EchoStatement) else "exit"
+                ),
                 "line": item.line.number,
                 "source": item.expression,
+                **(
+                    {
+                        "target": item.name,
+                        "copula": item.copula,
+                        "ast": ast_to_dict(parse_expression(item.expression)),
+                    }
+                    if isinstance(item, Assign)
+                    else {}
+                ),
             }
             for item in program.items
-            if isinstance(item, (EchoStatement, ExitStatement))
+            if isinstance(item, (Assign, EchoStatement, ExitStatement))
         ],
     }
 

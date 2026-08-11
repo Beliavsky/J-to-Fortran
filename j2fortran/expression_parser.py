@@ -11,6 +11,7 @@ from .ast import (
     Group,
     MonadicApply,
     Name,
+    NamedVerb,
     NumberLiteral,
     PrimitiveVerb,
     RankApplication,
@@ -120,10 +121,14 @@ class ExpressionParser:
 
     def _verb(self) -> Verb:
         token = self._peek()
-        if token.kind is not TokenKind.PRIMITIVE or token.value in _ADVERBS | {'"'}:
+        if token.kind is TokenKind.NAME:
+            self._take()
+            verb: Verb = NamedVerb(token.value, _token_span(token))
+        elif token.kind is TokenKind.PRIMITIVE and token.value not in _ADVERBS | {'"'}:
+            self._take()
+            verb = PrimitiveVerb(token.value, _token_span(token))
+        else:
             raise ExpressionParseError(f"expected a verb, got {token.value!r}", token)
-        self._take()
-        verb: Verb = PrimitiveVerb(token.value, _token_span(token))
 
         while self.index < len(self.tokens):
             modifier = self._peek()
@@ -152,7 +157,14 @@ class ExpressionParser:
         if self.index >= len(self.tokens):
             return False
         token = self._peek()
-        return token.kind is TokenKind.PRIMITIVE and token.value not in _ADVERBS | {'"'}
+        if token.kind is TokenKind.PRIMITIVE:
+            return token.value not in _ADVERBS | {'"'}
+        return (
+            token.kind is TokenKind.NAME
+            and self.index + 1 < len(self.tokens)
+            and self.tokens[self.index + 1].kind is TokenKind.PRIMITIVE
+            and self.tokens[self.index + 1].value == '"'
+        )
 
     def _peek(self) -> Token:
         return self.tokens[self.index]
@@ -166,6 +178,8 @@ class ExpressionParser:
     def _verb_name(verb: Verb) -> str:
         if isinstance(verb, PrimitiveVerb):
             return verb.spelling
+        if isinstance(verb, NamedVerb):
+            return verb.identifier
         if isinstance(verb, AdverbApplication):
             return ExpressionParser._verb_name(verb.operand) + verb.adverb
         return ExpressionParser._verb_name(verb.operand) + '"' + verb.rank.text

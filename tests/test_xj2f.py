@@ -66,6 +66,40 @@ def test_embedded_runtime_remains_the_default() -> None:
     assert "pure function j_compress_hcat" in generated
 
 
+def test_primes_example_lowers_top_level_arrays_and_prints_expression_directly() -> None:
+    generated = xj2f.transpile_path(ROOT / "primes.ijs")
+    main = generated.split("program primes_j", 1)[1]
+
+    assert "integer, allocatable :: nums(:)" in main
+    assert "nums = 2 + j_iota(19)" in main
+    assert ":: primes" not in main
+    assert "primes =" not in main
+    assert (
+        'write (*,"(*(i0, 1x))") pack(nums, isprime(nums))'
+        in main
+    )
+
+    program = xj2f.parse_j_source(
+        ROOT / "primes.ijs", (ROOT / "primes.ijs").read_text(encoding="utf-8")
+    )
+    top_level = xj2f.expression_ast_report(program)["top_level"]
+    assert top_level[0]["kind"] == "assignment"
+    assert top_level[0]["target"] == "nums"
+    assert top_level[1]["ast"]["kind"] == "DyadicApply"
+
+
+def test_print_only_optimization_requires_a_single_use() -> None:
+    source = (ROOT / "primes.ijs").read_text(encoding="utf-8").replace(
+        "echo primes", "echo primes\necho primes"
+    )
+    program = xj2f.parse_j_source(Path("twice.ijs"), source)
+    main = xj2f.emit_fortran(program).split("program twice_j", 1)[1]
+
+    assert "integer, allocatable :: nums(:), primes(:)" in main
+    assert "primes = pack(nums, isprime(nums))" in main
+    assert main.count('write (*,"(*(i0, 1x))") primes') == 2
+
+
 @pytest.mark.parametrize("filename", ["pythag.ijs", "pythag_array.ijs"])
 def test_generated_fortran_follows_procedure_and_use_style(filename: str) -> None:
     generated = xj2f.transpile_path(ROOT / filename)
@@ -208,3 +242,28 @@ def test_external_runtime_cli_compiles_and_runs(
     rows = [" ".join(line.split()) for line in capsys.readouterr().out.splitlines()]
     assert rows[0] == "3 4 5"
     assert rows[-1] == "65 72 97"
+
+
+@pytest.mark.requires_gfortran
+def test_primes_example_compiles_and_runs(tmp_path: Path) -> None:
+    compiler = shutil.which("gfortran")
+    if compiler is None:
+        pytest.skip("gfortran is not installed")
+
+    source = tmp_path / "primes_j.f90"
+    executable = tmp_path / "primes.exe"
+    source.write_text(xj2f.transpile_path(ROOT / "primes.ijs"), encoding="utf-8")
+    compiled = subprocess.run(
+        [compiler, "-std=f2018", str(source), "-o", str(executable)],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert compiled.returncode == 0, compiled.stdout + compiled.stderr
+
+    completed = subprocess.run(
+        [str(executable)], capture_output=True, text=True, check=False
+    )
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert completed.stdout.split() == ["2", "3", "5", "7", "11", "13", "17", "19"]

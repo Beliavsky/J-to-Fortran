@@ -66,6 +66,35 @@ def test_prime_expression_primitives_lower_generically() -> None:
     )
 
 
+def test_rank_zero_named_verb_and_integer_copy_lowering() -> None:
+    expression = parse_expression('(isprime"0 nums) # nums')
+    names = {"nums": TypeInfo(AtomType.INTEGER, Shape.vector(19))}
+    verbs = {"isprime": TypeInfo(AtomType.LOGICAL)}
+
+    assert infer_type(expression, names, named_verbs=verbs) == TypeInfo(
+        AtomType.INTEGER, Shape.vector()
+    )
+    assert render_fortran_expression(
+        expression, names=names, named_verbs=verbs
+    ) == "pack(nums, isprime(nums))"
+    assert required_runtime_helpers(
+        expression, names, named_verbs=verbs
+    ) == set()
+
+
+def test_general_integer_copy_keeps_runtime_helper() -> None:
+    expression = parse_expression("counts # nums")
+    names = {
+        "counts": TypeInfo(AtomType.INTEGER, Shape.vector(3)),
+        "nums": TypeInfo(AtomType.INTEGER, Shape.vector(3)),
+    }
+
+    assert render_fortran_expression(
+        expression, names=names
+    ) == "j_copy_int_vector(nums, counts)"
+    assert required_runtime_helpers(expression, names) == {"copy_int_vector"}
+
+
 @pytest.mark.parametrize(
     ("source", "expected"),
     [
