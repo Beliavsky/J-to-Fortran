@@ -26,6 +26,21 @@ ok =: result -: expected
 """
 
 
+INDEX_SELECTION_TEST_PROGRAM = """a =: 3 4 5 $ i. 60
+result =: (<0 2 ; 1 3 ; 2 4) { a
+expected =: 2 2 2 $ 7 9 17 19 47 49 57 59
+ok =: result -: expected
+"""
+
+
+AMENDMENT_TEST_PROGRAM = """a =: 3 4 $ i. 12
+new =: 2 2 $ 100 101 102 103
+result =: new ((<1 2 ; 0 3)}) a
+expected =: 3 4 $ 0 1 2 3 100 5 6 101 102 9 10 103
+ok =: result -: expected
+"""
+
+
 @pytest.mark.parametrize("filename", ["pythag.ijs", "pythag_array.ijs"])
 def test_examples_transpile_to_standalone_fortran(filename: str) -> None:
     generated = xj2f.transpile_path(ROOT / filename)
@@ -56,6 +71,27 @@ def test_top_level_reshape_declares_rank_two_and_three_arrays() -> None:
     assert "integer, allocatable :: matrix(:,:), cube(:,:,:), result_j(:,:)" in main
     assert "matrix = reshape([1, 2], [2, 3], pad=[1, 2], order=[2, 1])" in main
     assert "cube = reshape(j_iota(8), [2, 2, 2], order=[3, 2, 1])" in main
+
+
+def test_rank_three_selection_uses_fortran_vector_subscripts() -> None:
+    program = xj2f.parse_j_source(
+        Path("index_selection.ijs"), INDEX_SELECTION_TEST_PROGRAM
+    )
+    generated = xj2f.emit_fortran(program)
+    main = generated.split("program index_selection_j", 1)[1]
+
+    assert "result_j = a([1, 3], [2, 4], [3, 5])" in main
+    assert "integer, allocatable :: a(:,:,:), result_j(:,:,:), expected(:,:,:)" in main
+
+
+def test_amendment_copies_source_then_updates_selected_section() -> None:
+    program = xj2f.parse_j_source(Path("amendment.ijs"), AMENDMENT_TEST_PROGRAM)
+    generated = xj2f.emit_fortran(program)
+    main = generated.split("program amendment_j", 1)[1]
+
+    assert "result_j = a" in main
+    assert "result_j([2, 3], [1, 4]) = new" in main
+    assert main.index("result_j = a") < main.index("result_j([2, 3], [1, 4]) = new")
 
 
 def test_loop_example_preserves_control_flow() -> None:
@@ -346,6 +382,56 @@ def test_rank_three_and_cyclic_reshape_compile_and_run(tmp_path: Path) -> None:
     source = tmp_path / "reshape_j.f90"
     executable = tmp_path / "reshape.exe"
     program = xj2f.parse_j_source(Path("reshape.ijs"), RESHAPE_TEST_PROGRAM)
+    source.write_text(xj2f.emit_fortran(program), encoding="utf-8")
+    compiled = subprocess.run(
+        [compiler, "-std=f2018", str(source), "-o", str(executable)],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert compiled.returncode == 0, compiled.stdout + compiled.stderr
+
+    completed = subprocess.run(
+        [str(executable)], capture_output=True, text=True, check=False
+    )
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+
+
+@pytest.mark.requires_gfortran
+def test_rank_three_vector_selection_compiles_and_runs(tmp_path: Path) -> None:
+    compiler = shutil.which("gfortran")
+    if compiler is None:
+        pytest.skip("gfortran is not installed")
+    source = tmp_path / "index_selection_j.f90"
+    executable = tmp_path / "index_selection.exe"
+    program = xj2f.parse_j_source(
+        Path("index_selection.ijs"), INDEX_SELECTION_TEST_PROGRAM
+    )
+    source.write_text(xj2f.emit_fortran(program), encoding="utf-8")
+    compiled = subprocess.run(
+        [compiler, "-std=f2018", str(source), "-o", str(executable)],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert compiled.returncode == 0, compiled.stdout + compiled.stderr
+
+    completed = subprocess.run(
+        [str(executable)], capture_output=True, text=True, check=False
+    )
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+
+
+@pytest.mark.requires_gfortran
+def test_array_valued_amendment_compiles_and_runs(tmp_path: Path) -> None:
+    compiler = shutil.which("gfortran")
+    if compiler is None:
+        pytest.skip("gfortran is not installed")
+    source = tmp_path / "amendment_j.f90"
+    executable = tmp_path / "amendment.exe"
+    program = xj2f.parse_j_source(Path("amendment.ijs"), AMENDMENT_TEST_PROGRAM)
     source.write_text(xj2f.emit_fortran(program), encoding="utf-8")
     compiled = subprocess.run(
         [compiler, "-std=f2018", str(source), "-o", str(executable)],

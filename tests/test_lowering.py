@@ -6,15 +6,18 @@ from j2fortran.expression_parser import parse_expression
 from j2fortran.lowering import (
     LoweringError,
     infer_type,
+    match_amendment,
     match_append_row,
     match_cartesian_square,
     match_column_selection,
     match_compress_hcat,
     match_floor_sqrt,
     match_iota_sequence,
+    match_index_selection,
     match_zero_integer_matrix,
     name_value,
     render_fortran_expression,
+    render_fortran_amendment,
     required_runtime_helpers,
 )
 from j2fortran.type_system import AtomType, Shape, TypeInfo
@@ -168,6 +171,137 @@ def test_monadic_shape_includes_scalar_and_matrix_rank() -> None:
         AtomType.INTEGER, Shape.vector(2)
     )
     assert render_fortran_expression(matrix_shape) == "shape(matrix)"
+
+
+@pytest.mark.parametrize(
+    ("source", "array_type", "expected_type", "expected_fortran"),
+    [
+        (
+            "1 { a",
+            TypeInfo(AtomType.INTEGER, Shape.matrix(3, 4)),
+            TypeInfo(AtomType.INTEGER, Shape.vector(4)),
+            "a(2, :)",
+        ),
+        (
+            "(<1 2) { a",
+            TypeInfo(AtomType.INTEGER, Shape.matrix(3, 4)),
+            TypeInfo(AtomType.INTEGER),
+            "a(2, 3)",
+        ),
+        (
+            "(<1 2 ; 0 3) { a",
+            TypeInfo(AtomType.INTEGER, Shape.matrix(3, 4)),
+            TypeInfo(AtomType.INTEGER, Shape.matrix(2, 2)),
+            "a([2, 3], [1, 4])",
+        ),
+        (
+            "(<2 0 ; 3 1) { a",
+            TypeInfo(AtomType.INTEGER, Shape.matrix(3, 4)),
+            TypeInfo(AtomType.INTEGER, Shape.matrix(2, 2)),
+            "a([3, 1], [4, 2])",
+        ),
+        (
+            "(<1 1 ; 2 2) { a",
+            TypeInfo(AtomType.INTEGER, Shape.matrix(3, 4)),
+            TypeInfo(AtomType.INTEGER, Shape.matrix(2, 2)),
+            "a([2, 2], [3, 3])",
+        ),
+        (
+            "(<_1 _2) { a",
+            TypeInfo(AtomType.INTEGER, Shape.matrix(3, 4)),
+            TypeInfo(AtomType.INTEGER),
+            "a(3, 3)",
+        ),
+        (
+            "(<1 2 3) { a",
+            TypeInfo(AtomType.INTEGER, Shape((2, 3, 4))),
+            TypeInfo(AtomType.INTEGER),
+            "a(2, 3, 4)",
+        ),
+        (
+            "(<1 2) { a",
+            TypeInfo(AtomType.INTEGER, Shape((2, 3, 4))),
+            TypeInfo(AtomType.INTEGER, Shape.vector(4)),
+            "a(2, 3, :)",
+        ),
+        (
+            "(<0 2 ; 1 3 ; 2 4) { a",
+            TypeInfo(AtomType.INTEGER, Shape((3, 4, 5))),
+            TypeInfo(AtomType.INTEGER, Shape((2, 2, 2))),
+            "a([1, 3], [2, 4], [3, 5])",
+        ),
+    ],
+)
+def test_constant_multidimensional_selection(
+    source: str,
+    array_type: TypeInfo,
+    expected_type: TypeInfo,
+    expected_fortran: str,
+) -> None:
+    expression = parse_expression(source)
+    names = {"a": array_type}
+
+    assert match_index_selection(expression) is not None
+    assert infer_type(expression, names) == expected_type
+    assert render_fortran_expression(expression, names=names) == expected_fortran
+
+
+def test_constant_selection_rejects_out_of_bounds_index() -> None:
+    expression = parse_expression("(<3 0) { a")
+    names = {"a": TypeInfo(AtomType.INTEGER, Shape.matrix(3, 4))}
+
+    with pytest.raises(LoweringError, match="axis 1"):
+        infer_type(expression, names)
+
+
+@pytest.mark.parametrize(
+    ("source", "names", "target", "expected"),
+    [
+        (
+            "99 ((<1 2)}) a",
+            {"a": TypeInfo(AtomType.INTEGER, Shape.matrix(3, 4))},
+            "result_j",
+            ("a", "result_j(2, 3) = 99"),
+        ),
+        (
+            "99 ((<1 2 ; 0 3)}) a",
+            {"a": TypeInfo(AtomType.INTEGER, Shape.matrix(3, 4))},
+            "result_j",
+            ("a", "result_j([2, 3], [1, 4]) = 99"),
+        ),
+        (
+            "new ((<1 2 ; 0 3)}) a",
+            {
+                "a": TypeInfo(AtomType.INTEGER, Shape.matrix(3, 4)),
+                "new": TypeInfo(AtomType.INTEGER, Shape.matrix(2, 2)),
+            },
+            "result_j",
+            ("a", "result_j([2, 3], [1, 4]) = new"),
+        ),
+    ],
+)
+def test_top_level_amendment_lowers_to_copy_and_section_assignment(
+    source: str,
+    names: dict[str, TypeInfo],
+    target: str,
+    expected: tuple[str, str],
+) -> None:
+    expression = parse_expression(source)
+
+    assert match_amendment(expression) is not None
+    assert infer_type(expression, names) == names["a"]
+    assert render_fortran_amendment(expression, target, names) == expected
+
+
+def test_amendment_rejects_nonconforming_replacement() -> None:
+    expression = parse_expression("new ((<1 2 ; 0 3)}) a")
+    names = {
+        "a": TypeInfo(AtomType.INTEGER, Shape.matrix(3, 4)),
+        "new": TypeInfo(AtomType.INTEGER, Shape.vector(4)),
+    }
+
+    with pytest.raises(LoweringError, match="replacement shape"):
+        infer_type(expression, names)
 
 
 @pytest.mark.parametrize(

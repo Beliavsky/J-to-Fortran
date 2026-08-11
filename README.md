@@ -105,6 +105,9 @@ The parser currently recognizes:
   and rank-1 Boolean OR reduction `+./` in the demonstrated forms;
 - integer iota `i.` with a scalar bound, lowered through a pure helper;
 - monadic shape and constant-shape reshape through rank 3, including cyclic fill;
+- constant multidimensional `{` selection through rank 3: scalar coordinates,
+  leading-axis rows, independent vector selectors, negative indices, and slices;
+- top-level noun-derived `}` amendment with scalar or conforming array values;
 - zero-row integer matrix construction such as `0 3 $ 0`;
 - row append using `,` in the demonstrated explicit-loop form;
 - the array pipeline used by `pythag_array.ijs`: catalogue/cartesian product,
@@ -152,6 +155,11 @@ The emitter applies these rules to generated procedures:
   loop, avoiding slow compilation of implied-do constructors with unknown bounds.
 - Reshape reverses Fortran's dimension fill order so generated arrays retain J's
   last-axis-fastest ordering; short sources use `pad=` for J-style cyclic fill.
+- J indices are converted from zero-based to one-based subscripts; negative
+  constants are normalized against the selected axis extent, while Fortran
+  vector subscripts preserve selector order and repeated indices.
+- Amendment first copies its source into the result and then assigns the selected
+  result section, preserving J value semantics without modifying the source noun.
 - A top-level logical scalar named `ok`, when no values are echoed, becomes an
   `error stop` assertion so corpus programs cannot pass through empty output.
 

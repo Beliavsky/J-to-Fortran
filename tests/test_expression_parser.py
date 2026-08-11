@@ -4,6 +4,7 @@ import pytest
 
 from j2fortran.ast import (
     AdverbApplication,
+    AmendVerb,
     DyadicApply,
     Group,
     MonadicApply,
@@ -34,6 +35,15 @@ def test_ranked_named_verb_application() -> None:
     assert isinstance(application.verb, RankApplication)
     assert isinstance(application.verb.operand, NamedVerb)
     assert application.verb.operand.identifier == "isprime"
+
+
+def test_noun_derived_amend_verb_preserves_its_selector() -> None:
+    expression = parse_expression("99 ((<1 2 ; 0 3)}) a")
+
+    assert isinstance(expression, DyadicApply)
+    assert isinstance(expression.verb, AmendVerb)
+    assert isinstance(expression.verb.selector, Group)
+    assert isinstance(expression.right, Name)
 
 
 def test_j_evaluation_is_parsed_right_to_left() -> None:

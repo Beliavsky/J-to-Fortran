@@ -6,6 +6,7 @@ from collections.abc import Sequence
 
 from .ast import (
     AdverbApplication,
+    AmendVerb,
     DyadicApply,
     Expression,
     Group,
@@ -121,6 +122,19 @@ class ExpressionParser:
 
     def _verb(self) -> Verb:
         token = self._peek()
+        amend = self._amend_verb_end(self.index)
+        if amend is not None:
+            marker_index, closing_index = amend
+            selector_tokens = self.tokens[self.index + 1 : marker_index]
+            if not selector_tokens:
+                raise ExpressionParseError("amend requires an index selector", token)
+            selector = ExpressionParser(selector_tokens).parse()
+            closing = self.tokens[closing_index]
+            self.index = closing_index + 1
+            return AmendVerb(
+                selector,
+                _cover(_token_span(token), _token_span(closing)),
+            )
         if token.kind is TokenKind.NAME:
             self._take()
             verb: Verb = NamedVerb(token.value, _token_span(token))
@@ -157,6 +171,8 @@ class ExpressionParser:
         if self.index >= len(self.tokens):
             return False
         token = self._peek()
+        if self._amend_verb_end(self.index) is not None:
+            return True
         if token.kind is TokenKind.PRIMITIVE:
             return token.value not in _ADVERBS | {'"'}
         return (
@@ -165,6 +181,25 @@ class ExpressionParser:
             and self.tokens[self.index + 1].kind is TokenKind.PRIMITIVE
             and self.tokens[self.index + 1].value == '"'
         )
+
+    def _amend_verb_end(self, start: int) -> tuple[int, int] | None:
+        if start >= len(self.tokens) or self.tokens[start].kind is not TokenKind.LPAREN:
+            return None
+        depth = 0
+        for index in range(start + 1, len(self.tokens)):
+            token = self.tokens[index]
+            if token.kind is TokenKind.LPAREN:
+                depth += 1
+            elif token.kind is TokenKind.RPAREN:
+                if depth == 0:
+                    return None
+                depth -= 1
+            elif token.kind is TokenKind.PRIMITIVE and token.value == "}" and depth == 0:
+                closing = index + 1
+                if closing < len(self.tokens) and self.tokens[closing].kind is TokenKind.RPAREN:
+                    return index, closing
+                return None
+        return None
 
     def _peek(self) -> Token:
         return self.tokens[self.index]
@@ -180,6 +215,8 @@ class ExpressionParser:
             return verb.spelling
         if isinstance(verb, NamedVerb):
             return verb.identifier
+        if isinstance(verb, AmendVerb):
+            return "}"
         if isinstance(verb, AdverbApplication):
             return ExpressionParser._verb_name(verb.operand) + verb.adverb
         return ExpressionParser._verb_name(verb.operand) + '"' + verb.rank.text

@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import math
+from dataclasses import dataclass
 from typing import Callable, Mapping
 
 from .ast import (
     AdverbApplication,
+    AmendVerb,
     DyadicApply,
     Expression,
     Group,
@@ -31,6 +33,24 @@ from .type_system import (
 
 class LoweringError(ValueError):
     pass
+
+
+@dataclass(frozen=True, slots=True)
+class IndexAxis:
+    values: tuple[int, ...]
+    is_scalar: bool
+
+
+@dataclass(frozen=True, slots=True)
+class IndexSelection:
+    axes: tuple[IndexAxis, ...]
+    source: Expression
+
+
+@dataclass(frozen=True, slots=True)
+class Amendment:
+    replacement: Expression
+    selection: IndexSelection
 
 
 def ungroup(expression: Expression) -> Expression:
@@ -84,6 +104,122 @@ def constant_shape_extents(expression: Expression) -> tuple[int, ...] | None:
     if any(value is None or value < 0 for value in values):
         return None
     return tuple(value for value in values if value is not None)
+
+
+def _constant_index_axis(expression: Expression) -> IndexAxis | None:
+    expression = ungroup(expression)
+    scalar = integer_value(expression)
+    if scalar is not None:
+        return IndexAxis((scalar,), True)
+    if isinstance(expression, Strand):
+        values = tuple(integer_value(item) for item in expression.items)
+        if any(value is None for value in values):
+            return None
+        return IndexAxis(tuple(value for value in values if value is not None), False)
+    return None
+
+
+def _flatten_semicolon_list(expression: Expression) -> list[Expression]:
+    linked = dyad(expression, ";")
+    if linked is None:
+        return [expression]
+    return [*_flatten_semicolon_list(linked[0]), *_flatten_semicolon_list(linked[1])]
+
+
+def _constant_index_axes(selector: Expression) -> tuple[IndexAxis, ...] | None:
+    boxed = monad(selector, "<")
+    if boxed is None:
+        axis = _constant_index_axis(selector)
+        return (axis,) if axis is not None else None
+
+    if dyad(boxed, ";") is not None:
+        axes = tuple(
+            _constant_index_axis(item) for item in _flatten_semicolon_list(boxed)
+        )
+        if any(axis is None for axis in axes):
+            return None
+        return tuple(axis for axis in axes if axis is not None)
+
+    coordinate = ungroup(boxed)
+    if isinstance(coordinate, NumberLiteral):
+        values = (integer_value(coordinate),)
+    elif isinstance(coordinate, Strand):
+        values = tuple(integer_value(item) for item in coordinate.items)
+    else:
+        return None
+    if any(value is None for value in values):
+        return None
+    axes = tuple(
+        IndexAxis((value,), True) for value in values if value is not None
+    )
+    return axes
+
+
+def match_index_selection(expression: Expression) -> IndexSelection | None:
+    selected = dyad(expression, "{")
+    if selected is None:
+        return None
+    axes = _constant_index_axes(selected[0])
+    return IndexSelection(axes, selected[1]) if axes is not None else None
+
+
+def match_amendment(expression: Expression) -> Amendment | None:
+    expression = ungroup(expression)
+    if not isinstance(expression, DyadicApply) or not isinstance(
+        expression.verb, AmendVerb
+    ):
+        return None
+    axes = _constant_index_axes(expression.verb.selector)
+    if axes is None:
+        return None
+    return Amendment(expression.left, IndexSelection(axes, expression.right))
+
+
+def _validate_index_selection(
+    selection: IndexSelection, source_type: TypeInfo
+) -> Shape:
+    if source_type.is_scalar:
+        raise LoweringError("selection requires an array argument")
+    if len(selection.axes) > source_type.rank:
+        raise LoweringError(
+            f"selection has {len(selection.axes)} axes for rank-{source_type.rank} array"
+        )
+    result_extents: list[int | str | None] = []
+    for axis_number, axis in enumerate(selection.axes, 1):
+        extent = source_type.shape.extents[axis_number - 1]
+        if isinstance(extent, int):
+            for index in axis.values:
+                normalized = index if index >= 0 else extent + index
+                if normalized < 0 or normalized >= extent:
+                    raise LoweringError(
+                        f"index {index} is out of bounds for axis {axis_number} "
+                        f"with extent {extent}"
+                    )
+        if not axis.is_scalar:
+            result_extents.append(len(axis.values))
+    result_extents.extend(source_type.shape.extents[len(selection.axes) :])
+    return Shape(tuple(result_extents))
+
+
+def _render_index_selection(
+    selection: IndexSelection, source_type: TypeInfo, source: str
+) -> str:
+    _validate_index_selection(selection, source_type)
+    rendered_axes: list[str] = []
+    for axis_number, axis in enumerate(selection.axes, 1):
+        extent = source_type.shape.extents[axis_number - 1]
+        indices: list[str] = []
+        for index in axis.values:
+            if isinstance(extent, int):
+                normalized = index if index >= 0 else extent + index
+                indices.append(str(normalized + 1))
+            elif index >= 0:
+                indices.append(str(index + 1))
+            else:
+                indices.append(f"size({source}, {axis_number}) + {index + 1}")
+        rendered_axes.append(indices[0] if axis.is_scalar else f"[{', '.join(indices)}]")
+    rendered_axes.extend(":" for _ in range(source_type.rank - len(selection.axes)))
+    return f"{source}({', '.join(rendered_axes)})"
 
 
 def match_zero_integer_matrix(expression: Expression) -> int | None:
@@ -269,9 +405,45 @@ def infer_type(
             return operand_type
         raise LoweringError(f"cannot infer the result type of monadic {spelling!r}")
     if isinstance(expression, DyadicApply):
+        amendment = match_amendment(expression)
+        if amendment is not None:
+            source_type = infer_type(
+                amendment.selection.source,
+                names,
+                name_transform,
+                named_verbs=named_verbs,
+            )
+            selected_shape = _validate_index_selection(
+                amendment.selection, source_type
+            )
+            replacement_type = infer_type(
+                amendment.replacement,
+                names,
+                name_transform,
+                named_verbs=named_verbs,
+            )
+            if replacement_type.atom_type is not source_type.atom_type:
+                raise LoweringError(
+                    "amendment replacement and source atom types differ"
+                )
+            if not replacement_type.is_scalar and replacement_type.shape != selected_shape:
+                raise LoweringError(
+                    "amendment replacement shape does not match selected shape"
+                )
+            return source_type
         spelling = primitive_spelling(expression.verb)
         if spelling is None:
             raise LoweringError("modified verbs require a dedicated lowering rule")
+        selection = match_index_selection(expression)
+        if selection is not None:
+            source_type = infer_type(
+                selection.source,
+                names,
+                name_transform,
+                named_verbs=named_verbs,
+            )
+            result_shape = _validate_index_selection(selection, source_type)
+            return TypeInfo(source_type.atom_type, result_shape)
         if spelling == "$":
             extents = constant_shape_extents(expression.left)
             if extents is None:
@@ -521,6 +693,22 @@ def render_fortran_expression(
     names: Mapping[str, TypeInfo] | None = None,
     named_verbs: Mapping[str, TypeInfo] | None = None,
 ) -> str:
+    if match_amendment(expression) is not None:
+        raise LoweringError(
+            "amendment currently requires a top-level assignment context"
+        )
+    selection = match_index_selection(expression)
+    if selection is not None and names is not None:
+        source_type = infer_type(
+            selection.source, names, name_transform, named_verbs=named_verbs
+        )
+        source = render_fortran_expression(
+            selection.source,
+            name_transform,
+            names=names,
+            named_verbs=named_verbs,
+        )
+        return _render_index_selection(selection, source_type, source)
     reshaped = dyad(expression, "$")
     if reshaped is not None and names is not None:
         extents = constant_shape_extents(reshaped[0])
@@ -596,6 +784,43 @@ def render_fortran_expression(
             return f"pack({values}, {selector})"
     rendered, _, _ = _render_fortran_expression(expression, name_transform)
     return rendered
+
+
+def render_fortran_amendment(
+    expression: Expression,
+    target: str,
+    names: Mapping[str, TypeInfo],
+    name_transform: Callable[[str], str] = str.lower,
+    *,
+    named_verbs: Mapping[str, TypeInfo] | None = None,
+) -> tuple[str, str] | None:
+    amendment = match_amendment(expression)
+    if amendment is None:
+        return None
+    source_type = infer_type(
+        amendment.selection.source,
+        names,
+        name_transform,
+        named_verbs=named_verbs,
+    )
+    # Run complete amendment inference before rendering either statement.
+    infer_type(expression, names, name_transform, named_verbs=named_verbs)
+    source = render_fortran_expression(
+        amendment.selection.source,
+        name_transform,
+        names=names,
+        named_verbs=named_verbs,
+    )
+    replacement = render_fortran_expression(
+        amendment.replacement,
+        name_transform,
+        names=names,
+        named_verbs=named_verbs,
+    )
+    selected_target = _render_index_selection(
+        amendment.selection, source_type, target
+    )
+    return source, f"{selected_target} = {replacement}"
 
 
 def required_runtime_helpers(

@@ -42,6 +42,7 @@ from j2fortran.lowering import (
     match_iota_sequence,
     match_zero_integer_matrix,
     required_runtime_helpers,
+    render_fortran_amendment,
     render_fortran_expression,
     ungroup,
 )
@@ -162,6 +163,7 @@ class LoweredTopAssignment:
     expression: str
     type_info: TypeInfo
     print_only: bool
+    updates: tuple[str, ...] = ()
 
 
 def _error_at(kind: type[J2FError], line: SourceLine, message: str) -> J2FError:
@@ -880,6 +882,13 @@ def _lower_top_assignments(
     helpers: set[str] = set()
     print_only = _print_only_top_names(program)
     for assignment in (item for item in program.items if isinstance(item, Assign)):
+        name = _fortran_name(assignment.name)
+        if name in types:
+            raise _error_at(
+                UnsupportedJError,
+                assignment.line,
+                f"top-level reassignment of {assignment.name!r} is not supported",
+            )
         try:
             expression = parse_expression(assignment.expression)
             type_info = infer_type(
@@ -888,12 +897,24 @@ def _lower_top_assignments(
                 _fortran_name,
                 named_verbs=function_types,
             )
-            rendered = render_fortran_expression(
+            amendment = render_fortran_amendment(
                 expression,
+                name,
+                types,
                 _fortran_name,
-                names=types,
                 named_verbs=function_types,
             )
+            if amendment is None:
+                rendered = render_fortran_expression(
+                    expression,
+                    _fortran_name,
+                    names=types,
+                    named_verbs=function_types,
+                )
+                updates: tuple[str, ...] = ()
+            else:
+                rendered, update = amendment
+                updates = (update,)
         except (LexerError, ExpressionParseError, LoweringError, ValueError) as exc:
             raise _error_at(UnsupportedJError, assignment.line, str(exc)) from exc
         if type_info.atom_type not in {
@@ -905,13 +926,6 @@ def _lower_top_assignments(
                 UnsupportedJError,
                 assignment.line,
                 "top-level assignments currently require a value of rank 3 or less",
-            )
-        name = _fortran_name(assignment.name)
-        if name in types:
-            raise _error_at(
-                UnsupportedJError,
-                assignment.line,
-                f"top-level reassignment of {assignment.name!r} is not supported",
             )
         types[name] = type_info
         helpers.update(
@@ -928,7 +942,8 @@ def _lower_top_assignments(
                 name,
                 rendered,
                 type_info,
-                name in print_only,
+                name in print_only and not updates,
+                updates,
             )
         )
     return lowered, helpers
@@ -1051,6 +1066,7 @@ def emit_fortran(program: Program, *, runtime: str = "embedded") -> str:
     lines.append("")
     for assignment in active_assignments:
         lines.append(f"  {assignment.name} = {assignment.expression}")
+        lines.extend(f"  {update}" for update in assignment.updates)
     for index, (expression, result_type) in enumerate(echo_calls, 1):
         if result_type.rank == 0:
             if result_type.atom_type is AtomType.LOGICAL:
