@@ -900,11 +900,11 @@ def _lower_top_assignments(
             AtomType.INTEGER,
             AtomType.REAL,
             AtomType.LOGICAL,
-        } or type_info.rank not in {0, 1}:
+        } or type_info.rank not in {0, 1, 2, 3}:
             raise _error_at(
                 UnsupportedJError,
                 assignment.line,
-                "top-level assignments currently require a scalar or vector value",
+                "top-level assignments currently require a value of rank 3 or less",
             )
         name = _fortran_name(assignment.name)
         if name in types:
@@ -940,8 +940,9 @@ def _main_entity_declaration(assignment: LoweredTopAssignment) -> tuple[str, str
         AtomType.REAL: "real(kind=real64)",
         AtomType.LOGICAL: "logical",
     }[assignment.type_info.atom_type]
-    if assignment.type_info.rank == 1:
-        return f"{intrinsic}, allocatable", f"{assignment.name}(:)"
+    if assignment.type_info.rank > 0:
+        dimensions = ",".join(":" for _ in range(assignment.type_info.rank))
+        return f"{intrinsic}, allocatable", f"{assignment.name}({dimensions})"
     return intrinsic, assignment.name
 
 

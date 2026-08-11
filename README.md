@@ -104,6 +104,7 @@ The parser currently recognizes:
 - integer arithmetic, comparisons, Boolean `*.` and `-.`, integer residue `|`,
   and rank-1 Boolean OR reduction `+./` in the demonstrated forms;
 - integer iota `i.` with a scalar bound, lowered through a pure helper;
+- monadic shape and constant-shape reshape through rank 3, including cyclic fill;
 - zero-row integer matrix construction such as `0 3 $ 0`;
 - row append using `,` in the demonstrated explicit-loop form;
 - the array pipeline used by `pythag_array.ijs`: catalogue/cartesian product,
@@ -149,6 +150,8 @@ The emitter applies these rules to generated procedures:
   the pure `j_copy_int_vector` helper so repeated values preserve J semantics.
 - Runtime-sized iota helpers use an explicitly allocated result and a regular
   loop, avoiding slow compilation of implied-do constructors with unknown bounds.
+- Reshape reverses Fortran's dimension fill order so generated arrays retain J's
+  last-axis-fastest ordering; short sources use `pad=` for J-style cyclic fill.
 - A top-level logical scalar named `ok`, when no values are echoed, becomes an
   `error stop` assertion so corpus programs cannot pass through empty output.
 

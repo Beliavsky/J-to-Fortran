@@ -130,6 +130,46 @@ def test_floating_match_waits_for_j_tolerance_semantics() -> None:
         infer_type(expression, names)
 
 
+def test_constant_reshape_preserves_j_axis_order_and_cyclic_fill() -> None:
+    matrix = parse_expression("2 3 $ i. 6")
+    cyclic = parse_expression("2 3 $ 1 2")
+    cube = parse_expression("2 3 4 $ i. 24")
+
+    assert infer_type(matrix, {}) == TypeInfo(
+        AtomType.INTEGER, Shape.matrix(2, 3)
+    )
+    assert (
+        render_fortran_expression(matrix, names={})
+        == "reshape(j_iota(6), [2, 3], order=[2, 1])"
+    )
+    assert (
+        render_fortran_expression(cyclic, names={})
+        == "reshape([1, 2], [2, 3], pad=[1, 2], order=[2, 1])"
+    )
+    assert infer_type(cube, {}) == TypeInfo(
+        AtomType.INTEGER, Shape((2, 3, 4))
+    )
+    assert (
+        render_fortran_expression(cube, names={})
+        == "reshape(j_iota(24), [2, 3, 4], order=[3, 2, 1])"
+    )
+
+
+def test_monadic_shape_includes_scalar_and_matrix_rank() -> None:
+    scalar_shape = parse_expression("$ 42")
+    matrix_shape = parse_expression("$ matrix")
+    names = {"matrix": TypeInfo(AtomType.INTEGER, Shape.matrix(2, 3))}
+
+    assert infer_type(scalar_shape, {}) == TypeInfo(
+        AtomType.INTEGER, Shape.vector(0)
+    )
+    assert render_fortran_expression(scalar_shape) == "shape(42)"
+    assert infer_type(matrix_shape, names) == TypeInfo(
+        AtomType.INTEGER, Shape.vector(2)
+    )
+    assert render_fortran_expression(matrix_shape) == "shape(matrix)"
+
+
 @pytest.mark.parametrize(
     ("source", "expected"),
     [

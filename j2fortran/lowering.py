@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from typing import Callable, Mapping
 
 from .ast import (
@@ -70,6 +71,19 @@ def integer_value(expression: Expression) -> int | None:
         return int(spelling)
     except ValueError:
         return None
+
+
+def constant_shape_extents(expression: Expression) -> tuple[int, ...] | None:
+    expression = ungroup(expression)
+    if isinstance(expression, NumberLiteral):
+        values = (integer_value(expression),)
+    elif isinstance(expression, Strand):
+        values = tuple(integer_value(item) for item in expression.items)
+    else:
+        return None
+    if any(value is None or value < 0 for value in values):
+        return None
+    return tuple(value for value in values if value is not None)
 
 
 def match_zero_integer_matrix(expression: Expression) -> int | None:
@@ -234,6 +248,8 @@ def infer_type(
         operand_type = infer_type(
             expression.operand, names, name_transform, named_verbs=named_verbs
         )
+        if spelling == "$":
+            return TypeInfo(AtomType.INTEGER, Shape.vector(operand_type.rank))
         if spelling in {"+", "-", "*:"}:
             return operand_type
         if spelling == "i.":
@@ -256,6 +272,23 @@ def infer_type(
         spelling = primitive_spelling(expression.verb)
         if spelling is None:
             raise LoweringError("modified verbs require a dedicated lowering rule")
+        if spelling == "$":
+            extents = constant_shape_extents(expression.left)
+            if extents is None:
+                raise LoweringError(
+                    "reshape currently requires a constant nonnegative integer shape"
+                )
+            source_type = infer_type(
+                expression.right,
+                names,
+                name_transform,
+                named_verbs=named_verbs,
+            )
+            if source_type.rank > 1:
+                raise LoweringError(
+                    "reshape from a source above rank 1 is not supported yet"
+                )
+            return TypeInfo(source_type.atom_type, Shape(extents))
         left_type = infer_type(
             expression.left, names, name_transform, named_verbs=named_verbs
         )
@@ -433,6 +466,8 @@ def _render_fortran_expression(
         if spelling == "-.":
             operand = _parenthesize(operand, operand_precedence, _NOT_PRECEDENCE)
             return f".not. {operand}", _NOT_PRECEDENCE, ".not."
+        if spelling == "$":
+            return f"shape({operand})", _ATOM_PRECEDENCE, "call"
         raise LoweringError(f"monadic verb {spelling!r} needs a dedicated lowering rule")
     if isinstance(expression, DyadicApply):
         spelling = primitive_spelling(expression.verb)
@@ -486,6 +521,36 @@ def render_fortran_expression(
     names: Mapping[str, TypeInfo] | None = None,
     named_verbs: Mapping[str, TypeInfo] | None = None,
 ) -> str:
+    reshaped = dyad(expression, "$")
+    if reshaped is not None and names is not None:
+        extents = constant_shape_extents(reshaped[0])
+        if extents is None:
+            raise LoweringError(
+                "reshape currently requires a constant nonnegative integer shape"
+            )
+        source_type = infer_type(
+            reshaped[1], names, name_transform, named_verbs=named_verbs
+        )
+        source = render_fortran_expression(
+            reshaped[1],
+            name_transform,
+            names=names,
+            named_verbs=named_verbs,
+        )
+        source_array = f"[{source}]" if source_type.is_scalar else source
+        arguments = [source_array, f"[{', '.join(map(str, extents))}]"]
+        source_size = (
+            math.prod(source_type.shape.extents)
+            if all(isinstance(extent, int) for extent in source_type.shape.extents)
+            else None
+        )
+        target_size = math.prod(extents)
+        if source_size is None or source_size < target_size:
+            arguments.append(f"pad={source_array}")
+        if len(extents) > 1:
+            order = ", ".join(str(axis) for axis in range(len(extents), 0, -1))
+            arguments.append(f"order=[{order}]")
+        return f"reshape({', '.join(arguments)})"
     matched = dyad(expression, "-:")
     if matched is not None and names is not None:
         left_type = infer_type(

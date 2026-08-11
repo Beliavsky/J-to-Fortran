@@ -42,7 +42,7 @@ FORTRAN_KEYWORDS = {
 FORTRAN_COMMON_INTRINSICS = {
     "abs", "count", "dot_product", "floor", "int", "lbound", "matmul", "max",
     "maxval", "merge", "min", "minval", "mod", "norm2", "pack", "product",
-    "random_number", "random_seed", "real", "reshape", "size", "spread", "sqrt",
+    "random_number", "random_seed", "real", "reshape", "shape", "size", "spread", "sqrt",
     "sum", "transpose", "ubound",
 }
 
