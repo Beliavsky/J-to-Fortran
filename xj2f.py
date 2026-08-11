@@ -65,6 +65,7 @@ RUNTIME_PROCEDURES = {
     "compress_hcat": "j_compress_hcat",
     "copy_int_vector": "j_copy_int_vector",
     "iota": "j_iota",
+    "match_real": "j_match_real",
 }
 
 
@@ -744,6 +745,19 @@ class FunctionEmitter:
 
 def _runtime_helpers(helpers: set[str]) -> list[str]:
     result: list[str] = []
+    if "match_real" in helpers:
+        result.extend(
+            [
+                "pure elemental function j_match_real(left, right) result(matches)",
+                "  real(kind=real64), intent(in) :: left, right",
+                "  logical :: matches",
+                "",
+                "  matches = abs(left - right) <= &",
+                "    2.0_real64**(-44) * max(abs(left), abs(right))",
+                "end function j_match_real",
+                "",
+            ]
+        )
     if "iota" in helpers:
         result.extend(
             [

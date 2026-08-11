@@ -468,13 +468,18 @@ def infer_type(
             expression.right, names, name_transform, named_verbs=named_verbs
         )
         if spelling == "-:":
-            if AtomType.REAL in {left_type.atom_type, right_type.atom_type}:
+            numeric_types = {AtomType.INTEGER, AtomType.REAL}
+            both_numeric = (
+                left_type.atom_type in numeric_types
+                and right_type.atom_type in numeric_types
+            )
+            both_logical = (
+                left_type.atom_type is AtomType.LOGICAL
+                and right_type.atom_type is AtomType.LOGICAL
+            )
+            if not (both_numeric or both_logical):
                 raise LoweringError(
-                    "floating-point match requires J tolerance support"
-                )
-            if left_type.atom_type is not right_type.atom_type:
-                raise LoweringError(
-                    "match between different atom types is not supported yet"
+                    "match requires two numeric arrays or two logical arrays"
                 )
             return TypeInfo(AtomType.LOGICAL)
         try:
@@ -544,7 +549,10 @@ _NOT_PRECEDENCE = 25
 def _fortran_number(spelling: str) -> str:
     if spelling in {"_", "_."}:
         raise LoweringError(f"special J number {spelling!r} is not supported")
-    return spelling.replace("e_", "e-").replace("E_", "E-").replace("_", "-")
+    rendered = spelling.replace("e_", "e-").replace("E_", "E-").replace("_", "-")
+    if any(character in spelling for character in ".eE"):
+        rendered += "_real64"
+    return rendered
 
 
 def _same_expression(left: Expression, right: Expression) -> bool:
@@ -761,7 +769,16 @@ def render_fortran_expression(
             names=names,
             named_verbs=named_verbs,
         )
-        comparison = f"{left} == {right}"
+        if AtomType.REAL in {left_type.atom_type, right_type.atom_type}:
+            if left_type.atom_type is AtomType.INTEGER:
+                left = f"real({left}, kind=real64)"
+            if right_type.atom_type is AtomType.INTEGER:
+                right = f"real({right}, kind=real64)"
+            comparison = f"j_match_real({left}, {right})"
+        elif left_type.atom_type is AtomType.LOGICAL:
+            comparison = f"{left} .eqv. {right}"
+        else:
+            comparison = f"{left} == {right}"
         return comparison if left_type.is_scalar else f"all({comparison})"
     copied = dyad(expression, "#")
     if copied is not None and names is not None:
@@ -846,6 +863,21 @@ def required_runtime_helpers(
             )
         )
     elif isinstance(expression, DyadicApply):
+        if primitive_spelling(expression.verb) == "-:" and names is not None:
+            left_type = infer_type(
+                expression.left,
+                names,
+                name_transform,
+                named_verbs=named_verbs,
+            )
+            right_type = infer_type(
+                expression.right,
+                names,
+                name_transform,
+                named_verbs=named_verbs,
+            )
+            if AtomType.REAL in {left_type.atom_type, right_type.atom_type}:
+                helpers.add("match_real")
         if primitive_spelling(expression.verb) == "#":
             selector_type = (
                 infer_type(

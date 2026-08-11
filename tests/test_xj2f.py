@@ -18,6 +18,12 @@ ok =: result -: expected
 """
 
 
+FLOAT_MATCH_TEST_PROGRAM = """result =: 1.001 0.0
+expected =: 1.0010000000000002 0.0
+ok =: result -: expected
+"""
+
+
 RESHAPE_TEST_PROGRAM = """matrix =: 2 3 $ 1 2
 cube =: 2 2 2 $ i. 8
 result =: matrix
@@ -61,6 +67,17 @@ def test_top_level_only_test_program_emits_an_executable_assertion() -> None:
     assert "ok = all(result_j == expected)" in main
     assert 'if (.not. ok) error stop "J test assertion failed"' in main
     assert "use integer_vector_j_mod" not in main
+
+
+def test_float_match_emits_j_tolerance_helper() -> None:
+    program = xj2f.parse_j_source(Path("float_match.ijs"), FLOAT_MATCH_TEST_PROGRAM)
+    generated = xj2f.emit_fortran(program)
+    main = generated.split("program float_match_j", 1)[1]
+
+    assert "pure elemental function j_match_real(left, right) result(matches)" in generated
+    assert "2.0_real64**(-44) * max(abs(left), abs(right))" in generated
+    assert "ok = all(j_match_real(result_j, expected))" in main
+    assert "1.001_real64" in main
 
 
 def test_top_level_reshape_declares_rank_two_and_three_arrays() -> None:
@@ -372,6 +389,32 @@ def test_top_level_ok_controls_program_status(
         [str(executable)], capture_output=True, text=True, check=False
     )
     assert (completed.returncode == 0) is succeeds
+
+
+@pytest.mark.requires_gfortran
+def test_tolerant_float_match_compiles_and_runs(tmp_path: Path) -> None:
+    compiler = shutil.which("gfortran")
+    if compiler is None:
+        pytest.skip("gfortran is not installed")
+    source = tmp_path / "float_match_j.f90"
+    executable = tmp_path / "float_match.exe"
+    program = xj2f.parse_j_source(
+        Path("float_match.ijs"), FLOAT_MATCH_TEST_PROGRAM
+    )
+    source.write_text(xj2f.emit_fortran(program), encoding="utf-8")
+    compiled = subprocess.run(
+        [compiler, "-std=f2018", str(source), "-o", str(executable)],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert compiled.returncode == 0, compiled.stdout + compiled.stderr
+
+    completed = subprocess.run(
+        [str(executable)], capture_output=True, text=True, check=False
+    )
+    assert completed.returncode == 0, completed.stdout + completed.stderr
 
 
 @pytest.mark.requires_gfortran

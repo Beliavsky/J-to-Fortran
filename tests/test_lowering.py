@@ -122,15 +122,62 @@ def test_match_of_provably_different_shapes_is_false() -> None:
     assert render_fortran_expression(expression, names=names) == ".false."
 
 
-def test_floating_match_waits_for_j_tolerance_semantics() -> None:
+def test_floating_match_uses_j_relative_tolerance() -> None:
     expression = parse_expression("result -: expected")
     names = {
-        "result": TypeInfo(AtomType.REAL),
-        "expected": TypeInfo(AtomType.REAL),
+        "result": TypeInfo(AtomType.REAL, Shape.vector(3)),
+        "expected": TypeInfo(AtomType.REAL, Shape.vector(3)),
     }
 
-    with pytest.raises(LoweringError, match="tolerance"):
+    assert infer_type(expression, names) == TypeInfo(AtomType.LOGICAL)
+    assert (
+        render_fortran_expression(expression, names=names)
+        == "all(j_match_real(result, expected))"
+    )
+    assert required_runtime_helpers(expression, names) == {"match_real"}
+
+
+def test_mixed_integer_real_match_converts_only_the_integer_operand() -> None:
+    expression = parse_expression("integer_value -: real_value")
+    names = {
+        "integer_value": TypeInfo(AtomType.INTEGER),
+        "real_value": TypeInfo(AtomType.REAL),
+    }
+
+    assert infer_type(expression, names) == TypeInfo(AtomType.LOGICAL)
+    assert render_fortran_expression(expression, names=names) == (
+        "j_match_real(real(integer_value, kind=real64), real_value)"
+    )
+
+
+def test_match_does_not_mix_logical_and_numeric_atoms() -> None:
+    expression = parse_expression("logical_value -: integer_value")
+    names = {
+        "logical_value": TypeInfo(AtomType.LOGICAL),
+        "integer_value": TypeInfo(AtomType.INTEGER),
+    }
+
+    with pytest.raises(LoweringError, match="numeric arrays or two logical"):
         infer_type(expression, names)
+
+
+def test_logical_match_uses_fortran_logical_equivalence() -> None:
+    expression = parse_expression("result -: expected")
+    names = {
+        "result": TypeInfo(AtomType.LOGICAL, Shape.vector(3)),
+        "expected": TypeInfo(AtomType.LOGICAL, Shape.vector(3)),
+    }
+
+    assert infer_type(expression, names) == TypeInfo(AtomType.LOGICAL)
+    assert render_fortran_expression(expression, names=names) == (
+        "all(result .eqv. expected)"
+    )
+
+
+def test_real_literals_use_the_declared_fortran_kind() -> None:
+    assert render_fortran_expression(parse_expression("1.5 2e_3")) == (
+        "[1.5_real64, 2e-3_real64]"
+    )
 
 
 def test_constant_reshape_preserves_j_axis_order_and_cyclic_fill() -> None:

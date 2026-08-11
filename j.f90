@@ -1,10 +1,19 @@
 module j2f_runtime
+  use, intrinsic :: iso_fortran_env, only: real64
   implicit none
   private
   public :: j_append_int_row, j_cartesian_square, j_compress_hcat
-  public :: j_copy_int_vector, j_iota
+  public :: j_copy_int_vector, j_iota, j_match_real
 
 contains
+
+pure elemental function j_match_real(left, right) result(matches)
+  real(kind=real64), intent(in) :: left, right
+  logical :: matches
+
+  matches = abs(left - right) <= &
+    2.0_real64**(-44) * max(abs(left), abs(right))
+end function j_match_real
 
 pure function j_iota(n) result(values)
   integer, intent(in) :: n
