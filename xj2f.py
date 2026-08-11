@@ -17,6 +17,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import sysconfig
 import time
 from pathlib import Path
 from typing import Sequence
@@ -37,9 +38,9 @@ from j2fortran.lowering import (
     match_cartesian_square,
     match_column_selection,
     match_compress_hcat,
-    match_floor_sqrt,
     match_iota_sequence,
     match_zero_integer_matrix,
+    required_runtime_helpers,
     render_fortran_expression,
     ungroup,
 )
@@ -55,6 +56,13 @@ from j2fortran.type_system import (
 
 
 VERSION = "0.1.0"
+RUNTIME_MODULE = "j2f_runtime"
+RUNTIME_PROCEDURES = {
+    "append": "j_append_int_row",
+    "cartesian": "j_cartesian_square",
+    "compress_hcat": "j_compress_hcat",
+    "iota": "j_iota",
+}
 
 
 class J2FError(Exception):
@@ -307,6 +315,7 @@ class FunctionEmitter:
         self.needs_append = False
         self.needs_cartesian = False
         self.needs_compress_hcat = False
+        self.expression_helpers: set[str] = set()
         self.result_type: TypeInfo | None = None
 
     def emit(self) -> tuple[list[str], set[str], TypeInfo]:
@@ -353,6 +362,7 @@ class FunctionEmitter:
             helpers.add("cartesian")
         if self.needs_compress_hcat:
             helpers.add("compress_hcat")
+        helpers.update(self.expression_helpers)
         return result, helpers, self.result_type
 
     @staticmethod
@@ -478,17 +488,6 @@ class FunctionEmitter:
             self._write(f"{name} = {source}(:, {index + 1})")
             return
 
-        floor_sqrt = match_floor_sqrt(expression)
-        if floor_sqrt is not None:
-            source = _fortran_name(floor_sqrt)
-            self._require_vector(source, assignment.line)
-            self._declare(name, "integer, allocatable-vector")
-            self.types[name] = TypeInfo(AtomType.INTEGER, self.types[source].shape)
-            self._write(
-                f"{name} = floor(sqrt(real({source}, kind=real64)))"
-            )
-            return
-
         append = match_append_row(expression)
         if append is not None and _fortran_name(append[0]) == name:
             if not self._is_matrix(name):
@@ -509,6 +508,7 @@ class FunctionEmitter:
             rendered = render_fortran_expression(expression, _fortran_name)
         except LoweringError as exc:
             raise _error_at(UnsupportedJError, assignment.line, str(exc)) from exc
+        self.expression_helpers.update(required_runtime_helpers(expression))
         if value_type.atom_type is AtomType.INTEGER and value_type.rank == 1:
             self._declare(name, "integer, allocatable-vector")
             self.types[name] = value_type
@@ -622,12 +622,13 @@ class FunctionEmitter:
             rendered = render_fortran_expression(expression, _fortran_name)
         except LoweringError as exc:
             raise _error_at(UnsupportedJError, statement.line, str(exc)) from exc
+        self.expression_helpers.update(required_runtime_helpers(expression))
         if result_type.rank == 0 and result_type.atom_type in {
             AtomType.INTEGER,
             AtomType.REAL,
             AtomType.LOGICAL,
         }:
-            self._record_result_type(result_type, statement.line)
+            rendered = self._coerce_scalar_result(result_type, rendered, statement.line)
             self._write(f"j_result = {rendered}")
             self.returned = True
             return
@@ -636,6 +637,28 @@ class FunctionEmitter:
             statement.line,
             f"unsupported result expression {statement.expression!r}",
         )
+
+    def _coerce_scalar_result(
+        self, result_type: TypeInfo, rendered: str, line: SourceLine
+    ) -> str:
+        if self.result_type is None or self.result_type.atom_type is result_type.atom_type:
+            self._record_result_type(result_type, line)
+            return rendered
+        atom_types = {self.result_type.atom_type, result_type.atom_type}
+        if atom_types != {AtomType.INTEGER, AtomType.LOGICAL}:
+            self._record_result_type(result_type, line)
+            return rendered
+        if self.result_type.atom_type is AtomType.INTEGER:
+            return f"merge(1, 0, {rendered})"
+
+        # J Boolean atoms are numeric 0/1 values. If an integer branch is seen
+        # after logical branches, promote the already-emitted scalar results.
+        for index, body_line in enumerate(self.body):
+            indentation, separator, expression = body_line.partition("j_result = ")
+            if separator:
+                self.body[index] = f"{indentation}{separator}merge(1, 0, {expression})"
+        self.result_type = TypeInfo(AtomType.INTEGER)
+        return rendered
 
     def _record_result_type(self, result_type: TypeInfo, line: SourceLine) -> None:
         if self.result_type is None:
@@ -687,6 +710,20 @@ class FunctionEmitter:
 
 def _runtime_helpers(helpers: set[str]) -> list[str]:
     result: list[str] = []
+    if "iota" in helpers:
+        result.extend(
+            [
+                "pure function j_iota(n) result(values)",
+                "  integer, intent(in) :: n",
+                "  integer, allocatable :: values(:)",
+                "  integer :: value_index",
+                "",
+                '  if (n < 0) error stop "negative J iota bound"',
+                "  values = [(value_index, value_index = 0, n - 1)]",
+                "end function j_iota",
+                "",
+            ]
+        )
     if "append" in helpers:
         result.extend(
             [
@@ -756,7 +793,9 @@ def _runtime_helpers(helpers: set[str]) -> list[str]:
     return result
 
 
-def emit_fortran(program: Program) -> str:
+def emit_fortran(program: Program, *, runtime: str = "embedded") -> str:
+    if runtime not in {"embedded", "external"}:
+        raise J2FError(f"unknown runtime mode {runtime!r}")
     definitions = [item for item in program.items if isinstance(item, VerbDefinition)]
     if not definitions:
         raise UnsupportedJError("no explicit monadic verb definitions were found")
@@ -792,7 +831,11 @@ def emit_fortran(program: Program) -> str:
         function_name = _fortran_name(definition.name)
         function_names.add(function_name)
         function_types[function_name] = result_type
-    lines.extend(_runtime_helpers(helpers))
+    if runtime == "external" and helpers:
+        procedures = ", ".join(sorted(RUNTIME_PROCEDURES[helper] for helper in helpers))
+        lines.insert(3, f"  use {RUNTIME_MODULE}, only: {procedures}")
+    else:
+        lines.extend(_runtime_helpers(helpers))
     lines.append(f"end module {module_name}")
     lines.append("")
 
@@ -872,12 +915,12 @@ def emit_fortran(program: Program) -> str:
     return "\n".join(lines)
 
 
-def transpile_path(input_path: Path) -> str:
+def transpile_path(input_path: Path, *, runtime: str = "embedded") -> str:
     try:
         text = input_path.read_text(encoding="utf-8")
     except OSError as exc:
         raise J2FError(f"cannot read {input_path}: {exc}") from exc
-    return emit_fortran(parse_j_source(input_path, text))
+    return emit_fortran(parse_j_source(input_path, text), runtime=runtime)
 
 
 def expression_ast_report(program: Program) -> dict[str, object]:
@@ -1001,7 +1044,26 @@ def compile_fortran(
     else:
         options = ["-std=f2018", "-O2", "-Wall", "-Wextra"]
         output_option = ["-o", str(executable)]
-    command = compiler + options + [str(source_path)] + output_option
+    sources = [str(source_path)]
+    if args.runtime == "external":
+        if args.runtime_file:
+            runtime_source = Path(args.runtime_file).resolve()
+        else:
+            candidates = (
+                Path(__file__).resolve().with_name("j.f90"),
+                Path(sysconfig.get_path("data")) / "share" / "j-to-fortran" / "j.f90",
+            )
+            runtime_source = next(
+                (candidate for candidate in candidates if candidate.is_file()),
+                candidates[0],
+            )
+        if not runtime_source.is_file():
+            raise J2FError(
+                f"external runtime source was not found: {runtime_source}; "
+                "use --runtime-file FILE"
+            )
+        sources.insert(0, str(runtime_source))
+    command = compiler + options + sources + output_option
     if args.verbose:
         print("compile:", subprocess.list2cmdline(command), file=sys.stderr)
     completed = _run_process(command, cwd=source_path.parent, timeout=args.timeout, label="Fortran compiler")
@@ -1075,6 +1137,17 @@ def build_argument_parser() -> argparse.ArgumentParser:
     parser.add_argument("input_j", help="input .ijs source file")
     parser.add_argument("--out", help="output .f90 path (default: <input>_j.f90)")
     parser.add_argument("--out-dir", help="directory for generated source and executable")
+    parser.add_argument(
+        "--runtime",
+        choices=("embedded", "external"),
+        default="embedded",
+        help="embed required helpers or use external j.f90 (default: embedded)",
+    )
+    parser.add_argument(
+        "--runtime-file",
+        metavar="FILE",
+        help="path to j.f90 when --runtime external is compiled",
+    )
     parser.add_argument("--compile", action="store_true", help="compile generated Fortran")
     parser.add_argument("--run", action="store_true", help="compile and run generated Fortran")
     parser.add_argument("--run-j", action="store_true", help="run the original J script")
@@ -1115,6 +1188,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             raise J2FError("--run-repeat must be at least 1")
         if args.timeout <= 0:
             raise J2FError("--timeout must be positive")
+        if args.runtime_file and args.runtime != "external":
+            raise J2FError("--runtime-file requires --runtime external")
 
         input_path = Path(args.input_j).resolve()
         if input_path.suffix.lower() != ".ijs":
@@ -1127,7 +1202,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         except OSError as exc:
             raise J2FError(f"cannot read {input_path}: {exc}") from exc
         parsed_program = parse_j_source(input_path, source_text)
-        generated = emit_fortran(parsed_program)
+        generated = emit_fortran(parsed_program, runtime=args.runtime)
         translate_seconds = time.perf_counter() - translate_started
 
         if args.emit_ast:

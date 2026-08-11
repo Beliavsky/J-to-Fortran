@@ -44,6 +44,28 @@ def test_array_example_lowers_supported_primitives() -> None:
     assert "j_result = j_compress_hcat(ab, c, keep)" in generated
 
 
+def test_external_runtime_uses_only_required_helpers() -> None:
+    program = xj2f.parse_j_source(
+        ROOT / "pythag_array.ijs",
+        (ROOT / "pythag_array.ijs").read_text(encoding="utf-8"),
+    )
+    generated = xj2f.emit_fortran(program, runtime="external")
+
+    assert (
+        "use j2f_runtime, only: j_cartesian_square, j_compress_hcat" in generated
+    )
+    assert "pure function j_cartesian_square" not in generated
+    assert "pure function j_compress_hcat" not in generated
+
+
+def test_embedded_runtime_remains_the_default() -> None:
+    generated = xj2f.transpile_path(ROOT / "pythag_array.ijs")
+
+    assert "use j2f_runtime" not in generated
+    assert "pure function j_cartesian_square" in generated
+    assert "pure function j_compress_hcat" in generated
+
+
 @pytest.mark.parametrize("filename", ["pythag.ijs", "pythag_array.ijs"])
 def test_generated_fortran_follows_procedure_and_use_style(filename: str) -> None:
     generated = xj2f.transpile_path(ROOT / filename)
@@ -162,3 +184,27 @@ def test_generated_examples_compile_and_run(
     assert len(rows) == 52
     assert rows[0] == first_row
     assert rows[-1] == last_row
+
+
+@pytest.mark.requires_gfortran
+def test_external_runtime_cli_compiles_and_runs(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    if shutil.which("gfortran") is None:
+        pytest.skip("gfortran is not installed")
+
+    result = xj2f.main(
+        [
+            str(ROOT / "pythag_array.ijs"),
+            "--out-dir",
+            str(tmp_path),
+            "--runtime",
+            "external",
+            "--run",
+        ]
+    )
+
+    assert result == 0
+    rows = [" ".join(line.split()) for line in capsys.readouterr().out.splitlines()]
+    assert rows[0] == "3 4 5"
+    assert rows[-1] == "65 72 97"

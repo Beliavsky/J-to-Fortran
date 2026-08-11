@@ -15,6 +15,7 @@ from j2fortran.lowering import (
     match_zero_integer_matrix,
     name_value,
     render_fortran_expression,
+    required_runtime_helpers,
 )
 from j2fortran.type_system import AtomType, Shape, TypeInfo
 
@@ -42,6 +43,27 @@ def test_generic_arithmetic_and_logical_lowering() -> None:
 
     assert render_fortran_expression(arithmetic) == "a**2 + b**2"
     assert render_fortran_expression(logical) == "a < b .and. c <= y"
+
+
+def test_prime_expression_primitives_lower_generically() -> None:
+    names = {
+        "limit": TypeInfo(AtomType.INTEGER),
+        "divisors": TypeInfo(AtomType.INTEGER, Shape.vector()),
+        "y": TypeInfo(AtomType.INTEGER),
+    }
+    divisors = parse_expression("2 + i. limit - 1")
+    primality = parse_expression("-. +./ 0 = divisors | y")
+
+    assert infer_type(divisors, names) == TypeInfo(
+        AtomType.INTEGER, Shape.vector()
+    )
+    assert render_fortran_expression(divisors) == "2 + j_iota(limit - 1)"
+    assert required_runtime_helpers(divisors) == {"iota"}
+    assert infer_type(primality, names) == TypeInfo(AtomType.LOGICAL)
+    assert (
+        render_fortran_expression(primality)
+        == ".not. any(0 == modulo(y, divisors))"
+    )
 
 
 @pytest.mark.parametrize(

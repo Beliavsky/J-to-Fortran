@@ -180,14 +180,39 @@ def infer_type(
     if isinstance(expression, StringLiteral):
         raise LoweringError("character arrays are not supported by the Fortran lowerer yet")
     if isinstance(expression, MonadicApply):
+        if isinstance(expression.verb, AdverbApplication):
+            operand_type = infer_type(expression.operand, names, name_transform)
+            reduction = primitive_spelling(expression.verb.operand)
+            if expression.verb.adverb == "/" and reduction == "+.":
+                if operand_type.atom_type is not AtomType.LOGICAL:
+                    raise LoweringError("Boolean OR reduction requires a logical operand")
+                if operand_type.rank != 1:
+                    raise LoweringError(
+                        "Boolean OR reduction currently requires a rank-1 operand"
+                    )
+                return TypeInfo(AtomType.LOGICAL)
+            raise LoweringError(
+                "cannot infer the result type of this adverb-derived verb"
+            )
         spelling = primitive_spelling(expression.verb)
         operand_type = infer_type(expression.operand, names, name_transform)
         if spelling in {"+", "-", "*:"}:
             return operand_type
+        if spelling == "i.":
+            if operand_type != TypeInfo(AtomType.INTEGER):
+                raise LoweringError("integer iota requires an integer scalar bound")
+            length = integer_value(expression.operand)
+            if length is not None and length < 0:
+                raise LoweringError("negative constant iota bounds are not supported")
+            return TypeInfo(AtomType.INTEGER, Shape.vector(length))
         if spelling == "%:":
             return TypeInfo(AtomType.REAL, operand_type.shape)
         if spelling in {"<.", ">."}:
             return TypeInfo(AtomType.INTEGER, operand_type.shape)
+        if spelling == "-.":
+            if operand_type.atom_type is not AtomType.LOGICAL:
+                raise LoweringError("logical negation requires a logical operand")
+            return operand_type
         raise LoweringError(f"cannot infer the result type of monadic {spelling!r}")
     if isinstance(expression, DyadicApply):
         spelling = primitive_spelling(expression.verb)
@@ -203,7 +228,7 @@ def infer_type(
             return TypeInfo(AtomType.LOGICAL, shape)
         if spelling in {"*.", "+."}:
             return TypeInfo(AtomType.LOGICAL, shape)
-        if spelling in {"+", "-", "*", "%"}:
+        if spelling in {"+", "-", "*", "%", "|"}:
             atom_type = (
                 AtomType.REAL
                 if spelling == "%" or AtomType.REAL in {left_type.atom_type, right_type.atom_type}
@@ -246,6 +271,7 @@ _FORTRAN_PRECEDENCE = {
 _ATOM_PRECEDENCE = 100
 _POWER_PRECEDENCE = 60
 _UNARY_PRECEDENCE = 55
+_NOT_PRECEDENCE = 25
 
 
 def _fortran_number(spelling: str) -> str:
@@ -300,6 +326,14 @@ def _render_fortran_expression(
         escaped = expression.value.replace("'", "''")
         return f"'{escaped}'", _ATOM_PRECEDENCE, None
     if isinstance(expression, MonadicApply):
+        if isinstance(expression.verb, AdverbApplication):
+            reduction = primitive_spelling(expression.verb.operand)
+            if expression.verb.adverb == "/" and reduction == "+.":
+                operand, _, _ = _render_fortran_expression(
+                    expression.operand, name_transform
+                )
+                return f"any({operand})", _ATOM_PRECEDENCE, "call"
+            raise LoweringError("this adverb-derived verb needs a dedicated lowering rule")
         spelling = primitive_spelling(expression.verb)
         operand, operand_precedence, _ = _render_fortran_expression(
             expression.operand, name_transform
@@ -313,15 +347,28 @@ def _render_fortran_expression(
         if spelling == "*:":
             operand = _parenthesize(operand, operand_precedence, _POWER_PRECEDENCE)
             return f"{operand}**2", _POWER_PRECEDENCE, "**"
+        if spelling == "i.":
+            return f"j_iota({operand})", _ATOM_PRECEDENCE, "call"
         if spelling == "%:":
-            return f"sqrt({operand})", _ATOM_PRECEDENCE, "call"
+            return (
+                f"sqrt(real({operand}, kind=real64))",
+                _ATOM_PRECEDENCE,
+                "call",
+            )
         if spelling == "<.":
             return f"floor({operand})", _ATOM_PRECEDENCE, "call"
         if spelling == ">.":
             return f"ceiling({operand})", _ATOM_PRECEDENCE, "call"
+        if spelling == "-.":
+            operand = _parenthesize(operand, operand_precedence, _NOT_PRECEDENCE)
+            return f".not. {operand}", _NOT_PRECEDENCE, ".not."
         raise LoweringError(f"monadic verb {spelling!r} needs a dedicated lowering rule")
     if isinstance(expression, DyadicApply):
         spelling = primitive_spelling(expression.verb)
+        if spelling == "|":
+            left, _, _ = _render_fortran_expression(expression.left, name_transform)
+            right, _, _ = _render_fortran_expression(expression.right, name_transform)
+            return f"modulo({right}, {left})", _ATOM_PRECEDENCE, "call"
         if spelling not in _DYADIC_FORTRAN:
             raise LoweringError(f"dyadic verb {spelling!r} needs a dedicated lowering rule")
         if spelling == "*" and _same_expression(expression.left, expression.right):
@@ -359,3 +406,18 @@ def render_fortran_expression(
 ) -> str:
     rendered, _, _ = _render_fortran_expression(expression, name_transform)
     return rendered
+
+
+def required_runtime_helpers(expression: Expression) -> set[str]:
+    """Return runtime helpers referenced by a generically lowered expression."""
+
+    expression = ungroup(expression)
+    helpers: set[str] = set()
+    if isinstance(expression, MonadicApply):
+        if primitive_spelling(expression.verb) == "i.":
+            helpers.add("iota")
+        helpers.update(required_runtime_helpers(expression.operand))
+    elif isinstance(expression, DyadicApply):
+        helpers.update(required_runtime_helpers(expression.left))
+        helpers.update(required_runtime_helpers(expression.right))
+    return helpers

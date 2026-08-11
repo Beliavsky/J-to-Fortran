@@ -64,12 +64,29 @@ python xj2f.py pythag.ijs --run-j --jconsole C:\Programs\J9.7\bin\jconsole.exe
 - `--tee-both`: print both J and generated Fortran source.
 - `--emit-ast [FILE]`: write expression AST JSON, or print it when no file is given.
 - `--check`: verify that the input is in the supported subset without writing Fortran.
+- `--runtime embedded|external`: embed required helpers or use `j.f90`.
+- `--runtime-file FILE`: select the `j.f90` used to compile external-runtime output.
 - `--compiler COMMAND`: select/configure a Fortran compiler.
 - `--ifx`: use Intel `ifx` rather than `gfortran`.
 - `--jconsole COMMAND`: select the J console command.
 - `--verbose`: show generated paths and compile commands.
 
 Use `python xj2f.py --help` for the complete option list.
+
+## Runtime helpers
+
+The default `--runtime embedded` mode places only the required helper procedures
+in each generated file, so the result remains standalone. For projects that
+translate several J sources, external mode keeps one copy of the helpers in
+`j.f90`:
+
+```powershell
+python xj2f.py pythag_array.ijs --runtime external --compile
+```
+
+External output imports only the procedures it needs from `j2f_runtime`.
+Compilation through `xj2f.py` automatically includes the adjacent `j.f90`;
+use `--runtime-file FILE` to select another copy.
 
 ## Initially supported J subset
 
@@ -80,13 +97,17 @@ The parser currently recognizes:
   supported inside translated verbs;
 - `for_name. 1 + i. expression do. ... end.`;
 - structured `if.`/`elseif.`/`else.` branches;
-- integer arithmetic, comparisons, and Boolean `*.` in the demonstrated forms;
+- integer arithmetic, comparisons, Boolean `*.` and `-.`, integer residue `|`,
+  and rank-1 Boolean OR reduction `+./` in the demonstrated forms;
+- integer iota `i.` with a scalar bound, lowered through a pure helper;
 - zero-row integer matrix construction such as `0 3 $ 0`;
 - row append using `,` in the demonstrated explicit-loop form;
 - the array pipeline used by `pythag_array.ijs`: catalogue/cartesian product,
   rank-1 column selection, square root, floor, laminate, and compression;
 - scalar integer, real, and logical verb results, including results selected by
   total `if.`/`elseif.`/`else.` control flow;
+- mixed integer and Boolean scalar branches, with Boolean values converted to
+  J-compatible integer zero or one when required;
 - a final noun as an array-valued verb result;
 - top-level `echo verb integer` and `exit 0`.
 

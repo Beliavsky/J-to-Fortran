@@ -26,6 +26,9 @@ xj2f = "xj2f:main"
 [tool.setuptools]
 py-modules = ["xj2f"]
 
+[tool.setuptools.data-files]
+"share/j-to-fortran" = ["j.f90"]
+
 [tool.setuptools.packages.find]
 include = ["j2fortran*"]
 

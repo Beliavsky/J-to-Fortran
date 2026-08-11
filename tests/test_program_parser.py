@@ -82,6 +82,26 @@ exit 0
 """
 
 
+ISPRIME_PROGRAM = """isprime =: 3 : 0
+  if. y < 2 do.
+    0
+  elseif. y = 2 do.
+    1
+  else.
+    limit =. <. %: y
+    divisors =. 2 + i. limit - 1
+    -. +./ 0 = divisors | y
+  end.
+)
+
+echo isprime 1
+echo isprime 2
+echo isprime 17
+echo isprime 18
+exit 0
+"""
+
+
 def test_scalar_conditional_emits_elemental_function_and_direct_echo() -> None:
     program = xj2f.parse_j_source(Path("classify.ijs"), SCALAR_CONDITIONAL)
     generated = xj2f.emit_fortran(program)
@@ -107,6 +127,17 @@ def test_conditional_without_else_is_not_a_total_result() -> None:
         xj2f.emit_fortran(program)
 
 
+def test_isprime_body_lowers_to_intrinsics_and_iota_helper() -> None:
+    program = xj2f.parse_j_source(Path("isprime.ijs"), ISPRIME_PROGRAM)
+    generated = xj2f.emit_fortran(program)
+
+    assert "pure elemental function isprime(y) result(j_result)" in generated
+    assert "limit = floor(sqrt(real(y, kind=real64)))" in generated
+    assert "divisors = 2 + j_iota(limit - 1)" in generated
+    assert "j_result = merge(1, 0, .not. any(0 == modulo(y, divisors)))" in generated
+    assert "pure function j_iota(n) result(values)" in generated
+
+
 @pytest.mark.requires_gfortran
 def test_scalar_conditional_compiles_and_runs(tmp_path: Path) -> None:
     compiler = shutil.which("gfortran")
@@ -130,3 +161,28 @@ def test_scalar_conditional_compiles_and_runs(tmp_path: Path) -> None:
     )
     assert completed.returncode == 0
     assert completed.stdout.split() == ["1"]
+
+
+@pytest.mark.requires_gfortran
+def test_isprime_body_compiles_and_runs(tmp_path: Path) -> None:
+    compiler = shutil.which("gfortran")
+    if compiler is None:
+        pytest.skip("gfortran is not installed")
+    source = tmp_path / "isprime_j.f90"
+    executable = tmp_path / "isprime.exe"
+    program = xj2f.parse_j_source(Path("isprime.ijs"), ISPRIME_PROGRAM)
+    source.write_text(xj2f.emit_fortran(program), encoding="utf-8")
+
+    compiled = subprocess.run(
+        [compiler, "-std=f2018", str(source), "-o", str(executable)],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert compiled.returncode == 0, compiled.stdout + compiled.stderr
+    completed = subprocess.run(
+        [str(executable)], cwd=tmp_path, capture_output=True, text=True, check=False
+    )
+    assert completed.returncode == 0
+    assert completed.stdout.split() == ["0", "1", "1", "0"]
