@@ -79,7 +79,7 @@ The parser currently recognizes:
 - local and global copulas as syntax (`=.` and `=:`), with local assignments
   supported inside translated verbs;
 - `for_name. 1 + i. expression do. ... end.`;
-- `if. expression do. ... end.`;
+- structured `if.`/`elseif.`/`else.` branches;
 - integer arithmetic, comparisons, and Boolean `*.` in the demonstrated forms;
 - zero-row integer matrix construction such as `0 3 $ 0`;
 - row append using `,` in the demonstrated explicit-loop form;

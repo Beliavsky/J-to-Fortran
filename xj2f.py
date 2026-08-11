@@ -91,10 +91,19 @@ class ForLoop:
 
 
 @dataclasses.dataclass(frozen=True)
+class ElseIfBranch:
+    line: SourceLine
+    condition: str
+    body: tuple[Statement, ...]
+
+
+@dataclasses.dataclass(frozen=True)
 class IfStatement:
     line: SourceLine
     condition: str
     body: tuple[Statement, ...]
+    elseif_branches: tuple[ElseIfBranch, ...] = ()
+    else_body: tuple[Statement, ...] | None = None
 
 
 @dataclasses.dataclass(frozen=True)
@@ -158,6 +167,7 @@ class Parser:
         r"^for_([A-Za-z][A-Za-z0-9_]*)\.\s+(.+?)\s+do\.\s*$"
     )
     _if = re.compile(r"^if\.\s+(.+?)\s+do\.\s*$")
+    _elseif = re.compile(r"^elseif\.\s+(.+?)\s+do\.\s*$")
 
     def __init__(self, source_path: Path, text: str):
         self.source_path = source_path
@@ -201,7 +211,7 @@ class Parser:
         while self.index < len(self.lines):
             line = self.lines[self.index]
             text = line.text.strip()
-            if text in terminators:
+            if self._is_terminator(text, terminators):
                 return statements
             loop = self._for.fullmatch(text)
             if loop:
@@ -212,10 +222,7 @@ class Parser:
                 continue
             conditional = self._if.fullmatch(text)
             if conditional:
-                self.index += 1
-                body = self._parse_statements({"end."})
-                self._expect("end.", line, "if. statement")
-                statements.append(IfStatement(line, conditional.group(1), tuple(body)))
+                statements.append(self._parse_conditional(line, conditional.group(1)))
                 continue
             assignment = self._assignment.fullmatch(text)
             if assignment:
@@ -227,9 +234,44 @@ class Parser:
             if text in {"end.", ")"}:
                 expected = " or ".join(sorted(terminators))
                 raise _error_at(ParseError, line, f"unexpected {text!r}; expected {expected!r}")
+            if text == "else." or self._elseif.fullmatch(text):
+                raise _error_at(ParseError, line, f"unexpected conditional branch {text!r}")
             statements.append(ExpressionStatement(line, text))
             self.index += 1
         return statements
+
+    @staticmethod
+    def _is_terminator(text: str, terminators: set[str]) -> bool:
+        return text in terminators or (
+            "elseif." in terminators and text.startswith("elseif.")
+        )
+
+    def _parse_conditional(self, line: SourceLine, condition: str) -> IfStatement:
+        self.index += 1
+        body = self._parse_statements({"elseif.", "else.", "end."})
+        elseif_branches: list[ElseIfBranch] = []
+        while self.index < len(self.lines):
+            branch_line = self.lines[self.index]
+            branch = self._elseif.fullmatch(branch_line.text.strip())
+            if branch is None:
+                break
+            self.index += 1
+            branch_body = self._parse_statements({"elseif.", "else.", "end."})
+            elseif_branches.append(
+                ElseIfBranch(branch_line, branch.group(1), tuple(branch_body))
+            )
+        else_body: tuple[Statement, ...] | None = None
+        if self.index < len(self.lines) and self.lines[self.index].text.strip() == "else.":
+            self.index += 1
+            else_body = tuple(self._parse_statements({"end."}))
+        self._expect("end.", line, "if. statement")
+        return IfStatement(
+            line,
+            condition,
+            tuple(body),
+            tuple(elseif_branches),
+            else_body,
+        )
 
     def _expect(self, expected: str, opener: SourceLine, description: str) -> None:
         if self.index >= len(self.lines) or self.lines[self.index].text.strip() != expected:
@@ -470,17 +512,33 @@ class FunctionEmitter:
         self._write("end do")
 
     def _emit_if(self, conditional: IfStatement) -> None:
-        expression = self._parse_expression(conditional.condition, conditional.line)
-        try:
-            condition = render_fortran_expression(expression, _fortran_name)
-        except LoweringError as exc:
-            raise _error_at(UnsupportedJError, conditional.line, str(exc)) from exc
+        condition = self._render_condition(conditional.condition, conditional.line)
         self._write(f"if ({condition}) then")
         self.indent += 1
         for statement in conditional.body:
             self._emit_statement(statement)
         self.indent -= 1
+        for branch in conditional.elseif_branches:
+            condition = self._render_condition(branch.condition, branch.line)
+            self._write(f"else if ({condition}) then")
+            self.indent += 1
+            for statement in branch.body:
+                self._emit_statement(statement)
+            self.indent -= 1
+        if conditional.else_body is not None:
+            self._write("else")
+            self.indent += 1
+            for statement in conditional.else_body:
+                self._emit_statement(statement)
+            self.indent -= 1
         self._write("end if")
+
+    def _render_condition(self, condition: str, line: SourceLine) -> str:
+        expression = self._parse_expression(condition, line)
+        try:
+            return render_fortran_expression(expression, _fortran_name)
+        except LoweringError as exc:
+            raise _error_at(UnsupportedJError, line, str(exc)) from exc
 
     def _emit_result(self, statement: ExpressionStatement) -> None:
         expression = self._parse_expression(statement.expression, statement.line)
@@ -751,7 +809,22 @@ def expression_ast_report(program: Program) -> dict[str, object]:
         elif isinstance(statement, IfStatement):
             role = "if"
             expression = statement.condition
-            extra = {}
+            extra = {
+                "elseif": [
+                    {
+                        "line": branch.line.number,
+                        "source": branch.condition,
+                        "ast": ast_to_dict(parse_expression(branch.condition)),
+                        "body": [statement_report(child) for child in branch.body],
+                    }
+                    for branch in statement.elseif_branches
+                ],
+                "else_body": (
+                    [statement_report(child) for child in statement.else_body]
+                    if statement.else_body is not None
+                    else None
+                ),
+            }
             children = [statement_report(child) for child in statement.body]
         else:
             role = "result"
