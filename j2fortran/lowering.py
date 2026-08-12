@@ -663,6 +663,8 @@ def infer_type(
             ):
                 raise LoweringError("nub currently requires an integer vector")
             return TypeInfo(AtomType.INTEGER, Shape.vector())
+        if spelling == "]":
+            return operand_type
         if spelling == "+":
             if operand_type.atom_type not in {
                 AtomType.INTEGER,
@@ -943,14 +945,23 @@ def infer_type(
                 raise LoweringError(
                     "catenate currently requires scalar or vector arguments"
                 )
-            if left_type.atom_type is not right_type.atom_type:
+            atom_types = {left_type.atom_type, right_type.atom_type}
+            if len(atom_types) > 1 and atom_types != {
+                AtomType.INTEGER,
+                AtomType.LOGICAL,
+            }:
                 raise LoweringError("catenate currently requires matching atom types")
             left_extent = 1 if left_type.is_scalar else left_type.shape.extents[0]
             right_extent = 1 if right_type.is_scalar else right_type.shape.extents[0]
             extent = _sum_extents(
                 left_extent, right_extent
             )
-            return TypeInfo(left_type.atom_type, Shape.vector(extent))
+            atom_type = (
+                AtomType.INTEGER
+                if AtomType.INTEGER in atom_types
+                else left_type.atom_type
+            )
+            return TypeInfo(atom_type, Shape.vector(extent))
         if spelling == ",:":
             if left_type.rank != 1 or right_type.rank != 1:
                 raise LoweringError("laminate currently requires two vectors")
@@ -1379,6 +1390,8 @@ def _render_fortran_expression(
         operand, operand_precedence, _ = _render_fortran_expression(
             expression.operand, name_transform
         )
+        if spelling == "]":
+            return operand, operand_precedence, None
         if spelling == "+":
             operand = _parenthesize(operand, operand_precedence, _UNARY_PRECEDENCE)
             return f"+{operand}", _UNARY_PRECEDENCE, "unary+"
@@ -1711,6 +1724,9 @@ def render_fortran_expression(
         left_type = infer_type(
             catenated[0], names, name_transform, named_verbs=named_verbs
         )
+        right_type = infer_type(
+            catenated[1], names, name_transform, named_verbs=named_verbs
+        )
         if left_type.atom_type is AtomType.CHARACTER:
             left = render_fortran_expression(
                 catenated[0], name_transform, names=names, named_verbs=named_verbs
@@ -1719,6 +1735,21 @@ def render_fortran_expression(
                 catenated[1], name_transform, names=names, named_verbs=named_verbs
             )
             return f"{left} // {right}"
+        if {left_type.atom_type, right_type.atom_type} == {
+            AtomType.INTEGER,
+            AtomType.LOGICAL,
+        }:
+            left = render_fortran_expression(
+                catenated[0], name_transform, names=names, named_verbs=named_verbs
+            )
+            right = render_fortran_expression(
+                catenated[1], name_transform, names=names, named_verbs=named_verbs
+            )
+            if left_type.atom_type is AtomType.LOGICAL:
+                left = f"merge(1, 0, {left})"
+            if right_type.atom_type is AtomType.LOGICAL:
+                right = f"merge(1, 0, {right})"
+            return f"[{left}, {right}]"
     boxed_list = dyad(bare_expression, ";")
     if boxed_list is not None and names is not None:
         items = _flatten_semicolon_list(bare_expression)
@@ -1825,6 +1856,12 @@ def render_fortran_expression(
         )
         right = render_fortran_expression(
             divided[1], name_transform, names=names, named_verbs=named_verbs
+        )
+        _, right_precedence, _ = _render_fortran_expression(
+            divided[1], name_transform
+        )
+        right = _parenthesize(
+            right, right_precedence, _FORTRAN_PRECEDENCE["/"]
         )
         if left_type.atom_type is AtomType.INTEGER:
             left = f"real({left}, kind=real64)"

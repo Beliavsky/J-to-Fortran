@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from dataclasses import replace
 
 from .ast import (
     AdverbApplication,
@@ -197,7 +198,20 @@ class ExpressionParser:
                 product,
                 _cover(_token_span(opening), _token_span(closing)),
             )
-        if token.kind is TokenKind.NAME:
+        if token.kind is TokenKind.LPAREN:
+            closing_index = self._matching_parenthesis(self.index)
+            if closing_index is None:
+                raise ExpressionParseError("unclosed parenthesized verb", token)
+            opening = self._take()
+            inner_tokens = self.tokens[self.index : closing_index]
+            verb = ExpressionParser(inner_tokens).parse_verb()
+            closing = self.tokens[closing_index]
+            self.index = closing_index + 1
+            verb = replace(
+                verb,
+                span=_cover(_token_span(opening), _token_span(closing)),
+            )
+        elif token.kind is TokenKind.NAME:
             self._take()
             verb: Verb = NamedVerb(token.value, _token_span(token))
         elif token.kind is TokenKind.PRIMITIVE and token.value not in _ADVERBS | {'"'}:
@@ -237,6 +251,20 @@ class ExpressionParser:
             product = self._verb(allow_inner_product=False)
             return InnerProductVerb(verb, product, _cover(verb.span, product.span))
         return verb
+
+    def _matching_parenthesis(self, start: int) -> int | None:
+        if start >= len(self.tokens) or self.tokens[start].kind is not TokenKind.LPAREN:
+            return None
+        depth = 0
+        for index in range(start + 1, len(self.tokens)):
+            token = self.tokens[index]
+            if token.kind is TokenKind.LPAREN:
+                depth += 1
+            elif token.kind is TokenKind.RPAREN:
+                if depth == 0:
+                    return index
+                depth -= 1
+        return None
 
     def _starts_verb(self) -> bool:
         if self.index >= len(self.tokens):

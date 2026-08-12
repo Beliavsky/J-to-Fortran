@@ -34,6 +34,7 @@ from j2fortran.ast import (
     NamedVerb,
     NumberLiteral,
     PrimitiveVerb,
+    RankApplication,
     StringLiteral,
     Verb,
     ast_to_dict,
@@ -333,17 +334,15 @@ class Parser:
                     tacit_verb = parse_verb(assignment.group(3))
                 except (LexerError, ExpressionParseError, ValueError):
                     tacit_verb = None
-                primitive_fork = isinstance(tacit_verb, ForkVerb) and all(
-                    _simple_verb_source(component) is not None
-                    for component in (
-                        tacit_verb.left,
-                        tacit_verb.center,
-                        tacit_verb.right,
-                    )
+                supported_fork = (
+                    isinstance(tacit_verb, ForkVerb)
+                    and _monadic_tacit_source(tacit_verb.left, "y") is not None
+                    and _simple_verb_source(tacit_verb.center) is not None
+                    and _monadic_tacit_source(tacit_verb.right, "y") is not None
                 )
                 if isinstance(
                     tacit_verb, (AdverbApplication, AtopVerb, BondVerb)
-                ) or primitive_fork:
+                ) or supported_fork:
                     items.append(
                         TacitVerbDefinition(line, assignment.group(1), tacit_verb)
                     )
@@ -1822,23 +1821,47 @@ def _definition_argument_types(
         expression = ungroup(expression)
         call_name: str | None = None
         arguments = ()
+        ranked_argument_types: tuple[TypeInfo, ...] | None = None
         if isinstance(expression, MonadicApply) and isinstance(
             expression.verb, NamedVerb
         ):
             call_name = _fortran_name(expression.verb.identifier)
             arguments = (expression.operand,)
+        elif (
+            isinstance(expression, MonadicApply)
+            and isinstance(expression.verb, RankApplication)
+            and isinstance(expression.verb.operand, NamedVerb)
+            and integer_value(expression.verb.rank) == 1
+        ):
+            call_name = _fortran_name(expression.verb.operand.identifier)
+            try:
+                operand_type = infer_type(expression.operand, names, _fortran_name)
+            except LoweringError:
+                pass
+            else:
+                if operand_type.rank >= 1:
+                    ranked_argument_types = (
+                        TypeInfo(
+                            operand_type.atom_type,
+                            Shape.vector(operand_type.shape.extents[-1]),
+                        ),
+                    )
         elif isinstance(expression, DyadicApply) and isinstance(
             expression.verb, NamedVerb
         ):
             call_name = _fortran_name(expression.verb.identifier)
             arguments = (expression.left, expression.right)
         if call_name is not None:
-            try:
-                argument_types = tuple(
-                    infer_type(argument, names, _fortran_name) for argument in arguments
-                )
-            except LoweringError:
-                argument_types = ()
+            if ranked_argument_types is not None:
+                argument_types = ranked_argument_types
+            else:
+                try:
+                    argument_types = tuple(
+                        infer_type(argument, names, _fortran_name)
+                        for argument in arguments
+                    )
+                except LoweringError:
+                    argument_types = ()
             if argument_types and all(
                 argument_type.atom_type is AtomType.INTEGER
                 and argument_type.rank in {0, 1}
@@ -1847,8 +1870,21 @@ def _definition_argument_types(
                 key = (call_name, len(argument_types))
                 previous = inferred.get(key)
                 if previous is not None and previous != argument_types:
-                    raise J2FError(
-                        f"calls to {call_name!r} use inconsistent argument ranks"
+                    if any(
+                        old.atom_type is not new.atom_type or old.rank != new.rank
+                        for old, new in zip(previous, argument_types, strict=True)
+                    ):
+                        raise J2FError(
+                            f"calls to {call_name!r} use inconsistent argument ranks"
+                        )
+                    argument_types = tuple(
+                        TypeInfo(
+                            old.atom_type,
+                            old.shape
+                            if old.shape == new.shape
+                            else Shape.vector(),
+                        )
+                        for old, new in zip(previous, argument_types, strict=True)
                     )
                 inferred[key] = argument_types
         if isinstance(expression, Group):
@@ -1884,6 +1920,27 @@ def _simple_verb_source(verb: Verb) -> str | None:
         operand = _simple_verb_source(verb.operand)
         if operand is not None:
             return operand + verb.adverb
+    return None
+
+
+def _monadic_tacit_source(verb: Verb, operand: str) -> str | None:
+    """Render application of a supported tacit verb to one noun expression."""
+
+    simple = _simple_verb_source(verb)
+    if simple is not None:
+        return f"{simple} ({operand})"
+    if isinstance(verb, AtopVerb):
+        inner = _monadic_tacit_source(verb.inner, operand)
+        if inner is None:
+            return None
+        return _monadic_tacit_source(verb.outer, inner)
+    if isinstance(verb, ForkVerb):
+        center = _simple_verb_source(verb.center)
+        left = _monadic_tacit_source(verb.left, operand)
+        right = _monadic_tacit_source(verb.right, operand)
+        if center is None or left is None or right is None:
+            return None
+        return f"({left}) {center} ({right})"
     return None
 
 
@@ -1930,22 +1987,21 @@ def _explicit_definitions(program: Program) -> list[VerbDefinition]:
             )
             continue
         if isinstance(item.verb, AtopVerb):
-            outer = _simple_verb_source(item.verb.outer)
-            inner = _simple_verb_source(item.verb.inner)
-            if outer is not None and inner is not None:
+            application = _monadic_tacit_source(item.verb, "y")
+            if application is not None:
                 definitions.append(
                     VerbDefinition(
                         item.line,
                         item.name,
                         ("y",),
-                        (ExpressionStatement(item.line, f"{outer} ({inner} y)"),),
+                        (ExpressionStatement(item.line, application),),
                     )
                 )
                 continue
         if isinstance(item.verb, ForkVerb):
-            left = _simple_verb_source(item.verb.left)
+            left = _monadic_tacit_source(item.verb.left, "y")
             center = _simple_verb_source(item.verb.center)
-            right = _simple_verb_source(item.verb.right)
+            right = _monadic_tacit_source(item.verb.right, "y")
             if left is not None and center is not None and right is not None:
                 definitions.append(
                     VerbDefinition(
@@ -1954,7 +2010,7 @@ def _explicit_definitions(program: Program) -> list[VerbDefinition]:
                         ("y",),
                         (
                             ExpressionStatement(
-                                item.line, f"({left} y) {center} ({right} y)"
+                                item.line, f"({left}) {center} ({right})"
                             ),
                         ),
                     )

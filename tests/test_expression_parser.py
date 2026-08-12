@@ -71,6 +71,15 @@ def test_parse_tacit_fork_verb_phrase() -> None:
     assert primitive(verb.right) == "#"
 
 
+def test_parse_parenthesized_nested_tacit_forks() -> None:
+    verb = parse_verb("(] - <./) % (>./ - <./)")
+
+    assert isinstance(verb, ForkVerb)
+    assert isinstance(verb.left, ForkVerb)
+    assert primitive(verb.center) == "%"
+    assert isinstance(verb.right, ForkVerb)
+
+
 def test_parse_parenthesized_sum_product_verb() -> None:
     expression = parse_expression("a (+/ . *) b")
 

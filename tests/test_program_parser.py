@@ -283,6 +283,70 @@ exit 0
     assert "pure function j_sort_int_vector(values, descending)" in generated
 
 
+def test_nested_tacit_forks_scale_a_vector() -> None:
+    source = """scale01 =: (] - <./) % (>./ - <./)
+values =: 8 3 11 5 20 14
+smoutput scale01 values
+exit 0
+"""
+
+    generated = xj2f.emit_fortran(
+        xj2f.parse_j_source(Path("scale01.ijs"), source)
+    )
+
+    assert "pure function scale01(y) result(j_result)" in generated
+    assert "real(kind=real64), allocatable :: j_result(:)" in generated
+    assert (
+        "j_result = real(y - minval(y), kind=real64) / (maxval(y) - minval(y))"
+        in generated
+    )
+
+
+def test_nested_atop_composition_computes_vector_length() -> None:
+    source = """length =: %: @: (+/) @: *:
+values =: 1 2 2
+smoutput length values
+exit 0
+"""
+
+    generated = xj2f.emit_fortran(
+        xj2f.parse_j_source(Path("length.ijs"), source)
+    )
+
+    assert "pure function length(y) result(j_result)" in generated
+    assert "j_result = sqrt(real(sum(y**2), kind=real64))" in generated
+
+
+def test_ranked_tacit_call_infers_a_vector_dummy() -> None:
+    source = """length =: %: @: (+/) @: *:
+points =: 2 3 $ 1 2 2 3 4 0
+smoutput length"1 points
+exit 0
+"""
+
+    program = xj2f.parse_j_source(Path("ranked_length.ijs"), source)
+
+    assert xj2f._definition_argument_types(program) == {
+        ("length", 1): (
+            xj2f.TypeInfo(xj2f.AtomType.INTEGER, xj2f.Shape.vector(3)),
+        )
+    }
+
+
+def test_catenate_promotes_boolean_valued_integers_to_integer() -> None:
+    source = """values =: 1 1 1 , 2 3 4
+smoutput values
+exit 0
+"""
+
+    generated = xj2f.emit_fortran(
+        xj2f.parse_j_source(Path("mixed_catenate.ijs"), source)
+    )
+
+    assert "merge(1, 0, [.true., .true., .true.])" in generated
+    assert 'write (*,"(*(i0, 1x))")' in generated
+
+
 def test_tacit_call_infers_rank_from_a_preceding_top_level_noun() -> None:
     source = """mean =: +/ % #
 x =: 2 4 6 8
