@@ -69,6 +69,16 @@ def test_dyadic_explicit_verb_has_x_and_y_arguments() -> None:
     assert verb.arguments == ("x", "y")
 
 
+def test_ambivalent_explicit_verb_has_two_specific_definitions() -> None:
+    source = "f =: 3 : 0\n  y * y\n:\n  x + y\n)\n"
+    program = xj2f.parse_j_source(Path("ambivalent.ijs"), source)
+    verbs = [item for item in program.items if isinstance(item, xj2f.VerbDefinition)]
+
+    assert [verb.name for verb in verbs] == ["f_monad", "f_dyad"]
+    assert [verb.arguments for verb in verbs] == [("y",), ("x", "y")]
+    assert [verb.generic_name for verb in verbs] == ["f", "f"]
+
+
 def test_stray_else_is_rejected_at_its_source_line() -> None:
     source = "f =: 3 : 0\n  else.\n    0\n  end.\n)\n"
 

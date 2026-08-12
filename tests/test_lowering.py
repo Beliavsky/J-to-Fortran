@@ -395,6 +395,19 @@ def test_vector_catenate_combines_extents() -> None:
     assert render_fortran_expression(expression, names=names) == "[a, b]"
 
 
+def test_scalar_catenate_creates_a_vector() -> None:
+    expression = parse_expression("a , b")
+    names = {
+        "a": TypeInfo(AtomType.INTEGER),
+        "b": TypeInfo(AtomType.INTEGER),
+    }
+
+    assert infer_type(expression, names) == TypeInfo(
+        AtomType.INTEGER, Shape.vector(2)
+    )
+    assert render_fortran_expression(expression, names=names) == "[a, b]"
+
+
 def test_vector_laminate_creates_a_row_major_matrix() -> None:
     expression = parse_expression("a ,: b")
     names = {

@@ -47,6 +47,17 @@ ok =: result -: expected
 """
 
 
+AMBIVALENT_TEST_PROGRAM = """f =: 3 : 0
+  y * y
+:
+  x + y
+)
+result =: (f 5) , 3 f 4
+expected =: 25 7
+ok =: result -: expected
+"""
+
+
 @pytest.mark.parametrize("filename", ["pythag.ijs", "pythag_array.ijs"])
 def test_examples_transpile_to_standalone_fortran(filename: str) -> None:
     generated = xj2f.transpile_path(ROOT / filename)
@@ -78,6 +89,19 @@ def test_float_match_emits_j_tolerance_helper() -> None:
     assert "2.0_real64**(-44) * max(abs(left), abs(right))" in generated
     assert "ok = all(j_match_real(result_j, expected))" in main
     assert "1.001_real64" in main
+
+
+def test_ambivalent_verb_emits_a_generic_interface() -> None:
+    program = xj2f.parse_j_source(
+        Path("ambivalent.ijs"), AMBIVALENT_TEST_PROGRAM
+    )
+    generated = xj2f.emit_fortran(program)
+
+    assert "interface f" in generated
+    assert "module procedure f_monad, f_dyad" in generated
+    assert "pure elemental function f_monad(y)" in generated
+    assert "pure elemental function f_dyad(x, y)" in generated
+    assert "result_j = [f(5), f(3, 4)]" in generated
 
 
 def test_integer_result_with_real_input_imports_real64() -> None:

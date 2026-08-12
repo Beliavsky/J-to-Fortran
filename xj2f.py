@@ -150,6 +150,7 @@ class VerbDefinition:
     name: str
     arguments: tuple[str, ...]
     body: tuple[Statement, ...]
+    generic_name: str | None = None
 
 
 @dataclasses.dataclass(frozen=True)
@@ -223,7 +224,36 @@ class Parser:
             verb = self._verb_start.fullmatch(text)
             if verb:
                 self.index += 1
-                body = self._parse_statements({")"})
+                terminators = {":", ")"} if verb.group(2) == "3" else {")"}
+                body = self._parse_statements(terminators)
+                if (
+                    verb.group(2) == "3"
+                    and self.index < len(self.lines)
+                    and self.lines[self.index].text.strip() == ":"
+                ):
+                    self.index += 1
+                    dyadic_body = self._parse_statements({")"})
+                    self._expect(")", line, "ambivalent explicit verb")
+                    generic_name = verb.group(1)
+                    items.extend(
+                        [
+                            VerbDefinition(
+                                line,
+                                generic_name + "_monad",
+                                ("y",),
+                                tuple(body),
+                                generic_name,
+                            ),
+                            VerbDefinition(
+                                line,
+                                generic_name + "_dyad",
+                                ("x", "y"),
+                                tuple(dyadic_body),
+                                generic_name,
+                            ),
+                        ]
+                    )
+                    continue
                 self._expect(")", line, "explicit verb")
                 arguments = ("y",) if verb.group(2) == "3" else ("x", "y")
                 items.append(VerbDefinition(line, verb.group(1), arguments, tuple(body)))
@@ -1333,7 +1363,26 @@ def emit_fortran(program: Program, *, runtime: str = "embedded") -> str:
         "  private",
     ]
     for definition in definitions:
-        lines.append(f"  public :: {_fortran_name(definition.name)}")
+        exported_name = definition.generic_name or definition.name
+        public_line = f"  public :: {_fortran_name(exported_name)}"
+        if public_line not in lines:
+            lines.append(public_line)
+    generic_definitions: dict[str, list[str]] = {}
+    for definition in definitions:
+        if definition.generic_name is not None:
+            generic_definitions.setdefault(definition.generic_name, []).append(
+                definition.name
+            )
+    for generic_name, specific_names in generic_definitions.items():
+        lines.extend(
+            [
+                "",
+                f"  interface {_fortran_name(generic_name)}",
+                "    module procedure "
+                + ", ".join(_fortran_name(name) for name in specific_names),
+                "  end interface",
+            ]
+        )
     lines.extend(["", "contains", ""])
 
     helpers: set[str] = set()
@@ -1344,9 +1393,16 @@ def emit_fortran(program: Program, *, runtime: str = "embedded") -> str:
         lines.extend(emitted)
         lines.append("")
         helpers.update(required)
-        function_name = _fortran_name(definition.name)
-        function_names.add(function_name)
-        function_types[function_name] = result_type
+        exported_name = _fortran_name(definition.generic_name or definition.name)
+        function_names.add(exported_name)
+        previous_type = function_types.get(exported_name)
+        if previous_type is not None and previous_type != result_type:
+            raise _error_at(
+                UnsupportedJError,
+                definition.line,
+                "ambivalent verb valences must have the same result type",
+            )
+        function_types[exported_name] = result_type
     top_assignments, top_helpers = _lower_top_assignments(program, function_types)
     helpers.update(top_helpers)
     exported_helpers = sorted(RUNTIME_PROCEDURES[helper] for helper in top_helpers)

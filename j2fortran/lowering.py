@@ -770,12 +770,16 @@ def infer_type(
             expression.right, names, name_transform, named_verbs=named_verbs
         )
         if spelling == ",":
-            if left_type.rank != 1 or right_type.rank != 1:
-                raise LoweringError("catenate currently requires two vectors")
+            if left_type.rank not in {0, 1} or right_type.rank not in {0, 1}:
+                raise LoweringError(
+                    "catenate currently requires scalar or vector arguments"
+                )
             if left_type.atom_type is not right_type.atom_type:
                 raise LoweringError("catenate currently requires matching atom types")
+            left_extent = 1 if left_type.is_scalar else left_type.shape.extents[0]
+            right_extent = 1 if right_type.is_scalar else right_type.shape.extents[0]
             extent = _sum_extents(
-                left_type.shape.extents[0], right_type.shape.extents[0]
+                left_extent, right_extent
             )
             return TypeInfo(left_type.atom_type, Shape.vector(extent))
         if spelling == ",:":
