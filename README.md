@@ -141,6 +141,7 @@ The parser currently recognizes:
 - transparent single homogeneous box/open pairs;
 - homogeneous boxed character lists, scalar indexing, and raze;
 - complex literals and arithmetic;
+- complex conjugate with monadic `+`, lowered to Fortran `conjg`;
 - complex magnitude lowered to the real-valued `abs` intrinsic;
 - rational literals represented as `real64` numerator/denominator quotients;
 - integer base decode and mixed-radix encode;

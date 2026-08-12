@@ -26,7 +26,9 @@ ok =: result -: expected
 
 COMPLEX_VECTOR_TEST_PROGRAM = """result =: 1j2 3j4 + 2j_1 4j_2
 expected =: 3j1 7j2
-ok =: result -: expected
+conjugated =: + result
+conjugated_expected =: 3j_1 7j_2
+ok =: conjugated -: conjugated_expected
 """
 
 
@@ -128,7 +130,8 @@ def test_complex_vector_arithmetic_emits_complex_arrays() -> None:
     )
 
     assert "complex(kind=real64), allocatable :: result_j(:), expected(:)" in generated
-    assert "ok = all(result_j == expected)" in generated
+    assert "conjugated = conjg(result_j)" in generated
+    assert "ok = all(conjugated == conjugated_expected)" in generated
 
 
 def test_top_level_heterogeneous_boxed_match_is_decomposed() -> None:

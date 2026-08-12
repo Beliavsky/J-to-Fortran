@@ -194,6 +194,17 @@ def test_numeric_strands_promote_to_the_widest_atom_type() -> None:
     )
 
 
+def test_monadic_plus_conjugates_complex_arrays() -> None:
+    expression = parse_expression("+ values")
+    values_type = TypeInfo(AtomType.COMPLEX, Shape.vector(2))
+
+    assert infer_type(expression, {"values": values_type}) == values_type
+    assert (
+        render_fortran_expression(expression, names={"values": values_type})
+        == "conjg(values)"
+    )
+
+
 def test_complex_magnitude_lowers_to_real_abs() -> None:
     expression = parse_expression("| 3j4")
 

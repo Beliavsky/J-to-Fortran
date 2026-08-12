@@ -657,7 +657,15 @@ def infer_type(
             ):
                 raise LoweringError("nub currently requires an integer vector")
             return TypeInfo(AtomType.INTEGER, Shape.vector())
-        if spelling in {"+", "-", "*:", "<:", ">:"}:
+        if spelling == "+":
+            if operand_type.atom_type not in {
+                AtomType.INTEGER,
+                AtomType.REAL,
+                AtomType.COMPLEX,
+            }:
+                raise LoweringError("conjugate requires a numeric operand")
+            return operand_type
+        if spelling in {"-", "*:", "<:", ">:"}:
             if operand_type.atom_type not in {AtomType.INTEGER, AtomType.REAL}:
                 raise LoweringError(f"monadic {spelling!r} requires a numeric operand")
             return operand_type
@@ -1645,6 +1653,14 @@ def render_fortran_expression(
             named_verbs=named_verbs,
         )
         spelling = primitive_spelling(bare_expression.verb)
+        if spelling == "+" and operand_type.atom_type is AtomType.COMPLEX:
+            operand = render_fortran_expression(
+                bare_expression.operand,
+                name_transform,
+                names=names,
+                named_verbs=named_verbs,
+            )
+            return f"conjg({operand})"
         if spelling in {"<", ">"}:
             return render_fortran_expression(
                 bare_expression.operand,
