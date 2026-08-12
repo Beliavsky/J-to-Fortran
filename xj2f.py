@@ -97,6 +97,7 @@ RUNTIME_PROCEDURES = {
     "prefix_product_int": "j_prefix_product_int",
     "prefix_sum_int": "j_prefix_sum_int",
     "power_table_int": "j_power_table_int",
+    "raze_character": "j_raze_character",
     "reverse_character": "j_reverse_character",
     "reverse_int_vector": "j_reverse_int_vector",
     "select_character": "j_select_character",
@@ -1311,6 +1312,27 @@ def _runtime_helpers(helpers: set[str]) -> list[str]:
                 "",
             ]
         )
+    if "raze_character" in helpers:
+        result.extend(
+            [
+                "pure function j_raze_character(values) result(razed)",
+                "  character(len=*), intent(in) :: values(:)",
+                "  character(len=:), allocatable :: razed",
+                "  integer :: item_index, target_start, value_length",
+                "",
+                "  value_length = sum(len_trim(values))",
+                "  allocate(character(len=value_length) :: razed)",
+                "  target_start = 1",
+                "  do item_index = 1, size(values)",
+                "    value_length = len_trim(values(item_index))",
+                "    razed(target_start:target_start + value_length - 1) = &",
+                "      values(item_index)(:value_length)",
+                "    target_start = target_start + value_length",
+                "  end do",
+                "end function j_raze_character",
+                "",
+            ]
+        )
     if "select_character" in helpers:
         result.extend(
             [
@@ -1656,6 +1678,11 @@ def _main_entity_declaration(assignment: LoweredTopAssignment) -> tuple[str, str
         AtomType.LOGICAL: "logical",
         AtomType.CHARACTER: "character(len=:)",
     }[assignment.type_info.atom_type]
+    if assignment.type_info.boxed:
+        width = assignment.type_info.character_length
+        if not isinstance(width, int):
+            raise UnsupportedJError("boxed character width must be known")
+        return f"character(len={width}), allocatable", f"{assignment.name}(:)"
     if assignment.type_info.atom_type is AtomType.CHARACTER:
         return f"{intrinsic}, allocatable", assignment.name
     if assignment.type_info.rank > 0:

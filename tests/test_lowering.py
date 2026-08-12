@@ -74,7 +74,7 @@ def test_j_division_converts_integer_numerator_to_real() -> None:
 def test_character_literal_and_match_lowering() -> None:
     literal = parse_expression("'hello'")
     matched = parse_expression("result -: expected")
-    character = TypeInfo(AtomType.CHARACTER, Shape.vector(5))
+    character = TypeInfo(AtomType.CHARACTER, Shape.vector(5), 5)
     names = {"result": character, "expected": character}
 
     assert infer_type(literal, {}) == character
@@ -94,7 +94,7 @@ def test_character_literal_and_match_lowering() -> None:
         ),
         (
             "|. 'abcdef'",
-            TypeInfo(AtomType.CHARACTER, Shape.vector(6)),
+            TypeInfo(AtomType.CHARACTER, Shape.vector(6), 6),
             "j_reverse_character('abcdef')",
         ),
     ],
@@ -136,6 +136,29 @@ def test_single_homogeneous_box_and_open_are_transparent() -> None:
     assert render_fortran_expression(boxed, names={}) == "[10, 20, 30]"
     assert infer_type(opened, {"b": vector}) == vector
     assert render_fortran_expression(opened, names={"b": vector}) == "b"
+
+
+def test_boxed_character_list_index_and_raze() -> None:
+    boxed = parse_expression("'one' ; 'two' ; 'three'")
+    boxed_type = TypeInfo(AtomType.CHARACTER, Shape.vector(3), 5, True)
+    selected = parse_expression("> 1 { words")
+    razed = parse_expression("; words")
+    names = {"words": boxed_type}
+
+    assert infer_type(boxed, {}) == boxed_type
+    assert (
+        render_fortran_expression(boxed, names={})
+        == "[character(len=5) :: 'one', 'two', 'three']"
+    )
+    assert infer_type(selected, names) == TypeInfo(
+        AtomType.CHARACTER, Shape.vector()
+    )
+    assert render_fortran_expression(selected, names=names) == "words(2)"
+    assert infer_type(razed, names) == TypeInfo(
+        AtomType.CHARACTER, Shape.vector()
+    )
+    assert render_fortran_expression(razed, names=names) == "j_raze_character(words)"
+    assert required_runtime_helpers(razed, names) == {"raze_character"}
 
 
 @pytest.mark.parametrize(

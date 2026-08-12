@@ -139,6 +139,7 @@ The parser currently recognizes:
 - character tally, catenate, and reverse;
 - zero-based character indexing;
 - transparent single homogeneous box/open pairs;
+- homogeneous boxed character lists, scalar indexing, and raze;
 - mixed Boolean expressions and integer literal `0`/`1` branches, inferred as
   logical results and emitted with `.false.`/`.true.` literals;
 - rank-0 application of a translated scalar verb to an integer vector;

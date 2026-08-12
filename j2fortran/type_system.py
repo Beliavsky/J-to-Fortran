@@ -62,6 +62,8 @@ class Shape:
 class TypeInfo:
     atom_type: AtomType
     shape: Shape = Shape()
+    character_length: Extent = None
+    boxed: bool = False
 
     @property
     def rank(self) -> int:
@@ -72,7 +74,7 @@ class TypeInfo:
         return self.shape.is_scalar
 
     def with_atom_type(self, atom_type: AtomType) -> TypeInfo:
-        return TypeInfo(atom_type, self.shape)
+        return TypeInfo(atom_type, self.shape, self.character_length, self.boxed)
 
 
 INTEGER_SCALAR = TypeInfo(AtomType.INTEGER, Shape.scalar())

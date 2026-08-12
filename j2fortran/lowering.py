@@ -452,7 +452,8 @@ def infer_type(
         except KeyError as exc:
             raise LoweringError(f"type of name {expression.identifier!r} is unknown") from exc
     if isinstance(expression, StringLiteral):
-        return TypeInfo(AtomType.CHARACTER, Shape.vector(len(expression.value)))
+        length = len(expression.value)
+        return TypeInfo(AtomType.CHARACTER, Shape.vector(length), length)
     if isinstance(expression, MonadicApply):
         operand_type = infer_type(
             expression.operand, names, name_transform, named_verbs=named_verbs
@@ -673,6 +674,10 @@ def infer_type(
             return operand_type
         if spelling in {"<", ">"}:
             return operand_type
+        if spelling == ";":
+            if not operand_type.boxed or operand_type.atom_type is not AtomType.CHARACTER:
+                raise LoweringError("raze currently requires a boxed character list")
+            return TypeInfo(AtomType.CHARACTER, Shape.vector(), None, False)
         raise LoweringError(f"cannot infer the result type of monadic {spelling!r}")
     if isinstance(expression, DyadicApply):
         amendment = match_amendment(expression)
@@ -835,6 +840,17 @@ def infer_type(
                 named_verbs=named_verbs,
             )
             result_shape = _validate_index_selection(selection, source_type)
+            if source_type.boxed:
+                if len(selection.axes) != 1:
+                    raise LoweringError("boxed-list selection currently requires one axis")
+                if selection.axes[0].is_scalar:
+                    return TypeInfo(AtomType.CHARACTER, Shape.vector())
+                return TypeInfo(
+                    AtomType.CHARACTER,
+                    result_shape,
+                    source_type.character_length,
+                    True,
+                )
             return TypeInfo(source_type.atom_type, result_shape)
         if spelling == "$":
             extents = constant_shape_extents(expression.left)
@@ -853,6 +869,24 @@ def infer_type(
                     "reshape from a source above rank 1 is not supported yet"
                 )
             return TypeInfo(source_type.atom_type, Shape(extents))
+        if spelling == ";":
+            items = _flatten_semicolon_list(expression)
+            item_types = [
+                infer_type(item, names, name_transform, named_verbs=named_verbs)
+                for item in items
+            ]
+            if any(
+                item_type.atom_type is not AtomType.CHARACTER or item_type.boxed
+                for item_type in item_types
+            ):
+                raise LoweringError(
+                    "boxed character lists currently require unboxed character items"
+                )
+            lengths = [item_type.character_length for item_type in item_types]
+            width = max(length for length in lengths if isinstance(length, int))
+            return TypeInfo(
+                AtomType.CHARACTER, Shape.vector(len(items)), width, True
+            )
         left_type = infer_type(
             expression.left, names, name_transform, named_verbs=named_verbs
         )
@@ -1479,6 +1513,21 @@ def render_fortran_expression(
             named_verbs=named_verbs,
         )
         spelling = primitive_spelling(bare_expression.verb)
+        if spelling in {"<", ">"}:
+            return render_fortran_expression(
+                bare_expression.operand,
+                name_transform,
+                names=names,
+                named_verbs=named_verbs,
+            )
+        if spelling == ";" and operand_type.boxed:
+            operand = render_fortran_expression(
+                bare_expression.operand,
+                name_transform,
+                names=names,
+                named_verbs=named_verbs,
+            )
+            return f"j_raze_character({operand})"
         if operand_type.atom_type is AtomType.CHARACTER and spelling in {"#", "|."}:
             operand = render_fortran_expression(
                 bare_expression.operand,
@@ -1500,6 +1549,26 @@ def render_fortran_expression(
                 catenated[1], name_transform, names=names, named_verbs=named_verbs
             )
             return f"{left} // {right}"
+    boxed_list = dyad(bare_expression, ";")
+    if boxed_list is not None and names is not None:
+        items = _flatten_semicolon_list(bare_expression)
+        item_types = [
+            infer_type(item, names, name_transform, named_verbs=named_verbs)
+            for item in items
+        ]
+        if all(item_type.atom_type is AtomType.CHARACTER for item_type in item_types):
+            width = max(
+                item_type.character_length
+                for item_type in item_types
+                if isinstance(item_type.character_length, int)
+            )
+            rendered = [
+                render_fortran_expression(
+                    item, name_transform, names=names, named_verbs=named_verbs
+                )
+                for item in items
+            ]
+            return f"[character(len={width}) :: {', '.join(rendered)}]"
     matrix_division = dyad(bare_expression, "%.")
     if matrix_division is not None and names is not None:
         result_type = infer_type(
@@ -1623,6 +1692,8 @@ def render_fortran_expression(
             named_verbs=named_verbs,
         )
         if source_type.atom_type is AtomType.CHARACTER:
+            if source_type.boxed:
+                return _render_index_selection(selection, source_type, source)
             _validate_index_selection(selection, source_type)
             if len(selection.axes) != 1:
                 raise LoweringError("character indexing currently requires one axis")
@@ -1818,6 +1889,15 @@ def required_runtime_helpers(
             helpers.add("grade_up_int")
         if spelling == "~.":
             helpers.add("nub_int")
+        if spelling == ";" and names is not None:
+            operand_type = infer_type(
+                expression.operand,
+                names,
+                name_transform,
+                named_verbs=named_verbs,
+            )
+            if operand_type.boxed:
+                helpers.add("raze_character")
         helpers.update(
             required_runtime_helpers(
                 expression.operand,

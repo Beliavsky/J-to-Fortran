@@ -10,6 +10,7 @@ module j2f_runtime
   public :: j_power_table_int, j_prefix_product_int, j_prefix_sum_int
   public :: j_reverse_int_vector, j_signum_int, j_sort_int_vector
   public :: j_reverse_character
+  public :: j_raze_character
   public :: j_select_character
   public :: j_solve_2x2_matrix_int, j_solve_2x2_vector_int
 
@@ -203,6 +204,22 @@ pure function j_reverse_character(values) result(reversed)
       values(len(values) - character_index + 1:len(values) - character_index + 1)
   end do
 end function j_reverse_character
+
+pure function j_raze_character(values) result(razed)
+  character(len=*), intent(in) :: values(:)
+  character(len=:), allocatable :: razed
+  integer :: item_index, target_start, value_length
+
+  value_length = sum(len_trim(values))
+  allocate(character(len=value_length) :: razed)
+  target_start = 1
+  do item_index = 1, size(values)
+    value_length = len_trim(values(item_index))
+    razed(target_start:target_start + value_length - 1) = &
+      values(item_index)(:value_length)
+    target_start = target_start + value_length
+  end do
+end function j_raze_character
 
 pure function j_select_character(values, indices) result(selected)
   character(len=*), intent(in) :: values
