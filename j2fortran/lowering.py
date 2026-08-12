@@ -671,6 +671,8 @@ def infer_type(
             if operand_type.atom_type is not AtomType.LOGICAL:
                 raise LoweringError("logical negation requires a logical operand")
             return operand_type
+        if spelling in {"<", ">"}:
+            return operand_type
         raise LoweringError(f"cannot infer the result type of monadic {spelling!r}")
     if isinstance(expression, DyadicApply):
         amendment = match_amendment(expression)
@@ -1281,6 +1283,8 @@ def _render_fortran_expression(
             return f"j_grade_up_int({operand})", _ATOM_PRECEDENCE, "call"
         if spelling == "~.":
             return f"j_nub_int({operand})", _ATOM_PRECEDENCE, "call"
+        if spelling in {"<", ">"}:
+            return operand, operand_precedence, None
         raise LoweringError(f"monadic verb {spelling!r} needs a dedicated lowering rule")
     if isinstance(expression, DyadicApply):
         if isinstance(expression.verb, NamedVerb):

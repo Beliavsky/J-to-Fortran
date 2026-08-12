@@ -90,6 +90,21 @@ def test_character_literals_emit_deferred_length_strings() -> None:
     assert "ok = result_j == expected" in generated
 
 
+def test_single_box_and_open_reuse_the_underlying_array() -> None:
+    source = """b =: < 10 20 30
+result =: > b
+expected =: 10 20 30
+ok =: result -: expected
+"""
+    generated = xj2f.emit_fortran(
+        xj2f.parse_j_source(Path("box_open.ijs"), source)
+    )
+
+    assert "integer, allocatable :: b(:), result_j(:), expected(:)" in generated
+    assert "b = [10, 20, 30]" in generated
+    assert "result_j = b" in generated
+
+
 def test_float_match_emits_j_tolerance_helper() -> None:
     program = xj2f.parse_j_source(Path("float_match.ijs"), FLOAT_MATCH_TEST_PROGRAM)
     generated = xj2f.emit_fortran(program)

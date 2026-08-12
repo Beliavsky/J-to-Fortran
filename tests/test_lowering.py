@@ -127,6 +127,17 @@ def test_character_indexing_uses_one_based_runtime_indices() -> None:
     assert required_runtime_helpers(expression, {}) == {"select_character"}
 
 
+def test_single_homogeneous_box_and_open_are_transparent() -> None:
+    boxed = parse_expression("< 10 20 30")
+    opened = parse_expression("> b")
+    vector = TypeInfo(AtomType.INTEGER, Shape.vector(3))
+
+    assert infer_type(boxed, {}) == vector
+    assert render_fortran_expression(boxed, names={}) == "[10, 20, 30]"
+    assert infer_type(opened, {"b": vector}) == vector
+    assert render_fortran_expression(opened, names={"b": vector}) == "b"
+
+
 @pytest.mark.parametrize(
     ("left", "right", "expected_type", "expected_fortran"),
     [
