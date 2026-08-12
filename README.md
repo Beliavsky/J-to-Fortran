@@ -76,6 +76,22 @@ python xj2f.py pythag.ijs --run-j --jconsole C:\Programs\J9.7\bin\jconsole.exe
 
 Use `python xj2f.py --help` for the complete option list.
 
+## Batch translation
+
+`xj2f_batch.py` runs the driver over explicit `.ijs` files, directories, glob
+patterns, and nested `@list` files. Its default mode is the read-only `--check`:
+
+```powershell
+python xj2f_batch.py test_suite indexing_tests --jobs 4
+python xj2f_batch.py "examples\*.ijs" --recursive --compile
+python xj2f_batch.py @programs.txt --run-diff --jconsole C:\J\bin\jconsole.exe
+```
+
+Use `--limit` for a small sample and `--max-fail` with sequential execution to
+stop early. The summary distinguishes translation, compilation, execution, J,
+comparison, and timeout failures. An editable or regular installation also
+provides the `xj2f-batch` command.
+
 ## Runtime helpers
 
 The default `--runtime embedded` mode places only the required helper procedures

@@ -22,9 +22,10 @@ dev = ["pytest>=8", "ruff>=0.9"]
 
 [project.scripts]
 xj2f = "xj2f:main"
+xj2f-batch = "xj2f_batch:main"
 
 [tool.setuptools]
-py-modules = ["xj2f"]
+py-modules = ["xj2f", "xj2f_batch"]
 
 [tool.setuptools.data-files]
 "share/j-to-fortran" = ["j.f90"]
