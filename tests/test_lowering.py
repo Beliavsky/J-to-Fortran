@@ -285,6 +285,45 @@ def test_laminate_rejects_unequal_known_lengths() -> None:
         infer_type(expression, names)
 
 
+@pytest.mark.parametrize(
+    ("source", "expected_type", "expected_fortran"),
+    [
+        ("3 {. a", TypeInfo(AtomType.INTEGER, Shape.vector(3)), "a(:3)"),
+        ("_2 {. a", TypeInfo(AtomType.INTEGER, Shape.vector(2)), "a(size(a) - 1:)"),
+        ("2 }. a", TypeInfo(AtomType.INTEGER, Shape.vector(3)), "a(3:)"),
+        ("_2 }. a", TypeInfo(AtomType.INTEGER, Shape.vector(3)), "a(:size(a) - 2)"),
+        ("{. a", TypeInfo(AtomType.INTEGER), "a(1)"),
+        ("{: a", TypeInfo(AtomType.INTEGER), "a(size(a))"),
+        ("}. a", TypeInfo(AtomType.INTEGER, Shape.vector(4)), "a(2:)"),
+        ("}: a", TypeInfo(AtomType.INTEGER, Shape.vector(4)), "a(:size(a) - 1)"),
+    ],
+)
+def test_initial_vector_slicing_primitives(
+    source: str, expected_type: TypeInfo, expected_fortran: str
+) -> None:
+    expression = parse_expression(source)
+    names = {"a": TypeInfo(AtomType.INTEGER, Shape.vector(5))}
+
+    assert infer_type(expression, names) == expected_type
+    assert render_fortran_expression(expression, names=names) == expected_fortran
+
+
+def test_take_rejects_j_fill_case_until_it_has_a_runtime_helper() -> None:
+    expression = parse_expression("6 {. a")
+    names = {"a": TypeInfo(AtomType.INTEGER, Shape.vector(5))}
+
+    with pytest.raises(LoweringError, match="J fill"):
+        infer_type(expression, names)
+
+
+def test_head_rejects_an_empty_vector() -> None:
+    expression = parse_expression("{. a")
+    names = {"a": TypeInfo(AtomType.INTEGER, Shape.vector(0))}
+
+    with pytest.raises(LoweringError, match="empty vector"):
+        infer_type(expression, names)
+
+
 def test_constant_reshape_preserves_j_axis_order_and_cyclic_fill() -> None:
     matrix = parse_expression("2 3 $ i. 6")
     cyclic = parse_expression("2 3 $ 1 2")

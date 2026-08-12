@@ -436,6 +436,21 @@ def infer_type(
             return TypeInfo(
                 operand_type.atom_type, Shape.vector(_shape_size(operand_type.shape))
             )
+        if spelling in {"{.", "{:"}:
+            if operand_type.rank != 1:
+                raise LoweringError("head and tail currently require a vector")
+            extent = operand_type.shape.extents[0]
+            if extent == 0:
+                raise LoweringError("head and tail of an empty vector are not supported")
+            return TypeInfo(operand_type.atom_type)
+        if spelling in {"}.", "}:"}:
+            if operand_type.rank != 1:
+                raise LoweringError("behead and curtail currently require a vector")
+            extent = operand_type.shape.extents[0]
+            if extent == 0:
+                raise LoweringError("behead and curtail require a nonempty vector")
+            result_extent = extent - 1 if isinstance(extent, int) else None
+            return TypeInfo(operand_type.atom_type, Shape.vector(result_extent))
         if spelling in {"+", "-", "*:"}:
             return operand_type
         if spelling == "|":
@@ -549,6 +564,30 @@ def infer_type(
                 raise LoweringError(f"laminate {exc}") from exc
             return TypeInfo(
                 left_type.atom_type, Shape.matrix(2, vector_shape.extents[0])
+            )
+        if spelling in {"{.", "}."}:
+            count = integer_value(expression.left)
+            if left_type != TypeInfo(AtomType.INTEGER) or count is None:
+                raise LoweringError(
+                    "take and drop currently require a constant integer scalar count"
+                )
+            if right_type.rank != 1:
+                raise LoweringError("take and drop currently require a vector")
+            source_extent = right_type.shape.extents[0]
+            if not isinstance(source_extent, int):
+                raise LoweringError(
+                    "take and drop currently require a statically known vector length"
+                )
+            if abs(count) > source_extent:
+                operation = "take" if spelling == "{." else "drop"
+                raise LoweringError(
+                    f"out-of-bounds {operation} requiring J fill is not supported"
+                )
+            result_extent = (
+                abs(count) if spelling == "{." else source_extent - abs(count)
+            )
+            return TypeInfo(
+                right_type.atom_type, Shape.vector(result_extent)
             )
         if spelling == "-:":
             numeric_types = {AtomType.INTEGER, AtomType.REAL}
@@ -787,6 +826,18 @@ def _render_fortran_expression(
                 _ATOM_PRECEDENCE,
                 "call",
             )
+        if spelling == "{.":
+            return f"{operand}(1)", _ATOM_PRECEDENCE, "subscript"
+        if spelling == "{:":
+            return f"{operand}(size({operand}))", _ATOM_PRECEDENCE, "subscript"
+        if spelling == "}.":
+            return f"{operand}(2:)", _ATOM_PRECEDENCE, "section"
+        if spelling == "}:":
+            return (
+                f"{operand}(:size({operand}) - 1)",
+                _ATOM_PRECEDENCE,
+                "section",
+            )
         raise LoweringError(f"monadic verb {spelling!r} needs a dedicated lowering rule")
     if isinstance(expression, DyadicApply):
         spelling = primitive_spelling(expression.verb)
@@ -802,6 +853,32 @@ def _render_fortran_expression(
                 _ATOM_PRECEDENCE,
                 "call",
             )
+        if spelling in {"{.", "}."}:
+            count = integer_value(expression.left)
+            if count is None:
+                raise LoweringError(
+                    "take and drop currently require a constant integer scalar count"
+                )
+            values, _, _ = _render_fortran_expression(
+                expression.right, name_transform
+            )
+            magnitude = abs(count)
+            if spelling == "{.":
+                if count >= 0:
+                    section = f":{magnitude}"
+                else:
+                    offset = magnitude - 1
+                    start = (
+                        f"size({values})"
+                        if offset == 0
+                        else f"size({values}) - {offset}"
+                    )
+                    section = f"{start}:"
+            elif count >= 0:
+                section = f"{magnitude + 1}:"
+            else:
+                section = f":size({values}) - {magnitude}"
+            return f"{values}({section})", _ATOM_PRECEDENCE, "section"
         if spelling == "^":
             left, left_precedence, _ = _render_fortran_expression(
                 expression.left, name_transform
