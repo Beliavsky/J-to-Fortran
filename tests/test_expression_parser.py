@@ -76,6 +76,15 @@ def test_parse_parenthesized_sum_product_verb() -> None:
     assert primitive(expression.verb.product) == "*"
 
 
+def test_parse_monadic_determinant_inner_product() -> None:
+    expression = parse_expression("-/ . * a")
+
+    assert isinstance(expression, MonadicApply)
+    assert isinstance(expression.verb, InnerProductVerb)
+    assert primitive(expression.verb.reduction) == "-"
+    assert primitive(expression.verb.product) == "*"
+
+
 def test_ranked_named_verb_application() -> None:
     expression = parse_expression('(isprime"0 nums) # nums')
 

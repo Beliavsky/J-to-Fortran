@@ -132,6 +132,7 @@ The parser currently recognizes:
 - call-site inference of integer-vector dummy ranks for explicit verbs;
 - dyadic reflex, integer-noun bond, monadic `@:` composition, and monadic forks;
 - sum-product inner products lowered to `dot_product` and `matmul`;
+- direct determinants of statically known 2 by 2 matrices;
 - mixed Boolean expressions and integer literal `0`/`1` branches, inferred as
   logical results and emitted with `.false.`/`.true.` literals;
 - rank-0 application of a translated scalar verb to an integer vector;

@@ -163,7 +163,7 @@ class ExpressionParser:
             return Group(expression, _cover(_token_span(opening), _token_span(closing)))
         raise ExpressionParseError(f"expected a noun, got {token.value!r}", token)
 
-    def _verb(self) -> Verb:
+    def _verb(self, *, allow_inner_product: bool = True) -> Verb:
         token = self._peek()
         amend = self._amend_verb_end(self.index)
         if amend is not None:
@@ -180,7 +180,7 @@ class ExpressionParser:
             )
         if token.kind is TokenKind.LPAREN and self._inner_product_end(self.index) is not None:
             opening = self._take()
-            reduction = self._verb()
+            reduction = self._verb(allow_inner_product=False)
             if (
                 self.index >= len(self.tokens)
                 or self._peek().kind is not TokenKind.PRIMITIVE
@@ -188,7 +188,7 @@ class ExpressionParser:
             ):
                 raise ExpressionParseError("inner product requires '.'", opening)
             self._take()
-            product = self._verb()
+            product = self._verb(allow_inner_product=False)
             if self.index >= len(self.tokens) or self._peek().kind is not TokenKind.RPAREN:
                 raise ExpressionParseError("unclosed inner-product verb", opening)
             closing = self._take()
@@ -227,6 +227,15 @@ class ExpressionParser:
                 verb = RankApplication(verb, rank, _cover(verb.span, rank.span))
                 continue
             break
+        if (
+            allow_inner_product
+            and self.index < len(self.tokens)
+            and self._peek().kind is TokenKind.PRIMITIVE
+            and self._peek().value == "."
+        ):
+            self._take()
+            product = self._verb(allow_inner_product=False)
+            return InnerProductVerb(verb, product, _cover(verb.span, product.span))
         return verb
 
     def _starts_verb(self) -> bool:

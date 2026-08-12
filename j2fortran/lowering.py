@@ -97,6 +97,18 @@ def is_sum_product(verb: Verb) -> bool:
     )
 
 
+def is_determinant(verb: Verb) -> bool:
+    if not isinstance(verb, InnerProductVerb):
+        return False
+    reduction = verb.reduction
+    return (
+        isinstance(reduction, AdverbApplication)
+        and reduction.adverb == "/"
+        and primitive_spelling(reduction.operand) == "-"
+        and primitive_spelling(verb.product) == "*"
+    )
+
+
 def ranked_reduction_spelling(verb: Verb) -> str | None:
     if not isinstance(verb, RankApplication) or integer_value(verb.rank) != 1:
         return None
@@ -445,6 +457,14 @@ def infer_type(
         operand_type = infer_type(
             expression.operand, names, name_transform, named_verbs=named_verbs
         )
+        if is_determinant(expression.verb):
+            if operand_type.atom_type not in {AtomType.INTEGER, AtomType.REAL}:
+                raise LoweringError("determinant requires a numeric matrix")
+            if operand_type.shape != Shape.matrix(2, 2):
+                raise LoweringError(
+                    "determinant currently requires a statically known 2 by 2 matrix"
+                )
+            return TypeInfo(operand_type.atom_type)
         if isinstance(expression.verb, NamedVerb):
             if named_verbs is None:
                 raise LoweringError(
@@ -1423,6 +1443,25 @@ def render_fortran_expression(
             "amendment currently requires a top-level assignment context"
         )
     bare_expression = ungroup(expression)
+    if (
+        isinstance(bare_expression, MonadicApply)
+        and is_determinant(bare_expression.verb)
+        and names is not None
+    ):
+        infer_type(
+            bare_expression,
+            names,
+            name_transform,
+            named_verbs=named_verbs,
+        )
+        matrix = name_value(bare_expression.operand)
+        if matrix is None:
+            raise LoweringError("2 by 2 determinant currently requires a named matrix")
+        matrix = name_transform(matrix)
+        return (
+            f"{matrix}(1, 1) * {matrix}(2, 2)"
+            f" - {matrix}(1, 2) * {matrix}(2, 1)"
+        )
     if (
         isinstance(bare_expression, DyadicApply)
         and is_sum_product(bare_expression.verb)

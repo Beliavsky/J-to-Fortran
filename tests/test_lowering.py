@@ -118,6 +118,17 @@ def test_inner_product_rejects_mismatched_contracted_extents() -> None:
         infer_type(expression, names)
 
 
+def test_two_by_two_determinant_lowers_to_direct_expression() -> None:
+    expression = parse_expression("-/ . * a")
+    names = {"a": TypeInfo(AtomType.INTEGER, Shape.matrix(2, 2))}
+
+    assert infer_type(expression, names) == TypeInfo(AtomType.INTEGER)
+    assert (
+        render_fortran_expression(expression, names=names)
+        == "a(1, 1) * a(2, 2) - a(1, 2) * a(2, 1)"
+    )
+
+
 def test_prime_expression_primitives_lower_generically() -> None:
     names = {
         "limit": TypeInfo(AtomType.INTEGER),
