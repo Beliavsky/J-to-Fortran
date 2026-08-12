@@ -48,7 +48,11 @@ def test_parse_noun_bond_verb_phrase() -> None:
 
 @pytest.mark.parametrize(
     ("source", "outer", "inner"),
-    [("+/ @: *:", "+", "*:"), ("*: @: >:", "*:", ">:")],
+    [
+        ("+/ @: *:", "+", "*:"),
+        ("*: @: >:", "*:", ">:"),
+        ("/:~ @ ~.", "/:", "~."),
+    ],
 )
 def test_parse_atop_verb_phrase(source: str, outer: str, inner: str) -> None:
     verb = parse_verb(source)

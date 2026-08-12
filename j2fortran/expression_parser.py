@@ -98,7 +98,7 @@ class ExpressionParser:
         while (
             self.index < len(self.tokens)
             and self._peek().kind is TokenKind.PRIMITIVE
-            and self._peek().value == "@:"
+            and self._peek().value in {"@", "@:"}
         ):
             self._take()
             inner = self._verb()

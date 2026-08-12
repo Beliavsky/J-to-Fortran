@@ -266,6 +266,23 @@ exit 0
     assert 'write (*,"(g0)") mean(x)' in generated
 
 
+def test_at_composition_sorts_unique_integer_values() -> None:
+    source = """sortunique =: /:~ @ ~.
+values =: 3 1 3 2
+smoutput sortunique values
+exit 0
+"""
+
+    generated = xj2f.emit_fortran(
+        xj2f.parse_j_source(Path("sortunique.ijs"), source)
+    )
+
+    assert "pure function sortunique(y) result(j_result)" in generated
+    assert "j_result = j_sort_int_vector(j_nub_int(y), .false.)" in generated
+    assert "pure function j_nub_int(values) result(unique_values)" in generated
+    assert "pure function j_sort_int_vector(values, descending)" in generated
+
+
 def test_tacit_call_infers_rank_from_a_preceding_top_level_noun() -> None:
     source = """mean =: +/ % #
 x =: 2 4 6 8
