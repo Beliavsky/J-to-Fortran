@@ -651,8 +651,14 @@ def infer_type(
                 raise LoweringError(f"monadic {spelling!r} requires a numeric operand")
             return operand_type
         if spelling == "|":
-            if operand_type.atom_type not in {AtomType.INTEGER, AtomType.REAL}:
+            if operand_type.atom_type not in {
+                AtomType.INTEGER,
+                AtomType.REAL,
+                AtomType.COMPLEX,
+            }:
                 raise LoweringError("absolute value requires a numeric operand")
+            if operand_type.atom_type is AtomType.COMPLEX:
+                return TypeInfo(AtomType.REAL, operand_type.shape)
             return operand_type
         if spelling == "*":
             if operand_type.atom_type is not AtomType.INTEGER:

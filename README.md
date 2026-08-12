@@ -141,6 +141,7 @@ The parser currently recognizes:
 - transparent single homogeneous box/open pairs;
 - homogeneous boxed character lists, scalar indexing, and raze;
 - complex literals and arithmetic;
+- complex magnitude lowered to the real-valued `abs` intrinsic;
 - mixed Boolean expressions and integer literal `0`/`1` branches, inferred as
   logical results and emitted with `.false.`/`.true.` literals;
 - rank-0 application of a translated scalar verb to an integer vector;

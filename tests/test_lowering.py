@@ -178,6 +178,16 @@ def test_complex_literals_arithmetic_and_match() -> None:
     assert render_fortran_expression(matched, names=names) == "result == expected"
 
 
+def test_complex_magnitude_lowers_to_real_abs() -> None:
+    expression = parse_expression("| 3j4")
+
+    assert infer_type(expression, {}) == TypeInfo(AtomType.REAL)
+    assert (
+        render_fortran_expression(expression, names={})
+        == "abs(cmplx(3.0_real64, 4.0_real64, kind=real64))"
+    )
+
+
 @pytest.mark.parametrize(
     ("left", "right", "expected_type", "expected_fortran"),
     [
