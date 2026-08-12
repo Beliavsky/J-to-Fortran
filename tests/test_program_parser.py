@@ -108,6 +108,21 @@ def test_while_loop_is_included_in_expression_report() -> None:
     assert report["verbs"][0]["body"][0]["role"] == "while"
 
 
+def test_plain_iota_for_loop_emits_zero_based_values() -> None:
+    source = """sumfirst =: 3 : 0
+  s =. 0
+  for_i. i. y do.
+    s =. s + i
+  end.
+  s
+)
+"""
+    program = xj2f.parse_j_source(Path("sumfirst.ijs"), source)
+    generated = xj2f.emit_fortran(program)
+
+    assert "do i = 0, y - 1" in generated
+
+
 def test_dyadic_explicit_verb_has_x_and_y_arguments() -> None:
     source = "lincomb =: 4 : 0\n  x + 2 * y\n)\n"
     program = xj2f.parse_j_source(Path("lincomb.ijs"), source)

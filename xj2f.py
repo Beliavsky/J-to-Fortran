@@ -22,7 +22,7 @@ import time
 from pathlib import Path
 from typing import Sequence
 
-from j2fortran.ast import Name, ast_to_dict
+from j2fortran.ast import MonadicApply, Name, PrimitiveVerb, ast_to_dict
 from j2fortran.expression_parser import ExpressionParseError, parse_expression
 from j2fortran.fortran_style import (
     combine_adjacent_row_extension_assignments,
@@ -643,19 +643,32 @@ class FunctionEmitter:
     def _emit_loop(self, loop: ForLoop) -> None:
         expression = self._parse_expression(loop.expression, loop.line)
         sequence_bound = match_iota_sequence(expression)
-        if sequence_bound is None:
+        zero_based_bound = None
+        bare_expression = ungroup(expression)
+        if (
+            isinstance(bare_expression, MonadicApply)
+            and isinstance(bare_expression.verb, PrimitiveVerb)
+            and bare_expression.verb.spelling == "i."
+        ):
+            zero_based_bound = bare_expression.operand
+        if sequence_bound is None and zero_based_bound is None:
             raise _error_at(
                 UnsupportedJError,
                 loop.line,
-                "only loops over '1 + i. expression' are currently supported",
+                "only loops over 'i. expression' or '1 + i. expression' are supported",
             )
         variable = _fortran_name(loop.variable)
         self._declare(variable, "integer")
         try:
-            upper = render_fortran_expression(sequence_bound, _fortran_name)
+            bound = sequence_bound if sequence_bound is not None else zero_based_bound
+            assert bound is not None
+            upper = render_fortran_expression(bound, _fortran_name)
         except LoweringError as exc:
             raise _error_at(UnsupportedJError, loop.line, str(exc)) from exc
-        self._write(f"do {variable} = 1, {upper}")
+        if zero_based_bound is not None:
+            self._write(f"do {variable} = 0, {upper} - 1")
+        else:
+            self._write(f"do {variable} = 1, {upper}")
         self.indent += 1
         for statement in loop.body:
             self._emit_statement(statement)

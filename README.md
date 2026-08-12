@@ -127,6 +127,7 @@ The parser currently recognizes:
 - scalar ambivalent explicit verbs emitted through Fortran generic interfaces;
 - conditionless `elseif. do.` default branches in explicit control flow;
 - scalar `while.` loops with loop-carried local assignments;
+- explicit `for_name.` iteration over zero-based `i. y` sequences;
 - mixed Boolean expressions and integer literal `0`/`1` branches, inferred as
   logical results and emitted with `.false.`/`.true.` literals;
 - rank-0 application of a translated scalar verb to an integer vector;
