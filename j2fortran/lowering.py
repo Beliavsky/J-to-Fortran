@@ -553,7 +553,7 @@ def infer_type(
             return TypeInfo(result_type.atom_type, operand_type.shape)
         if isinstance(expression.verb, AdverbApplication):
             scan = insert_scan_spelling(expression.verb)
-            if scan in {"+", "*"}:
+            if scan in {"+", "*", ">."}:
                 if (
                     operand_type.atom_type is not AtomType.INTEGER
                     or operand_type.rank != 1
@@ -1366,11 +1366,15 @@ def _render_fortran_expression(
             )
         if isinstance(expression.verb, AdverbApplication):
             scan = insert_scan_spelling(expression.verb)
-            if scan in {"+", "*"}:
+            if scan in {"+", "*", ">."}:
                 operand, _, _ = _render_fortran_expression(
                     expression.operand, name_transform
                 )
-                helper = "j_prefix_sum_int" if scan == "+" else "j_prefix_product_int"
+                helper = {
+                    "+": "j_prefix_sum_int",
+                    "*": "j_prefix_product_int",
+                    ">.": "j_prefix_max_int",
+                }[scan]
                 return f"{helper}({operand})", _ATOM_PRECEDENCE, "call"
             reduction = primitive_spelling(expression.verb.operand)
             if expression.verb.adverb == "~" and reduction in {"/:", "\\:"}:
@@ -2177,6 +2181,8 @@ def required_runtime_helpers(
             helpers.add("prefix_sum_int")
         if scan == "*":
             helpers.add("prefix_product_int")
+        if scan == ">.":
+            helpers.add("prefix_max_int")
         if isinstance(expression.verb, AdverbApplication):
             operand_spelling = primitive_spelling(expression.verb.operand)
             if expression.verb.adverb == "~" and operand_spelling in {"/:", "\\:"}:

@@ -408,6 +408,25 @@ def test_external_runtime_uses_only_required_helpers() -> None:
     assert "pure function j_compress_hcat" not in generated
 
 
+def test_running_maximum_is_available_in_both_runtime_modes() -> None:
+    source = """result =: >./\\ 3 1 4 1 5
+expected =: 3 3 4 4 5
+ok =: result -: expected
+"""
+    program = xj2f.parse_j_source(Path("running_max.ijs"), source)
+
+    embedded = xj2f.emit_fortran(program)
+    external = xj2f.emit_fortran(program, runtime="external")
+    runtime_source = (ROOT / "j.f90").read_text(encoding="utf-8")
+
+    assert "j_prefix_max_int([3, 1, 4, 1, 5])" in embedded
+    assert "pure function j_prefix_max_int(values)" in embedded
+    assert "use j2f_runtime, only: j_prefix_max_int" in external
+    assert "pure function j_prefix_max_int(values)" not in external
+    assert "public :: j_power_table_int, j_prefix_max_int" in runtime_source
+    assert "pure function j_prefix_max_int(values)" in runtime_source
+
+
 def test_embedded_runtime_remains_the_default() -> None:
     generated = xj2f.transpile_path(ROOT / "pythag_array.ijs")
 

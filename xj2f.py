@@ -103,6 +103,7 @@ RUNTIME_PROCEDURES = {
     "multiplication_table_int": "j_multiplication_table_int",
     "nub_int": "j_nub_int",
     "prefix_product_int": "j_prefix_product_int",
+    "prefix_max_int": "j_prefix_max_int",
     "prefix_sum_int": "j_prefix_sum_int",
     "power_table_int": "j_power_table_int",
     "polynomial_int": "j_polynomial_int",
@@ -1275,6 +1276,23 @@ def _runtime_helpers(helpers: set[str]) -> list[str]:
                 "    prefixes(value_index) = prefixes(value_index - 1) * values(value_index)",
                 "  end do",
                 "end function j_prefix_product_int",
+                "",
+            ]
+        )
+    if "prefix_max_int" in helpers:
+        result.extend(
+            [
+                "pure function j_prefix_max_int(values) result(prefixes)",
+                "  integer, intent(in) :: values(:)",
+                "  integer, allocatable :: prefixes(:)",
+                "  integer :: value_index",
+                "",
+                "  allocate(prefixes(size(values)))",
+                "  if (size(values) > 0) prefixes(1) = values(1)",
+                "  do value_index = 2, size(values)",
+                "    prefixes(value_index) = max(prefixes(value_index - 1), values(value_index))",
+                "  end do",
+                "end function j_prefix_max_int",
                 "",
             ]
         )
