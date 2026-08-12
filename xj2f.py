@@ -783,14 +783,35 @@ class FunctionEmitter:
             and bare_expression.verb.spelling == "i."
         ):
             zero_based_bound = bare_expression.operand
-        if sequence_bound is None and zero_based_bound is None:
+        vector_name = None
+        if isinstance(bare_expression, Name):
+            candidate = _fortran_name(bare_expression.identifier)
+            candidate_type = self.types.get(candidate)
+            if (
+                candidate_type is not None
+                and candidate_type.atom_type is AtomType.INTEGER
+                and candidate_type.rank == 1
+            ):
+                vector_name = candidate
+        if sequence_bound is None and zero_based_bound is None and vector_name is None:
             raise _error_at(
                 UnsupportedJError,
                 loop.line,
-                "only loops over 'i. expression' or '1 + i. expression' are supported",
+                "for loops currently require an integer vector or iota sequence",
             )
         variable = _fortran_name(loop.variable)
         self._declare(variable, "integer")
+        if vector_name is not None:
+            index = safe_fortran_identifier(f"{variable}_index")
+            self._declare(index, "integer")
+            self._write(f"do {index} = 1, size({vector_name})")
+            self.indent += 1
+            self._write(f"{variable} = {vector_name}({index})")
+            for statement in loop.body:
+                self._emit_statement(statement)
+            self.indent -= 1
+            self._write("end do")
+            return
         try:
             bound = sequence_bound if sequence_bound is not None else zero_based_bound
             assert bound is not None

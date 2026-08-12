@@ -123,6 +123,28 @@ def test_plain_iota_for_loop_emits_zero_based_values() -> None:
     assert "do i = 0, y - 1" in generated
 
 
+def test_for_loop_over_vector_uses_a_regular_indexed_loop() -> None:
+    source = """horner =: 4 : 0
+  c =. x
+  z =. 0
+  for_i. c do.
+    z =. i + y * z
+  end.
+  z
+)
+result =: 2 _3 4 5 horner 3
+expected =: 44
+ok =: result -: expected
+"""
+    program = xj2f.parse_j_source(Path("horner.ijs"), source)
+    generated = xj2f.emit_fortran(program)
+
+    assert "integer :: z, i, i_index" in generated
+    assert "do i_index = 1, size(c)" in generated
+    assert "i = c(i_index)" in generated
+    assert "z = i + y * z" in generated
+
+
 def test_recursive_explicit_verb_is_pure_recursive() -> None:
     source = """fact =: 3 : 0
   if. y < 2 do.

@@ -128,6 +128,7 @@ The parser currently recognizes:
 - conditionless `elseif. do.` default branches in explicit control flow;
 - scalar `while.` loops with loop-carried local assignments;
 - explicit `for_name.` iteration over zero-based `i. y` sequences;
+- explicit `for_name.` iteration over integer vectors using regular indexed loops;
 - pure recursive scalar integer explicit verbs;
 - call-site inference of integer-vector dummy ranks from literals and preceding nouns;
 - dyadic reflex, integer-noun bond, monadic `@:` composition, and monadic forks;
