@@ -452,7 +452,7 @@ def infer_type(
         except KeyError as exc:
             raise LoweringError(f"type of name {expression.identifier!r} is unknown") from exc
     if isinstance(expression, StringLiteral):
-        raise LoweringError("character arrays are not supported by the Fortran lowerer yet")
+        return TypeInfo(AtomType.CHARACTER, Shape.vector(len(expression.value)))
     if isinstance(expression, MonadicApply):
         operand_type = infer_type(
             expression.operand, names, name_transform, named_verbs=named_verbs
@@ -951,9 +951,13 @@ def infer_type(
                 left_type.atom_type,
                 right_type.atom_type,
             } == {AtomType.LOGICAL, AtomType.INTEGER}
-            if not (both_numeric or both_logical or logical_integer):
+            both_character = (
+                left_type.atom_type is AtomType.CHARACTER
+                and right_type.atom_type is AtomType.CHARACTER
+            )
+            if not (both_numeric or both_logical or logical_integer or both_character):
                 raise LoweringError(
-                    "match requires compatible numeric or logical arrays"
+                    "match requires compatible numeric or logical arrays, or two character arrays"
                 )
             return TypeInfo(AtomType.LOGICAL)
         if spelling == "%.":
@@ -1653,6 +1657,8 @@ def render_fortran_expression(
             comparison = f"{left} == merge(1, 0, {right})"
         else:
             comparison = f"{left} == {right}"
+        if left_type.atom_type is AtomType.CHARACTER:
+            return comparison
         return comparison if left_type.is_scalar else f"all({comparison})"
     copied = dyad(expression, "#")
     if copied is not None and names is not None:

@@ -71,6 +71,18 @@ def test_j_division_converts_integer_numerator_to_real() -> None:
     )
 
 
+def test_character_literal_and_match_lowering() -> None:
+    literal = parse_expression("'hello'")
+    matched = parse_expression("result -: expected")
+    character = TypeInfo(AtomType.CHARACTER, Shape.vector(5))
+    names = {"result": character, "expected": character}
+
+    assert infer_type(literal, {}) == character
+    assert render_fortran_expression(literal, names={}) == "'hello'"
+    assert infer_type(matched, names) == TypeInfo(AtomType.LOGICAL)
+    assert render_fortran_expression(matched, names=names) == "result == expected"
+
+
 @pytest.mark.parametrize(
     ("left", "right", "expected_type", "expected_fortran"),
     [

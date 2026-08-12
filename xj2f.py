@@ -1581,6 +1581,7 @@ def _lower_top_assignments(
             AtomType.INTEGER,
             AtomType.REAL,
             AtomType.LOGICAL,
+            AtomType.CHARACTER,
         } or type_info.rank not in {0, 1, 2, 3}:
             raise _error_at(
                 UnsupportedJError,
@@ -1614,7 +1615,10 @@ def _main_entity_declaration(assignment: LoweredTopAssignment) -> tuple[str, str
         AtomType.INTEGER: "integer",
         AtomType.REAL: "real(kind=real64)",
         AtomType.LOGICAL: "logical",
+        AtomType.CHARACTER: "character(len=:)",
     }[assignment.type_info.atom_type]
+    if assignment.type_info.atom_type is AtomType.CHARACTER:
+        return f"{intrinsic}, allocatable", assignment.name
     if assignment.type_info.rank > 0:
         dimensions = ",".join(":" for _ in range(assignment.type_info.rank))
         return f"{intrinsic}, allocatable", f"{assignment.name}({dimensions})"

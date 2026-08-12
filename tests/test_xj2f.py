@@ -80,6 +80,16 @@ def test_top_level_only_test_program_emits_an_executable_assertion() -> None:
     assert "use integer_vector_j_mod" not in main
 
 
+def test_character_literals_emit_deferred_length_strings() -> None:
+    source = "result =: 'hello'\nexpected =: 'hello'\nok =: result -: expected\n"
+    program = xj2f.parse_j_source(Path("string.ijs"), source)
+    generated = xj2f.emit_fortran(program)
+
+    assert "character(len=:), allocatable :: result_j, expected" in generated
+    assert "result_j = 'hello'" in generated
+    assert "ok = result_j == expected" in generated
+
+
 def test_float_match_emits_j_tolerance_helper() -> None:
     program = xj2f.parse_j_source(Path("float_match.ijs"), FLOAT_MATCH_TEST_PROGRAM)
     generated = xj2f.emit_fortran(program)
