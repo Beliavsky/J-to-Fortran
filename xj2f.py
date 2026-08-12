@@ -410,6 +410,55 @@ class FunctionEmitter:
         self.expression_helpers: set[str] = set()
         self.result_type: TypeInfo | None = None
         self.integer_results_boolean_compatible = True
+        callable_name = definition.generic_name or definition.name
+        self.named_verbs = {
+            _fortran_name(callable_name): TypeInfo(AtomType.INTEGER)
+        }
+        self.is_recursive = self._references_verb(
+            definition.body, callable_name
+        )
+
+    @classmethod
+    def _references_verb(
+        cls, statements: tuple[Statement, ...], verb_name: str
+    ) -> bool:
+        pattern = re.compile(rf"\b{re.escape(verb_name)}\b")
+        for statement in statements:
+            if isinstance(statement, Assign):
+                if pattern.search(statement.expression):
+                    return True
+            elif isinstance(statement, ForLoop):
+                if pattern.search(statement.expression) or cls._references_verb(
+                    statement.body, verb_name
+                ):
+                    return True
+            elif isinstance(statement, WhileLoop):
+                if pattern.search(statement.condition) or cls._references_verb(
+                    statement.body, verb_name
+                ):
+                    return True
+            elif isinstance(statement, IfStatement):
+                branch_bodies = [statement.body]
+                branch_bodies.extend(
+                    branch.body for branch in statement.elseif_branches
+                )
+                if statement.else_body is not None:
+                    branch_bodies.append(statement.else_body)
+                if (
+                    pattern.search(statement.condition)
+                    or any(
+                        pattern.search(branch.condition)
+                        for branch in statement.elseif_branches
+                    )
+                    or any(
+                        cls._references_verb(body, verb_name)
+                        for body in branch_bodies
+                    )
+                ):
+                    return True
+            elif pattern.search(statement.expression):
+                return True
+        return False
 
     def emit(self) -> tuple[list[str], set[str], TypeInfo]:
         for argument in self.definition.arguments:
@@ -434,9 +483,13 @@ class FunctionEmitter:
             self.types[_fortran_name(argument)]
             for argument in self.definition.arguments
         ]
-        purity = procedure_prefix(
-            [argument_type.rank for argument_type in argument_types],
-            result_rank=self.result_type.rank,
+        purity = (
+            "pure recursive"
+            if self.is_recursive
+            else procedure_prefix(
+                [argument_type.rank for argument_type in argument_types],
+                result_rank=self.result_type.rank,
+            )
         )
         rendered_arguments = ", ".join(
             _fortran_name(argument) for argument in self.definition.arguments
@@ -613,11 +666,28 @@ class FunctionEmitter:
             return
 
         try:
-            value_type = infer_type(expression, self.types, _fortran_name)
-            rendered = render_fortran_expression(expression, _fortran_name)
+            value_type = infer_type(
+                expression,
+                self.types,
+                _fortran_name,
+                named_verbs=self.named_verbs,
+            )
+            rendered = render_fortran_expression(
+                expression,
+                _fortran_name,
+                names=self.types,
+                named_verbs=self.named_verbs,
+            )
         except LoweringError as exc:
             raise _error_at(UnsupportedJError, assignment.line, str(exc)) from exc
-        self.expression_helpers.update(required_runtime_helpers(expression))
+        self.expression_helpers.update(
+            required_runtime_helpers(
+                expression,
+                self.types,
+                _fortran_name,
+                named_verbs=self.named_verbs,
+            )
+        )
         if value_type.atom_type is AtomType.INTEGER and value_type.rank == 1:
             self._declare(name, "integer, allocatable-vector")
             self.types[name] = value_type
@@ -709,7 +779,12 @@ class FunctionEmitter:
     def _render_condition(self, condition: str, line: SourceLine) -> str:
         expression = self._parse_expression(condition, line)
         try:
-            return render_fortran_expression(expression, _fortran_name)
+            return render_fortran_expression(
+                expression,
+                _fortran_name,
+                names=self.types,
+                named_verbs=self.named_verbs,
+            )
         except LoweringError as exc:
             raise _error_at(UnsupportedJError, line, str(exc)) from exc
 
@@ -749,11 +824,28 @@ class FunctionEmitter:
             self.returned = True
             return
         try:
-            result_type = infer_type(expression, self.types, _fortran_name)
-            rendered = render_fortran_expression(expression, _fortran_name)
+            result_type = infer_type(
+                expression,
+                self.types,
+                _fortran_name,
+                named_verbs=self.named_verbs,
+            )
+            rendered = render_fortran_expression(
+                expression,
+                _fortran_name,
+                names=self.types,
+                named_verbs=self.named_verbs,
+            )
         except LoweringError as exc:
             raise _error_at(UnsupportedJError, statement.line, str(exc)) from exc
-        self.expression_helpers.update(required_runtime_helpers(expression))
+        self.expression_helpers.update(
+            required_runtime_helpers(
+                expression,
+                self.types,
+                _fortran_name,
+                named_verbs=self.named_verbs,
+            )
+        )
         if result_type.rank == 0 and result_type.atom_type in {
             AtomType.INTEGER,
             AtomType.REAL,

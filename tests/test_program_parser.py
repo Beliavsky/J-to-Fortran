@@ -123,6 +123,23 @@ def test_plain_iota_for_loop_emits_zero_based_values() -> None:
     assert "do i = 0, y - 1" in generated
 
 
+def test_recursive_explicit_verb_is_pure_recursive() -> None:
+    source = """fact =: 3 : 0
+  if. y < 2 do.
+    1
+  else.
+    y * fact (y - 1)
+  end.
+)
+"""
+    program = xj2f.parse_j_source(Path("fact.ijs"), source)
+    generated = xj2f.emit_fortran(program)
+
+    assert "pure recursive function fact(y) result(j_result)" in generated
+    assert "j_result = y * fact(y - 1)" in generated
+    assert "elemental function fact" not in generated
+
+
 def test_dyadic_explicit_verb_has_x_and_y_arguments() -> None:
     source = "lincomb =: 4 : 0\n  x + 2 * y\n)\n"
     program = xj2f.parse_j_source(Path("lincomb.ijs"), source)
