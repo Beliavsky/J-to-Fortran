@@ -180,6 +180,44 @@ def test_real_literals_use_the_declared_fortran_kind() -> None:
     )
 
 
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    [
+        ("2 ^ 0 1 2 3", "2**[0, 1, 2, 3]"),
+        ("3 9 1 <. 4 2 8", "min([3, 9, 1], [4, 2, 8])"),
+        ("3 9 1 >. 4 2 8", "max([3, 9, 1], [4, 2, 8])"),
+        ("| _3 0 4", "abs([-3, 0, 4])"),
+        ("* _3 0 4", "j_signum_int([-3, 0, 4])"),
+        ("! 0 1 2 3", "j_factorial([0, 1, 2, 3])"),
+        ("2 ! 5", "j_binomial(2, 5)"),
+    ],
+)
+def test_initial_arithmetic_primitives_lower_to_fortran(
+    source: str, expected: str
+) -> None:
+    expression = parse_expression(source)
+
+    infer_type(expression, {})
+    assert render_fortran_expression(expression, names={}) == expected
+
+
+def test_arithmetic_helpers_are_reported() -> None:
+    assert required_runtime_helpers(parse_expression("! 5"), {}) == {"factorial"}
+    assert required_runtime_helpers(parse_expression("2 ! 5"), {}) == {"binomial"}
+    assert required_runtime_helpers(parse_expression("* _3"), {}) == {"signum_int"}
+
+
+def test_boolean_strands_use_fortran_logical_literals() -> None:
+    expression = parse_expression("1 0 1 0")
+
+    assert infer_type(expression, {}) == TypeInfo(
+        AtomType.LOGICAL, Shape.vector(4)
+    )
+    assert render_fortran_expression(expression, names={}) == (
+        "[.true., .false., .true., .false.]"
+    )
+
+
 def test_constant_reshape_preserves_j_axis_order_and_cyclic_fill() -> None:
     matrix = parse_expression("2 3 $ i. 6")
     cyclic = parse_expression("2 3 $ 1 2")

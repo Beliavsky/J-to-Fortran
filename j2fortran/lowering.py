@@ -93,6 +93,29 @@ def integer_value(expression: Expression) -> int | None:
         return None
 
 
+def _integer_values(expression: Expression) -> tuple[int, ...] | None:
+    expression = ungroup(expression)
+    if isinstance(expression, NumberLiteral):
+        value = integer_value(expression)
+        return (value,) if value is not None else None
+    if not isinstance(expression, Strand):
+        return None
+    values = tuple(integer_value(item) for item in expression.items)
+    if any(value is None for value in values):
+        return None
+    return tuple(value for value in values if value is not None)
+
+
+def _is_boolean_strand(expression: Expression) -> bool:
+    expression = ungroup(expression)
+    values = _integer_values(expression)
+    return (
+        isinstance(expression, Strand)
+        and values is not None
+        and all(value in {0, 1} for value in values)
+    )
+
+
 def constant_shape_extents(expression: Expression) -> tuple[int, ...] | None:
     expression = ungroup(expression)
     if isinstance(expression, NumberLiteral):
@@ -335,11 +358,12 @@ def infer_type(
         atom_type = AtomType.REAL if any(c in expression.text for c in ".eE") else AtomType.INTEGER
         return TypeInfo(atom_type)
     if isinstance(expression, Strand):
-        atom_type = (
-            AtomType.REAL
-            if any(any(c in item.text for c in ".eE") for item in expression.items)
-            else AtomType.INTEGER
-        )
+        if _is_boolean_strand(expression):
+            atom_type = AtomType.LOGICAL
+        elif any(any(c in item.text for c in ".eE") for item in expression.items):
+            atom_type = AtomType.REAL
+        else:
+            atom_type = AtomType.INTEGER
         return TypeInfo(atom_type, Shape.vector(len(expression.items)))
     if isinstance(expression, Name):
         try:
@@ -387,6 +411,18 @@ def infer_type(
         if spelling == "$":
             return TypeInfo(AtomType.INTEGER, Shape.vector(operand_type.rank))
         if spelling in {"+", "-", "*:"}:
+            return operand_type
+        if spelling == "|":
+            if operand_type.atom_type not in {AtomType.INTEGER, AtomType.REAL}:
+                raise LoweringError("absolute value requires a numeric operand")
+            return operand_type
+        if spelling == "*":
+            if operand_type.atom_type is not AtomType.INTEGER:
+                raise LoweringError("signum currently requires an integer operand")
+            return operand_type
+        if spelling == "!":
+            if operand_type.atom_type is not AtomType.INTEGER:
+                raise LoweringError("factorial currently requires integer arguments")
             return operand_type
         if spelling == "i.":
             if operand_type != TypeInfo(AtomType.INTEGER):
@@ -489,6 +525,11 @@ def infer_type(
         if spelling in {"=", "~:", "<", "<:", ">", ">:"}:
             return TypeInfo(AtomType.LOGICAL, shape)
         if spelling in {"*.", "+."}:
+            if (
+                left_type.atom_type is not AtomType.LOGICAL
+                or right_type.atom_type is not AtomType.LOGICAL
+            ):
+                raise LoweringError("Boolean operation requires logical operands")
             return TypeInfo(AtomType.LOGICAL, shape)
         if spelling == "#":
             if left_type.atom_type not in {AtomType.INTEGER, AtomType.LOGICAL} or left_type.rank != 1:
@@ -500,6 +541,37 @@ def infer_type(
                     "integer copy currently requires a rank-1 integer value array"
                 )
             return TypeInfo(AtomType.INTEGER, Shape.vector())
+        if spelling == "^":
+            if (
+                left_type.atom_type is not AtomType.INTEGER
+                or right_type.atom_type is not AtomType.INTEGER
+            ):
+                raise LoweringError("power currently requires integer arguments")
+            exponents = _integer_values(expression.right)
+            if exponents is None or any(exponent < 0 for exponent in exponents):
+                raise LoweringError(
+                    "integer power currently requires constant nonnegative exponents"
+                )
+            return TypeInfo(AtomType.INTEGER, shape)
+        if spelling in {"<.", ">."}:
+            if (
+                left_type.atom_type not in {AtomType.INTEGER, AtomType.REAL}
+                or right_type.atom_type not in {AtomType.INTEGER, AtomType.REAL}
+            ):
+                raise LoweringError("minimum and maximum require numeric arguments")
+            atom_type = (
+                AtomType.REAL
+                if AtomType.REAL in {left_type.atom_type, right_type.atom_type}
+                else AtomType.INTEGER
+            )
+            return TypeInfo(atom_type, shape)
+        if spelling == "!":
+            if (
+                left_type.atom_type is not AtomType.INTEGER
+                or right_type.atom_type is not AtomType.INTEGER
+            ):
+                raise LoweringError("binomial currently requires integer arguments")
+            return TypeInfo(AtomType.INTEGER, shape)
         if spelling in {"+", "-", "*", "%", "|"}:
             atom_type = (
                 AtomType.REAL
@@ -595,7 +667,13 @@ def _render_fortran_expression(
     if isinstance(expression, Name):
         return name_transform(expression.identifier), _ATOM_PRECEDENCE, None
     if isinstance(expression, Strand):
-        values = ", ".join(_fortran_number(item.text) for item in expression.items)
+        if _is_boolean_strand(expression):
+            values = ", ".join(
+                ".true." if integer_value(item) == 1 else ".false."
+                for item in expression.items
+            )
+        else:
+            values = ", ".join(_fortran_number(item.text) for item in expression.items)
         return f"[{values}]", _ATOM_PRECEDENCE, None
     if isinstance(expression, StringLiteral):
         escaped = expression.value.replace("'", "''")
@@ -631,6 +709,12 @@ def _render_fortran_expression(
         if spelling == "*:":
             operand = _parenthesize(operand, operand_precedence, _POWER_PRECEDENCE)
             return f"{operand}**2", _POWER_PRECEDENCE, "**"
+        if spelling == "|":
+            return f"abs({operand})", _ATOM_PRECEDENCE, "call"
+        if spelling == "*":
+            return f"j_signum_int({operand})", _ATOM_PRECEDENCE, "call"
+        if spelling == "!":
+            return f"j_factorial({operand})", _ATOM_PRECEDENCE, "call"
         if spelling == "i.":
             return f"j_iota({operand})", _ATOM_PRECEDENCE, "call"
         if spelling == "%:":
@@ -651,6 +735,25 @@ def _render_fortran_expression(
         raise LoweringError(f"monadic verb {spelling!r} needs a dedicated lowering rule")
     if isinstance(expression, DyadicApply):
         spelling = primitive_spelling(expression.verb)
+        if spelling == "^":
+            left, left_precedence, _ = _render_fortran_expression(
+                expression.left, name_transform
+            )
+            right, right_precedence, _ = _render_fortran_expression(
+                expression.right, name_transform
+            )
+            left = _parenthesize(left, left_precedence, _POWER_PRECEDENCE)
+            right = _parenthesize(right, right_precedence, _POWER_PRECEDENCE)
+            return f"{left}**{right}", _POWER_PRECEDENCE, "**"
+        if spelling in {"<.", ">."}:
+            left, _, _ = _render_fortran_expression(expression.left, name_transform)
+            right, _, _ = _render_fortran_expression(expression.right, name_transform)
+            intrinsic = "min" if spelling == "<." else "max"
+            return f"{intrinsic}({left}, {right})", _ATOM_PRECEDENCE, "call"
+        if spelling == "!":
+            left, _, _ = _render_fortran_expression(expression.left, name_transform)
+            right, _, _ = _render_fortran_expression(expression.right, name_transform)
+            return f"j_binomial({left}, {right})", _ATOM_PRECEDENCE, "call"
         if spelling == "#":
             counts, _, _ = _render_fortran_expression(expression.left, name_transform)
             values, _, _ = _render_fortran_expression(expression.right, name_transform)
@@ -852,8 +955,13 @@ def required_runtime_helpers(
     expression = ungroup(expression)
     helpers: set[str] = set()
     if isinstance(expression, MonadicApply):
-        if primitive_spelling(expression.verb) == "i.":
+        spelling = primitive_spelling(expression.verb)
+        if spelling == "i.":
             helpers.add("iota")
+        if spelling == "!":
+            helpers.add("factorial")
+        if spelling == "*":
+            helpers.add("signum_int")
         helpers.update(
             required_runtime_helpers(
                 expression.operand,
@@ -863,6 +971,8 @@ def required_runtime_helpers(
             )
         )
     elif isinstance(expression, DyadicApply):
+        if primitive_spelling(expression.verb) == "!":
+            helpers.add("binomial")
         if primitive_spelling(expression.verb) == "-:" and names is not None:
             left_type = infer_type(
                 expression.left,

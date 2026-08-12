@@ -61,11 +61,14 @@ VERSION = "0.1.0"
 RUNTIME_MODULE = "j2f_runtime"
 RUNTIME_PROCEDURES = {
     "append": "j_append_int_row",
+    "binomial": "j_binomial",
     "cartesian": "j_cartesian_square",
     "compress_hcat": "j_compress_hcat",
     "copy_int_vector": "j_copy_int_vector",
     "iota": "j_iota",
+    "factorial": "j_factorial",
     "match_real": "j_match_real",
+    "signum_int": "j_signum_int",
 }
 
 
@@ -745,6 +748,63 @@ class FunctionEmitter:
 
 def _runtime_helpers(helpers: set[str]) -> list[str]:
     result: list[str] = []
+    if "factorial" in helpers:
+        result.extend(
+            [
+                "pure elemental function j_factorial(n) result(value)",
+                "  integer, intent(in) :: n",
+                "  integer :: value",
+                "  integer :: factor",
+                "",
+                '  if (n < 0) error stop "factorial requires a nonnegative integer"',
+                "  value = 1",
+                "  do factor = 2, n",
+                "    value = value * factor",
+                "  end do",
+                "end function j_factorial",
+                "",
+            ]
+        )
+    if "binomial" in helpers:
+        result.extend(
+            [
+                "pure elemental function j_binomial(k, n) result(value)",
+                "  integer, intent(in) :: k, n",
+                "  integer :: value",
+                "  integer :: factor, smaller_k",
+                "",
+                '  if (k < 0 .or. n < 0) error stop "binomial requires nonnegative integers"',
+                "  if (k > n) then",
+                "    value = 0",
+                "    return",
+                "  end if",
+                "  smaller_k = min(k, n - k)",
+                "  value = 1",
+                "  do factor = 1, smaller_k",
+                "    value = value * (n - factor + 1) / factor",
+                "  end do",
+                "end function j_binomial",
+                "",
+            ]
+        )
+    if "signum_int" in helpers:
+        result.extend(
+            [
+                "pure elemental function j_signum_int(n) result(value)",
+                "  integer, intent(in) :: n",
+                "  integer :: value",
+                "",
+                "  if (n < 0) then",
+                "    value = -1",
+                "  else if (n > 0) then",
+                "    value = 1",
+                "  else",
+                "    value = 0",
+                "  end if",
+                "end function j_signum_int",
+                "",
+            ]
+        )
     if "match_real" in helpers:
         result.extend(
             [
@@ -1035,7 +1095,8 @@ def emit_fortran(program: Program, *, runtime: str = "embedded") -> str:
         lines.append(f"  use {module_name}, only: {', '.join(main_imports)}")
     if any(
         assignment.type_info.atom_type is AtomType.REAL
-        for assignment in active_assignments
+        or "real64" in assignment.expression
+        for assignment in top_assignments
     ):
         lines.append("  use, intrinsic :: iso_fortran_env, only: real64")
     lines.append("  implicit none")

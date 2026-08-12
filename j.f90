@@ -2,10 +2,52 @@ module j2f_runtime
   use, intrinsic :: iso_fortran_env, only: real64
   implicit none
   private
-  public :: j_append_int_row, j_cartesian_square, j_compress_hcat
-  public :: j_copy_int_vector, j_iota, j_match_real
+  public :: j_append_int_row, j_binomial, j_cartesian_square, j_compress_hcat
+  public :: j_copy_int_vector, j_factorial, j_iota, j_match_real, j_signum_int
 
 contains
+
+pure elemental function j_factorial(n) result(value)
+  integer, intent(in) :: n
+  integer :: value
+  integer :: factor
+
+  if (n < 0) error stop "factorial requires a nonnegative integer"
+  value = 1
+  do factor = 2, n
+    value = value * factor
+  end do
+end function j_factorial
+
+pure elemental function j_binomial(k, n) result(value)
+  integer, intent(in) :: k, n
+  integer :: value
+  integer :: factor, smaller_k
+
+  if (k < 0 .or. n < 0) error stop "binomial requires nonnegative integers"
+  if (k > n) then
+    value = 0
+    return
+  end if
+  smaller_k = min(k, n - k)
+  value = 1
+  do factor = 1, smaller_k
+    value = value * (n - factor + 1) / factor
+  end do
+end function j_binomial
+
+pure elemental function j_signum_int(n) result(value)
+  integer, intent(in) :: n
+  integer :: value
+
+  if (n < 0) then
+    value = -1
+  else if (n > 0) then
+    value = 1
+  else
+    value = 0
+  end if
+end function j_signum_int
 
 pure elemental function j_match_real(left, right) result(matches)
   real(kind=real64), intent(in) :: left, right

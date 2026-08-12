@@ -80,6 +80,18 @@ def test_float_match_emits_j_tolerance_helper() -> None:
     assert "1.001_real64" in main
 
 
+def test_integer_result_with_real_input_imports_real64() -> None:
+    program = xj2f.parse_j_source(
+        Path("floor.ijs"),
+        "result =: <. 1.2 _2.9\nexpected =: 1 _3\nok =: result -: expected\n",
+    )
+    generated = xj2f.emit_fortran(program)
+    main = generated.split("program floor_j", 1)[1]
+
+    assert "use, intrinsic :: iso_fortran_env, only: real64" in main
+    assert "result_j = floor([1.2_real64, -2.9_real64])" in main
+
+
 def test_top_level_reshape_declares_rank_two_and_three_arrays() -> None:
     program = xj2f.parse_j_source(Path("reshape.ijs"), RESHAPE_TEST_PROGRAM)
     generated = xj2f.emit_fortran(program)

@@ -118,6 +118,8 @@ The parser currently recognizes:
   logical results and emitted with `.false.`/`.true.` literals;
 - rank-0 application of a translated scalar verb to an integer vector;
 - top-level scalar and vector assignments, including integer copy `#`;
+- integer power with constant nonnegative exponents, dyadic minimum and maximum,
+  absolute value, integer signum, factorial, and binomial;
 - exact integer and logical Match plus J-tolerant real and mixed numeric Match
   using dyadic `-:`;
 - a final noun as an array-valued verb result;
