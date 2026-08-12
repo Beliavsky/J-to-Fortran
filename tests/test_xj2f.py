@@ -80,6 +80,106 @@ def test_examples_transpile_to_standalone_fortran(filename: str) -> None:
     assert 'write (*,"(3(i0, 1x))") transpose(triples(30))' in generated
 
 
+def test_standalone_j_comments_are_emitted_at_matching_fortran_locations() -> None:
+    source = """NB. Sum the zero-based integers below y.
+sumto =: 3 : 0
+  NB. Initialize the accumulator.
+  total =. 0
+  for_i. i. y do.
+    NB. Add one array item.
+    total =. total + i
+  end.
+  NB. Return the accumulated value.
+  total
+)
+NB. Evaluate the verb.
+result =: sumto 3
+NB. Display its result.
+echo result
+"""
+    generated = xj2f.emit_fortran(
+        xj2f.parse_j_source(Path("comments.ijs"), source)
+    )
+
+    assert (
+        "! Sum the zero-based integers below y.\n"
+        "! J: sumto =: 3 : 0\n"
+        "pure elemental function sumto"
+    ) in generated
+    assert (
+        "  ! Initialize the accumulator.\n"
+        "  ! J: total =. 0\n"
+        "  total = 0"
+    ) in generated
+    assert (
+        "    ! Add one array item.\n"
+        "    ! J: total =. total + i\n"
+        "    total = total + i"
+    ) in generated
+    assert (
+        "  ! Return the accumulated value.\n"
+        "  ! J: total\n"
+        "  j_result = total"
+    ) in generated
+    assert (
+        "  ! Evaluate the verb.\n"
+        "  ! J: result =: sumto 3\n"
+        "  ! Display its result.\n"
+        "  ! J: echo result\n"
+        '  write (*,"(i0)") sumto(3)'
+    ) in generated
+
+
+def test_comments_inside_conditional_branches_do_not_hide_results() -> None:
+    source = """choose =: 3 : 0
+  if. y > 0 do.
+    NB. Positive branch.
+    1
+  else.
+    NB. Nonpositive branch.
+    0
+  end.
+)
+result =: choose 1
+"""
+
+    generated = xj2f.emit_fortran(
+        xj2f.parse_j_source(Path("conditional_comments.ijs"), source)
+    )
+
+    assert (
+        "if (y > 0) then\n"
+        "    ! Positive branch.\n"
+        "    ! J: 1\n"
+        "    j_result = 1"
+    ) in generated
+    assert (
+        "else\n"
+        "    ! Nonpositive branch.\n"
+        "    ! J: 0\n"
+        "    j_result = 0"
+    ) in generated
+
+
+def test_source_comment_modes_control_j_annotations() -> None:
+    source = """NB. Compute a value.
+value =: 1 + 2
+echo value
+"""
+    program = xj2f.parse_j_source(Path("source_comments.ijs"), source)
+
+    commented = xj2f.emit_fortran(program)
+    all_comments = xj2f.emit_fortran(program, source_comments="all")
+    no_comments = xj2f.emit_fortran(program, source_comments="none")
+
+    assert "! Compute a value." in commented
+    assert "! J: value =: 1 + 2" in commented
+    assert "! J: echo value" not in commented
+    assert "! J: echo value" in all_comments
+    assert "! Compute a value." not in no_comments
+    assert "! J:" not in no_comments
+
+
 def test_top_level_only_test_program_emits_an_executable_assertion() -> None:
     program = xj2f.parse_j_source(Path("integer_vector.ijs"), TOP_LEVEL_TEST_PROGRAM)
     generated = xj2f.emit_fortran(program)
@@ -288,7 +388,11 @@ def test_primes_example_lowers_top_level_arrays_and_prints_expression_directly()
     program = xj2f.parse_j_source(
         ROOT / "primes.ijs", (ROOT / "primes.ijs").read_text(encoding="utf-8")
     )
-    top_level = xj2f.expression_ast_report(program)["top_level"]
+    top_level = [
+        item
+        for item in xj2f.expression_ast_report(program)["top_level"]
+        if item["kind"] != "comment"
+    ]
     assert top_level[0]["kind"] == "assignment"
     assert top_level[0]["target"] == "nums"
     assert top_level[1]["ast"]["kind"] == "DyadicApply"
@@ -413,8 +517,21 @@ def test_check_mode_does_not_write_fortran(tmp_path: Path, capsys: pytest.Captur
     source.write_text((ROOT / "pythag.ijs").read_text(encoding="utf-8"), encoding="utf-8")
 
     assert xj2f.main([str(source), "--check"]) == 0
-    assert not (tmp_path / "pythag_j.f90").exists()
+    assert not (tmp_path / "temp.f90").exists()
     assert "supported" in capsys.readouterr().err
+
+
+def test_default_output_is_temp_fortran_beside_input(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    source = tmp_path / "example.ijs"
+    source.write_text("result =: 1 2 + 3 4\n", encoding="utf-8")
+
+    assert xj2f.main([str(source)]) == 0
+
+    output = tmp_path / "temp.f90"
+    assert output.is_file()
+    assert capsys.readouterr().out.strip() == str(output)
 
 
 @pytest.mark.parametrize(

@@ -438,3 +438,29 @@ def test_isprime_body_compiles_and_runs(tmp_path: Path) -> None:
     )
     assert completed.returncode == 0
     assert completed.stdout.split() == ["0", "1", "1", "0"]
+
+
+def test_standalone_comments_are_preserved_in_program_and_verb_bodies() -> None:
+    source = """NB. Describe the verb.
+sumto =: 3 : 0
+  NB. Start at zero.
+  total =. 0
+  NB. Return the total.
+  total
+)
+NB. Run the example.
+echo sumto 3
+"""
+
+    program = xj2f.parse_j_source(Path("comments.ijs"), source)
+
+    assert isinstance(program.items[0], xj2f.CommentStatement)
+    assert program.items[0].text == "Describe the verb."
+    verb = next(item for item in program.items if isinstance(item, xj2f.VerbDefinition))
+    comments = [
+        statement.text
+        for statement in verb.body
+        if isinstance(statement, xj2f.CommentStatement)
+    ]
+    assert comments == ["Start at zero.", "Return the total."]
+    assert isinstance(program.items[-2], xj2f.CommentStatement)

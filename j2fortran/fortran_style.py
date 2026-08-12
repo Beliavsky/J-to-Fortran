@@ -8,6 +8,7 @@ are kept small and dependency-free here so style is enforced during emission.
 from __future__ import annotations
 
 import re
+import textwrap
 from collections.abc import Iterable
 
 
@@ -91,6 +92,24 @@ def combine_declarations(
     for specification, entity in declarations:
         grouped.setdefault(specification, []).append(entity)
     return [f"{specification} :: {', '.join(entities)}" for specification, entities in grouped.items()]
+
+
+def wrap_fortran_comment(
+    text: str, *, indent: str = "", max_length: int = 100
+) -> list[str]:
+    """Render source prose as free-form Fortran comment lines."""
+
+    prefix = f"{indent}!"
+    if not text:
+        return [prefix]
+    width = max(1, max_length - len(prefix) - 1)
+    parts = textwrap.wrap(
+        text,
+        width=width,
+        break_long_words=False,
+        break_on_hyphens=False,
+    )
+    return [f"{prefix} {part}" for part in parts]
 
 
 def combine_adjacent_row_extension_assignments(lines: Iterable[str]) -> list[str]:

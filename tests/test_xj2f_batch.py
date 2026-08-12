@@ -54,7 +54,7 @@ def test_batch_check_defaults_to_read_only(tmp_path: Path) -> None:
     source.write_text("result =: 1 2 + 3 4\n", encoding="utf-8")
 
     assert xj2f_batch.main([str(source), "--terse"]) == 0
-    assert not (tmp_path / "valid_j.f90").exists()
+    assert not (tmp_path / "temp.f90").exists()
 
 
 def test_batch_limit_and_max_fail_stop_sequential_work(
@@ -100,7 +100,25 @@ def test_run_both_is_forwarded_to_xj2f(tmp_path: Path) -> None:
 
     assert "--run-both" in command
     assert "--run-diff" not in command
-    assert command[-2:] == ["--jconsole", "custom-j"]
+    assert command[command.index("--source-comments") + 1] == "commented"
+    assert command[command.index("--jconsole") : command.index("--jconsole") + 2] == [
+        "--jconsole",
+        "custom-j",
+    ]
+    assert command[-2:] == ["--out", str(tmp_path / "valid_j.f90")]
+
+
+def test_batch_build_outputs_are_unique(tmp_path: Path) -> None:
+    parser = xj2f_batch.build_argument_parser()
+    first = tmp_path / "first.ijs"
+    second = tmp_path / "second.ijs"
+    args = parser.parse_args([str(first), str(second), "--compile"])
+
+    first_command = xj2f_batch._case_command(first, args)
+    second_command = xj2f_batch._case_command(second, args)
+
+    assert first_command[-2:] == ["--out", str(tmp_path / "first_j.f90")]
+    assert second_command[-2:] == ["--out", str(tmp_path / "second_j.f90")]
 
 
 def test_batch_separates_script_results_with_a_blank_line(

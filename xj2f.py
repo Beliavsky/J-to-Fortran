@@ -47,6 +47,7 @@ from j2fortran.fortran_style import (
     combine_declarations,
     procedure_prefix,
     safe_fortran_identifier,
+    wrap_fortran_comment,
     wrap_long_fortran_lines,
 )
 from j2fortran.lexer import LexerError
@@ -77,6 +78,7 @@ from j2fortran.type_system import (
 
 
 VERSION = "0.1.0"
+SOURCE_COMMENT_MODES = {"all", "commented", "none"}
 RUNTIME_MODULE = "j2f_runtime"
 RUNTIME_PROCEDURES = {
     "addition_table_int": "j_addition_table_int",
@@ -175,7 +177,20 @@ class ExpressionStatement:
     expression: str
 
 
-Statement = Assign | ForLoop | WhileLoop | IfStatement | ExpressionStatement
+@dataclasses.dataclass(frozen=True)
+class CommentStatement:
+    line: SourceLine
+    text: str
+
+
+Statement = (
+    Assign
+    | ForLoop
+    | WhileLoop
+    | IfStatement
+    | ExpressionStatement
+    | CommentStatement
+)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -206,7 +221,14 @@ class ExitStatement:
     expression: str
 
 
-TopLevel = VerbDefinition | TacitVerbDefinition | Assign | EchoStatement | ExitStatement
+TopLevel = (
+    VerbDefinition
+    | TacitVerbDefinition
+    | Assign
+    | EchoStatement
+    | ExitStatement
+    | CommentStatement
+)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -233,7 +255,7 @@ def _source_lines(text: str) -> list[SourceLine]:
     result: list[SourceLine] = []
     for number, raw in enumerate(text.splitlines(), 1):
         stripped = raw.strip()
-        if not stripped or stripped.startswith("NB."):
+        if not stripped:
             continue
         result.append(SourceLine(number, raw))
     return result
@@ -263,6 +285,10 @@ class Parser:
         while self.index < len(self.lines):
             line = self.lines[self.index]
             text = line.text.strip()
+            if text.startswith("NB."):
+                items.append(CommentStatement(line, text[3:].lstrip()))
+                self.index += 1
+                continue
             verb = self._verb_start.fullmatch(text)
             if verb:
                 self.index += 1
@@ -347,6 +373,10 @@ class Parser:
             text = line.text.strip()
             if self._is_terminator(text, terminators):
                 return statements
+            if text.startswith("NB."):
+                statements.append(CommentStatement(line, text[3:].lstrip()))
+                self.index += 1
+                continue
             loop = self._for.fullmatch(text)
             if loop:
                 self.index += 1
@@ -455,8 +485,11 @@ class FunctionEmitter:
         self,
         definition: VerbDefinition,
         argument_types: tuple[TypeInfo, ...] | None = None,
+        *,
+        source_comments: str = "commented",
     ):
         self.definition = definition
+        self.source_comments = source_comments
         self.argument_types = argument_types or tuple(
             TypeInfo(AtomType.INTEGER) for _ in definition.arguments
         )
@@ -485,6 +518,8 @@ class FunctionEmitter:
     ) -> bool:
         pattern = re.compile(rf"\b{re.escape(verb_name)}\b")
         for statement in statements:
+            if isinstance(statement, CommentStatement):
+                continue
             if isinstance(statement, Assign):
                 if pattern.search(statement.expression):
                     return True
@@ -529,8 +564,7 @@ class FunctionEmitter:
             if argument_type.rank == 1:
                 declaration += "-vector"
             self._declare(argument, declaration)
-        for statement in self.definition.body:
-            self._emit_statement(statement)
+        self._emit_statements(self.definition.body)
         if self.result_type is None:
             raise _error_at(
                 UnsupportedJError,
@@ -610,9 +644,14 @@ class FunctionEmitter:
 
     @classmethod
     def _body_defines_result(cls, body: tuple[Statement, ...]) -> bool:
-        if not body:
+        executable = tuple(
+            statement
+            for statement in body
+            if not isinstance(statement, CommentStatement)
+        )
+        if not executable:
             return False
-        final = body[-1]
+        final = executable[-1]
         if isinstance(final, ExpressionStatement):
             return True
         if isinstance(final, IfStatement):
@@ -662,6 +701,30 @@ class FunctionEmitter:
 
     def _write(self, text: str) -> None:
         self.body.append("  " * self.indent + text)
+
+    def _emit_comment(self, text: str) -> None:
+        if self.source_comments == "none":
+            return
+        self.body.extend(
+            wrap_fortran_comment(text, indent="  " * self.indent)
+        )
+
+    def _emit_statements(self, statements: tuple[Statement, ...]) -> None:
+        pending_comments: list[CommentStatement] = []
+        for statement in statements:
+            if isinstance(statement, CommentStatement):
+                pending_comments.append(statement)
+                continue
+            for comment in pending_comments:
+                self._emit_comment(comment.text)
+            if self.source_comments == "all" or (
+                self.source_comments == "commented" and pending_comments
+            ):
+                self._emit_comment(f"J: {statement.line.text.strip()}")
+            pending_comments = []
+            self._emit_statement(statement)
+        for comment in pending_comments:
+            self._emit_comment(comment.text)
 
     def _emit_statement(self, statement: Statement) -> None:
         if isinstance(statement, Assign):
@@ -814,8 +877,7 @@ class FunctionEmitter:
             self._write(f"do {index} = 1, size({vector_name})")
             self.indent += 1
             self._write(f"{variable} = {vector_name}({index})")
-            for statement in loop.body:
-                self._emit_statement(statement)
+            self._emit_statements(loop.body)
             self.indent -= 1
             self._write("end do")
             return
@@ -830,8 +892,7 @@ class FunctionEmitter:
         else:
             self._write(f"do {variable} = 1, {upper}")
         self.indent += 1
-        for statement in loop.body:
-            self._emit_statement(statement)
+        self._emit_statements(loop.body)
         self.indent -= 1
         self._write("end do")
 
@@ -839,8 +900,7 @@ class FunctionEmitter:
         condition = self._render_condition(loop.condition, loop.line)
         self._write(f"do while ({condition})")
         self.indent += 1
-        for statement in loop.body:
-            self._emit_statement(statement)
+        self._emit_statements(loop.body)
         self.indent -= 1
         self._write("end do")
 
@@ -848,21 +908,18 @@ class FunctionEmitter:
         condition = self._render_condition(conditional.condition, conditional.line)
         self._write(f"if ({condition}) then")
         self.indent += 1
-        for statement in conditional.body:
-            self._emit_statement(statement)
+        self._emit_statements(conditional.body)
         self.indent -= 1
         for branch in conditional.elseif_branches:
             condition = self._render_condition(branch.condition, branch.line)
             self._write(f"else if ({condition}) then")
             self.indent += 1
-            for statement in branch.body:
-                self._emit_statement(statement)
+            self._emit_statements(branch.body)
             self.indent -= 1
         if conditional.else_body is not None:
             self._write("else")
             self.indent += 1
-            for statement in conditional.else_body:
-                self._emit_statement(statement)
+            self._emit_statements(conditional.else_body)
             self.indent -= 1
         self._write("end if")
 
@@ -1995,10 +2052,62 @@ def _source_text(source: str, expression) -> str:
     return source[expression.span.start : expression.span.end]
 
 
-def emit_fortran(program: Program, *, runtime: str = "embedded") -> str:
+def _top_level_comment_groups(
+    program: Program,
+) -> tuple[dict[int, list[CommentStatement]], list[CommentStatement]]:
+    """Associate each top-level comment group with the next J sentence."""
+
+    groups: dict[int, list[CommentStatement]] = {}
+    pending: list[CommentStatement] = []
+    for item in program.items:
+        if isinstance(item, CommentStatement):
+            pending.append(item)
+            continue
+        if pending:
+            groups.setdefault(item.line.number, []).extend(pending)
+            pending = []
+    return groups, pending
+
+
+def emit_fortran(
+    program: Program,
+    *,
+    runtime: str = "embedded",
+    source_comments: str = "commented",
+) -> str:
     if runtime not in {"embedded", "external"}:
         raise J2FError(f"unknown runtime mode {runtime!r}")
+    if source_comments not in SOURCE_COMMENT_MODES:
+        raise J2FError(f"unknown source-comment mode {source_comments!r}")
     program = _expand_top_level_boxed_match(program)
+    comment_groups, trailing_comments = _top_level_comment_groups(program)
+    source_sentences = {
+        item.line.number: item.line.text.strip()
+        for item in program.items
+        if not isinstance(item, CommentStatement)
+    }
+    emitted_comment_groups: set[int] = set()
+
+    def append_comments(
+        output: list[str], target_line: int, *, indent: str = ""
+    ) -> None:
+        if target_line in emitted_comment_groups:
+            return
+        emitted_comment_groups.add(target_line)
+        comments = comment_groups.get(target_line, [])
+        if source_comments == "none":
+            return
+        for comment in comments:
+            output.extend(wrap_fortran_comment(comment.text, indent=indent))
+        if source_comments == "all" or (
+            source_comments == "commented" and comments
+        ):
+            sentence = source_sentences.get(target_line)
+            if sentence is not None:
+                output.extend(
+                    wrap_fortran_comment(f"J: {sentence}", indent=indent)
+                )
+
     definitions = _explicit_definitions(program)
     if not definitions and not any(isinstance(item, Assign) for item in program.items):
         raise UnsupportedJError("no translatable definitions or assignments were found")
@@ -2043,8 +2152,11 @@ def emit_fortran(program: Program, *, runtime: str = "embedded") -> str:
             (exported_name, len(definition.arguments))
         )
         emitted, required, result_type = FunctionEmitter(
-            definition, signature
+            definition,
+            signature,
+            source_comments=source_comments,
         ).emit()
+        append_comments(lines, definition.line.number)
         lines.extend(emitted)
         lines.append("")
         helpers.update(required)
@@ -2096,7 +2208,7 @@ def emit_fortran(program: Program, *, runtime: str = "embedded") -> str:
     declarations = [_main_entity_declaration(assignment) for assignment in active_assignments]
     lines.extend(f"  {line}" for line in combine_declarations(declarations))
     assignment_by_name = {assignment.name: assignment for assignment in top_assignments}
-    echo_calls: list[tuple[str, TypeInfo]] = []
+    echo_calls: list[tuple[str, TypeInfo, tuple[int, ...]]] = []
     for echo in echos:
         normalized_echo = _normalized_expression(echo.expression)
         noun_match = re.fullmatch(r"[A-Za-z][A-Za-z0-9_]*", normalized_echo)
@@ -2106,7 +2218,14 @@ def emit_fortran(program: Program, *, runtime: str = "embedded") -> str:
             expression = (
                 noun_assignment.expression if noun_assignment.print_only else noun_name
             )
-            echo_calls.append((expression, noun_assignment.type_info))
+            comment_targets = (
+                (noun_assignment.line.number, echo.line.number)
+                if noun_assignment.print_only
+                else (echo.line.number,)
+            )
+            echo_calls.append(
+                (expression, noun_assignment.type_info, comment_targets)
+            )
             continue
         match = re.fullmatch(
             r"([A-Za-z][A-Za-z0-9_]*)\s+([0-9]+)",
@@ -2120,10 +2239,12 @@ def emit_fortran(program: Program, *, runtime: str = "embedded") -> str:
             )
         function = _fortran_name(match.group(1))
         result_type = function_types[function]
-        echo_calls.append((f"{function}({match.group(2)})", result_type))
+        echo_calls.append(
+            (f"{function}({match.group(2)})", result_type, (echo.line.number,))
+        )
     unknown_echoes = [
         index
-        for index, (_, result_type) in enumerate(echo_calls, 1)
+        for index, (_, result_type, _) in enumerate(echo_calls, 1)
         if result_type.rank == 2
         and not isinstance(result_type.shape.extents[1], int)
     ]
@@ -2133,9 +2254,14 @@ def emit_fortran(program: Program, *, runtime: str = "embedded") -> str:
         lines.append("  integer :: j_row")
     lines.append("")
     for assignment in active_assignments:
+        append_comments(lines, assignment.line.number, indent="  ")
         lines.append(f"  {assignment.name} = {assignment.expression}")
         lines.extend(f"  {update}" for update in assignment.updates)
-    for index, (expression, result_type) in enumerate(echo_calls, 1):
+    for index, (expression, result_type, comment_targets) in enumerate(
+        echo_calls, 1
+    ):
+        for target_line in comment_targets:
+            append_comments(lines, target_line, indent="  ")
         if result_type.rank == 0:
             if result_type.atom_type is AtomType.LOGICAL:
                 lines.append(
@@ -2173,6 +2299,11 @@ def emit_fortran(program: Program, *, runtime: str = "embedded") -> str:
                 "top-level test noun 'ok' must be a logical scalar",
             )
         lines.append('  if (.not. ok) error stop "J test assertion failed"')
+    for exit_statement in exits:
+        append_comments(lines, exit_statement.line.number, indent="  ")
+    if source_comments != "none":
+        for comment in trailing_comments:
+            lines.extend(wrap_fortran_comment(comment.text, indent="  "))
     lines.append(f"end program {program_name}")
     lines.append("")
     lines = combine_adjacent_row_extension_assignments(lines)
@@ -2180,12 +2311,21 @@ def emit_fortran(program: Program, *, runtime: str = "embedded") -> str:
     return "\n".join(lines)
 
 
-def transpile_path(input_path: Path, *, runtime: str = "embedded") -> str:
+def transpile_path(
+    input_path: Path,
+    *,
+    runtime: str = "embedded",
+    source_comments: str = "commented",
+) -> str:
     try:
         text = input_path.read_text(encoding="utf-8")
     except OSError as exc:
         raise J2FError(f"cannot read {input_path}: {exc}") from exc
-    return emit_fortran(parse_j_source(input_path, text), runtime=runtime)
+    return emit_fortran(
+        parse_j_source(input_path, text),
+        runtime=runtime,
+        source_comments=source_comments,
+    )
 
 
 def expression_ast_report(program: Program) -> dict[str, object]:
@@ -2194,6 +2334,13 @@ def expression_ast_report(program: Program) -> dict[str, object]:
     verbs: list[dict[str, object]] = []
 
     def statement_report(statement: Statement) -> dict[str, object]:
+        if isinstance(statement, CommentStatement):
+            return {
+                "role": "comment",
+                "line": statement.line.number,
+                "source": statement.text,
+                "body": [],
+            }
         if isinstance(statement, Assign):
             role = "assignment"
             expression = statement.expression
@@ -2270,10 +2417,14 @@ def expression_ast_report(program: Program) -> dict[str, object]:
                 "kind": (
                     "assignment"
                     if isinstance(item, Assign)
-                    else "echo" if isinstance(item, EchoStatement) else "exit"
+                    else (
+                        "echo"
+                        if isinstance(item, EchoStatement)
+                        else "exit" if isinstance(item, ExitStatement) else "comment"
+                    )
                 ),
                 "line": item.line.number,
-                "source": item.expression,
+                "source": item.text if isinstance(item, CommentStatement) else item.expression,
                 **(
                     {
                         "target": item.name,
@@ -2285,7 +2436,7 @@ def expression_ast_report(program: Program) -> dict[str, object]:
                 ),
             }
             for item in program.items
-            if isinstance(item, (Assign, EchoStatement, ExitStatement))
+            if isinstance(item, (Assign, EchoStatement, ExitStatement, CommentStatement))
         ],
     }
 
@@ -2418,7 +2569,7 @@ def _output_path(input_path: Path, args: argparse.Namespace) -> Path:
     if args.out:
         return Path(args.out).resolve()
     directory = Path(args.out_dir).resolve() if args.out_dir else input_path.parent
-    return directory / f"{input_path.stem}_j.f90"
+    return directory / "temp.f90"
 
 
 def build_argument_parser() -> argparse.ArgumentParser:
@@ -2426,7 +2577,7 @@ def build_argument_parser() -> argparse.ArgumentParser:
         description="Transpile a supported subset of J to modern Fortran"
     )
     parser.add_argument("input_j", help="input .ijs source file")
-    parser.add_argument("--out", help="output .f90 path (default: <input>_j.f90)")
+    parser.add_argument("--out", help="output .f90 path (default: temp.f90)")
     parser.add_argument("--out-dir", help="directory for generated source and executable")
     parser.add_argument(
         "--runtime",
@@ -2438,6 +2589,12 @@ def build_argument_parser() -> argparse.ArgumentParser:
         "--runtime-file",
         metavar="FILE",
         help="path to j.f90 when --runtime external is compiled",
+    )
+    parser.add_argument(
+        "--source-comments",
+        choices=("all", "commented", "none"),
+        default="commented",
+        help="emit J source annotations: all, commented, or none (default: commented)",
     )
     parser.add_argument("--compile", action="store_true", help="compile generated Fortran")
     parser.add_argument("--run", action="store_true", help="compile and run generated Fortran")
@@ -2493,7 +2650,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         except OSError as exc:
             raise J2FError(f"cannot read {input_path}: {exc}") from exc
         parsed_program = parse_j_source(input_path, source_text)
-        generated = emit_fortran(parsed_program, runtime=args.runtime)
+        generated = emit_fortran(
+            parsed_program,
+            runtime=args.runtime,
+            source_comments=args.source_comments,
+        )
         translate_seconds = time.perf_counter() - translate_started
 
         if args.emit_ast:

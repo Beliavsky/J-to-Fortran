@@ -5,6 +5,7 @@ from j2fortran.fortran_style import (
     combine_declarations,
     procedure_prefix,
     safe_fortran_identifier,
+    wrap_fortran_comment,
     wrap_long_fortran_lines,
 )
 
@@ -68,3 +69,15 @@ def test_long_fortran_statements_wrap_outside_literals() -> None:
     assert all(part.endswith(" &") for part in wrapped[:-1])
     assert all(part.lstrip().startswith("& ") for part in wrapped[1:])
     assert all("kind &" not in part for part in wrapped)
+
+
+def test_j_comment_text_wraps_as_indented_fortran_comments() -> None:
+    rendered = wrap_fortran_comment(
+        "This explanation is long enough to require a continuation comment line.",
+        indent="    ",
+        max_length=45,
+    )
+
+    assert len(rendered) == 2
+    assert all(line.startswith("    ! ") for line in rendered)
+    assert all(len(line) <= 45 for line in rendered)

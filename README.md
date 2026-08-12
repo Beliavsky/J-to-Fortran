@@ -28,8 +28,8 @@ python xj2f.py pythag_array.ijs
 python xj2f.py primes.ijs
 ```
 
-This writes `pythag_j.f90` or `pythag_array_j.f90` beside the input.  Select a
-different destination with `--out FILE` or `--out-dir DIRECTORY`.
+This writes `temp.f90` beside the input. Select a different destination with
+`--out FILE`; `--out-dir DIRECTORY` writes `temp.f90` in that directory.
 
 Compile or compile and run:
 
@@ -69,6 +69,8 @@ python xj2f.py pythag.ijs --run-j --jconsole C:\Programs\J9.7\bin\jconsole.exe
 - `--check`: verify that the input is in the supported subset without writing Fortran.
 - `--runtime embedded|external`: embed required helpers or use `j.f90`.
 - `--runtime-file FILE`: select the `j.f90` used to compile external-runtime output.
+- `--source-comments all|commented|none`: control migrated `NB.` prose and
+  `! J:` source annotations; the default is `commented`.
 - `--compiler COMMAND`: select/configure a Fortran compiler.
 - `--ifx`: use Intel `ifx` rather than `gfortran`.
 - `--jconsole COMMAND`: select the J console command.
@@ -91,7 +93,8 @@ python xj2f_batch.py @programs.txt --run-diff --jconsole C:\J\bin\jconsole.exe
 Use `--limit` for a small sample and `--max-fail` with sequential execution to
 stop early. The summary distinguishes translation, compilation, execution, J,
 comparison, and timeout failures. An editable or regular installation also
-provides the `xj2f-batch` command.
+provides the `xj2f-batch` command. Build and run modes use unique
+`<input>_j.f90` names so parallel cases do not overwrite one another.
 
 ## Runtime helpers
 
@@ -112,6 +115,7 @@ use `--runtime-file FILE` to select another copy.
 
 The parser currently recognizes:
 
+- standalone `NB.` comments, preserved as Fortran `!` comments;
 - standalone top-level noun programs without an explicit verb definition;
 - monadic explicit verb definitions using `name =: 3 : 0 ... )`;
 - local and global copulas as syntax (`=.` and `=:`), with local assignments
@@ -188,6 +192,11 @@ The emitter applies these rules to generated procedures:
   `pure elemental` only when every dummy and any function result are scalar.
 - A function's dummy arguments are declared first. Its result is declared on a
   separate line immediately afterward.
+- Standalone J `NB.` comments remain near the corresponding generated statement
+  as indented Fortran `!` comments. In the default `commented` mode, the
+  associated original sentence follows as `! J: ...`; `all` annotates every
+  translated sentence and `none` omits source comments. Long prose is wrapped
+  to 100 columns.
 - Local entities with identical complete declaration specifications share a
   declaration when practical.
 - Repeated products are emitted as powers (`x**2`), and expression parentheses

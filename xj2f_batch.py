@@ -151,6 +151,7 @@ def _mode_flag(args: argparse.Namespace) -> str:
 def _case_command(source: Path, args: argparse.Namespace) -> list[str]:
     command = [sys.executable, str(Path(xj2f.__file__).resolve()), str(source)]
     command.extend([_mode_flag(args), "--runtime", args.runtime])
+    command.extend(["--source-comments", args.source_comments])
     command.extend(["--compiler", args.compiler, "--timeout", str(args.timeout)])
     if args.runtime_file:
         command.extend(["--runtime-file", args.runtime_file])
@@ -158,8 +159,9 @@ def _case_command(source: Path, args: argparse.Namespace) -> list[str]:
         command.append("--ifx")
     if args.jconsole:
         command.extend(["--jconsole", args.jconsole])
-    if args.out_dir:
-        command.extend(["--out-dir", args.out_dir])
+    if _mode_flag(args) != "--check":
+        output_directory = Path(args.out_dir).resolve() if args.out_dir else source.parent
+        command.extend(["--out", str(output_directory / f"{source.stem}_j.f90")])
     return command
 
 
@@ -243,6 +245,12 @@ def build_argument_parser() -> argparse.ArgumentParser:
         "--runtime", choices=("embedded", "external"), default="embedded"
     )
     parser.add_argument("--runtime-file", help="external j.f90 path")
+    parser.add_argument(
+        "--source-comments",
+        choices=("all", "commented", "none"),
+        default="commented",
+        help="J source annotations forwarded to xj2f.py",
+    )
     parser.add_argument("--out-dir", help="directory forwarded to xj2f.py")
     parser.add_argument("--verbose", action="store_true", help="show successful output")
     parser.add_argument("--terse", action="store_true", help="show only failures and totals")
