@@ -1618,6 +1618,20 @@ def render_fortran_expression(
             names=names,
             named_verbs=named_verbs,
         )
+        if source_type.atom_type is AtomType.CHARACTER:
+            _validate_index_selection(selection, source_type)
+            if len(selection.axes) != 1:
+                raise LoweringError("character indexing currently requires one axis")
+            indices = []
+            extent = source_type.shape.extents[0]
+            for index in selection.axes[0].values:
+                if index >= 0:
+                    indices.append(str(index + 1))
+                elif isinstance(extent, int):
+                    indices.append(str(extent + index + 1))
+                else:
+                    indices.append(f"len({source}) + {index + 1}")
+            return f"j_select_character({source}, [{', '.join(indices)}])"
         return _render_index_selection(selection, source_type, source)
     reshaped = dyad(expression, "$")
     if reshaped is not None and names is not None:
@@ -1809,6 +1823,16 @@ def required_runtime_helpers(
             )
         )
     elif isinstance(expression, DyadicApply):
+        selection = match_index_selection(expression)
+        if selection is not None and names is not None:
+            source_type = infer_type(
+                selection.source,
+                names,
+                name_transform,
+                named_verbs=named_verbs,
+            )
+            if source_type.atom_type is AtomType.CHARACTER:
+                helpers.add("select_character")
         scan = insert_scan_spelling(expression.verb)
         if scan == "+":
             helpers.add("infix_sum_int")

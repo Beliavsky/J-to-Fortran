@@ -99,6 +99,7 @@ RUNTIME_PROCEDURES = {
     "power_table_int": "j_power_table_int",
     "reverse_character": "j_reverse_character",
     "reverse_int_vector": "j_reverse_int_vector",
+    "select_character": "j_select_character",
     "signum_int": "j_signum_int",
     "solve_2x2_matrix_int": "j_solve_2x2_matrix_int",
     "solve_2x2_vector_int": "j_solve_2x2_vector_int",
@@ -1307,6 +1308,26 @@ def _runtime_helpers(helpers: set[str]) -> list[str]:
                 "      values(len(values) - character_index + 1:len(values) - character_index + 1)",
                 "  end do",
                 "end function j_reverse_character",
+                "",
+            ]
+        )
+    if "select_character" in helpers:
+        result.extend(
+            [
+                "pure function j_select_character(values, indices) result(selected)",
+                "  character(len=*), intent(in) :: values",
+                "  integer, intent(in) :: indices(:)",
+                "  character(len=:), allocatable :: selected",
+                "  integer :: index_position",
+                "",
+                "  if (any(indices < 1 .or. indices > len(values))) error stop &",
+                '    "character index out of bounds"',
+                "  allocate(character(len=size(indices)) :: selected)",
+                "  do index_position = 1, size(indices)",
+                "    selected(index_position:index_position) = &",
+                "      values(indices(index_position):indices(index_position))",
+                "  end do",
+                "end function j_select_character",
                 "",
             ]
         )

@@ -114,6 +114,19 @@ def test_character_reverse_requires_its_runtime_helper() -> None:
     assert required_runtime_helpers(expression, {}) == {"reverse_character"}
 
 
+def test_character_indexing_uses_one_based_runtime_indices() -> None:
+    expression = parse_expression("1 3 5 { 'abcdef'")
+
+    assert infer_type(expression, {}) == TypeInfo(
+        AtomType.CHARACTER, Shape.vector(3)
+    )
+    assert (
+        render_fortran_expression(expression, names={})
+        == "j_select_character('abcdef', [2, 4, 6])"
+    )
+    assert required_runtime_helpers(expression, {}) == {"select_character"}
+
+
 @pytest.mark.parametrize(
     ("left", "right", "expected_type", "expected_fortran"),
     [

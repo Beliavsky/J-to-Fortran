@@ -10,6 +10,7 @@ module j2f_runtime
   public :: j_power_table_int, j_prefix_product_int, j_prefix_sum_int
   public :: j_reverse_int_vector, j_signum_int, j_sort_int_vector
   public :: j_reverse_character
+  public :: j_select_character
   public :: j_solve_2x2_matrix_int, j_solve_2x2_vector_int
 
 contains
@@ -202,6 +203,21 @@ pure function j_reverse_character(values) result(reversed)
       values(len(values) - character_index + 1:len(values) - character_index + 1)
   end do
 end function j_reverse_character
+
+pure function j_select_character(values, indices) result(selected)
+  character(len=*), intent(in) :: values
+  integer, intent(in) :: indices(:)
+  character(len=:), allocatable :: selected
+  integer :: index_position
+
+  if (any(indices < 1 .or. indices > len(values))) error stop &
+    "character index out of bounds"
+  allocate(character(len=size(indices)) :: selected)
+  do index_position = 1, size(indices)
+    selected(index_position:index_position) = &
+      values(indices(index_position):indices(index_position))
+  end do
+end function j_select_character
 
 pure function j_reverse_int_vector(values) result(reversed_values)
   integer, intent(in) :: values(:)
