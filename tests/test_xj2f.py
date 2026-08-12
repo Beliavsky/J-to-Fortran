@@ -70,6 +70,32 @@ ok =: result -: expected
 """
 
 
+def test_j_command_uses_jconsole_from_path_and_ignores_adjacent_shortcut(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    input_path = tmp_path / "example.ijs"
+    (tmp_path / "jj.bat").write_text("personal shortcut", encoding="utf-8")
+    args = xj2f.build_argument_parser().parse_args([str(input_path), "--run-j"])
+    monkeypatch.setattr(xj2f.shutil, "which", lambda command: "C:\\J\\jconsole.exe")
+
+    assert xj2f._j_command(input_path, args) == [
+        "C:\\J\\jconsole.exe",
+        str(input_path),
+    ]
+
+
+def test_j_command_reports_portable_discovery_options(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    input_path = tmp_path / "example.ijs"
+    (tmp_path / "jj.bat").write_text("personal shortcut", encoding="utf-8")
+    args = xj2f.build_argument_parser().parse_args([str(input_path), "--run-j"])
+    monkeypatch.setattr(xj2f.shutil, "which", lambda command: None)
+
+    with pytest.raises(xj2f.J2FError, match="add jconsole to PATH"):
+        xj2f._j_command(input_path, args)
+
+
 @pytest.mark.parametrize("filename", ["pythag.ijs", "pythag_array.ijs"])
 def test_examples_transpile_to_standalone_fortran(filename: str) -> None:
     generated = xj2f.transpile_path(ROOT / filename)

@@ -2519,16 +2519,10 @@ def _j_command(input_path: Path, args: argparse.Namespace) -> list[str]:
     if args.jconsole:
         command = _split_command(args.jconsole)
     else:
-        wrapper = input_path.parent / "jj.bat"
-        if os.name == "nt" and wrapper.exists():
-            command = [str(wrapper)]
-        else:
-            resolved = shutil.which("jconsole")
-            if resolved is None:
-                raise J2FError(
-                    "cannot find J; use --jconsole COMMAND or place jj.bat beside the input"
-                )
-            command = [resolved]
+        resolved = shutil.which("jconsole")
+        if resolved is None:
+            raise J2FError("cannot find J; use --jconsole COMMAND or add jconsole to PATH")
+        command = [resolved]
     if os.name == "nt" and command[0].lower().endswith((".bat", ".cmd")):
         return [os.environ.get("COMSPEC", "cmd.exe"), "/d", "/c", *command, str(input_path)]
     return [*command, str(input_path)]
@@ -2621,7 +2615,10 @@ def build_argument_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--compiler", default="gfortran", help='compiler command (default: "gfortran")')
     parser.add_argument("--ifx", action="store_true", help="compile with Intel ifx")
-    parser.add_argument("--jconsole", help="J console command; defaults to adjacent jj.bat or PATH jconsole")
+    parser.add_argument(
+        "--jconsole",
+        help="J console command (default: jconsole found on PATH)",
+    )
     parser.add_argument("--timeout", type=float, default=60.0, help="per-process timeout in seconds")
     parser.add_argument("--verbose", action="store_true", help="show commands and progress")
     parser.add_argument("--version", action="version", version=f"%(prog)s {VERSION}")

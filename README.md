@@ -24,8 +24,6 @@ Generate Fortran:
 
 ```powershell
 python xj2f.py pythag.ijs
-python xj2f.py pythag_array.ijs
-python xj2f.py primes.ijs
 ```
 
 This writes `temp.f90` beside the input. Select a different destination with
@@ -46,8 +44,8 @@ python xj2f.py pythag_array.ijs --run-diff
 python xj2f.py primes.ijs --run-diff
 ```
 
-`xj2f.py` finds an adjacent `jj.bat` first on Windows, then a `jconsole`
-executable on `PATH`.  An explicit command can be supplied when needed:
+`xj2f.py` uses the `jconsole` executable on `PATH`. An explicit command can be
+supplied when needed:
 
 ```powershell
 python xj2f.py pythag.ijs --run-j --jconsole C:\Programs\J9.7\bin\jconsole.exe
