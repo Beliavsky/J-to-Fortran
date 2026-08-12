@@ -24,6 +24,12 @@ ok =: result -: expected
 """
 
 
+COMPLEX_VECTOR_TEST_PROGRAM = """result =: 1j2 3j4 + 2j_1 4j_2
+expected =: 3j1 7j2
+ok =: result -: expected
+"""
+
+
 RESHAPE_TEST_PROGRAM = """matrix =: 2 3 $ 1 2
 cube =: 2 2 2 $ i. 8
 result =: matrix
@@ -114,6 +120,15 @@ def test_complex_literals_emit_real64_complex_values() -> None:
     assert "use, intrinsic :: iso_fortran_env, only: real64" in generated
     assert "complex(kind=real64) :: result_j, expected" in generated
     assert "cmplx(3.0_real64, 4.0_real64, kind=real64)" in generated
+
+
+def test_complex_vector_arithmetic_emits_complex_arrays() -> None:
+    generated = xj2f.emit_fortran(
+        xj2f.parse_j_source(Path("complex_vector.ijs"), COMPLEX_VECTOR_TEST_PROGRAM)
+    )
+
+    assert "complex(kind=real64), allocatable :: result_j(:), expected(:)" in generated
+    assert "ok = all(result_j == expected)" in generated
 
 
 def test_top_level_heterogeneous_boxed_match_is_decomposed() -> None:
@@ -519,6 +534,32 @@ def test_tolerant_float_match_compiles_and_runs(tmp_path: Path) -> None:
     executable = tmp_path / "float_match.exe"
     program = xj2f.parse_j_source(
         Path("float_match.ijs"), FLOAT_MATCH_TEST_PROGRAM
+    )
+    source.write_text(xj2f.emit_fortran(program), encoding="utf-8")
+    compiled = subprocess.run(
+        [compiler, "-std=f2018", str(source), "-o", str(executable)],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert compiled.returncode == 0, compiled.stdout + compiled.stderr
+
+    completed = subprocess.run(
+        [str(executable)], capture_output=True, text=True, check=False
+    )
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+
+
+@pytest.mark.requires_gfortran
+def test_complex_vector_arithmetic_compiles_and_runs(tmp_path: Path) -> None:
+    compiler = shutil.which("gfortran")
+    if compiler is None:
+        pytest.skip("gfortran is not installed")
+    source = tmp_path / "complex_vector_j.f90"
+    executable = tmp_path / "complex_vector.exe"
+    program = xj2f.parse_j_source(
+        Path("complex_vector.ijs"), COMPLEX_VECTOR_TEST_PROGRAM
     )
     source.write_text(xj2f.emit_fortran(program), encoding="utf-8")
     compiled = subprocess.run(

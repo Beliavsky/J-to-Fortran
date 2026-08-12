@@ -173,6 +173,8 @@ The emitter applies these rules to generated procedures:
   declaration when practical.
 - Repeated products are emitted as powers (`x**2`), and expression parentheses
   are retained only when required to preserve evaluation semantics.
+- Long statements are wrapped at token boundaries with free-form continuation
+  markers, keeping generated source within 100 columns when a safe break exists.
 - J names that collide with Fortran construct words, selected common
   intrinsics, or explicitly avoided identifiers such as `mask` receive a
   readable `_j` suffix.

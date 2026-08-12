@@ -150,3 +150,112 @@ def combine_adjacent_row_extension_assignments(lines: Iterable[str]) -> list[str
         )
         index += 2
     return combined
+
+
+def _break_candidates_for_wrap(body: str, start: int, end: int) -> list[int]:
+    """Return conservative split points outside quoted strings."""
+
+    candidates: list[int] = []
+    in_single = False
+    in_double = False
+    index = 0
+    while index < len(body):
+        character = body[index]
+        if character == "'" and not in_double:
+            if in_single and index + 1 < len(body) and body[index + 1] == "'":
+                index += 2
+                continue
+            in_single = not in_single
+        elif character == '"' and not in_single:
+            if in_double and index + 1 < len(body) and body[index + 1] == '"':
+                index += 2
+                continue
+            in_double = not in_double
+        elif not in_single and not in_double and start <= index <= end:
+            doubled_operator = character in "*/" and (
+                (index > 0 and body[index - 1] == character)
+                or (index + 1 < len(body) and body[index + 1] == character)
+            )
+            signed_exponent = character in "+-" and index > 0 and body[index - 1] in "eEdD"
+            if not doubled_operator and not signed_exponent and (
+                character.isspace() or character in ",+-*/)=]"
+            ):
+                candidates.append(index)
+        index += 1
+    return candidates
+
+
+def _preferred_named_argument_break(
+    body: str, start: int, end: int
+) -> int | None:
+    """Prefer the comma before a ``name=value`` procedure argument."""
+
+    in_single = False
+    in_double = False
+    preferred: int | None = None
+    index = 0
+    while index < len(body):
+        character = body[index]
+        if character == "'" and not in_double:
+            if in_single and index + 1 < len(body) and body[index + 1] == "'":
+                index += 2
+                continue
+            in_single = not in_single
+        elif character == '"' and not in_single:
+            if in_double and index + 1 < len(body) and body[index + 1] == '"':
+                index += 2
+                continue
+            in_double = not in_double
+        elif not in_single and not in_double and character == "," and start <= index < end:
+            argument_start = index + 1
+            while argument_start < len(body) and body[argument_start].isspace():
+                argument_start += 1
+            if re.match(r"[a-z][a-z0-9_]*\s*=", body[argument_start:], re.IGNORECASE):
+                preferred = index + 1
+        index += 1
+    return preferred
+
+
+def wrap_long_fortran_line(body: str, max_length: int = 100) -> list[str] | None:
+    """Wrap one long free-form Fortran statement with ``&`` continuations.
+
+    This is adapted from the conservative wrapper in the sibling R-to-Fortran
+    and C-to-Fortran scanners. ``None`` means no safe split point was found.
+    """
+
+    if len(body) <= max_length:
+        return [body]
+    if body.lstrip().startswith(("!", "#")):
+        return None
+    indent = re.match(r"^\s*", body).group(0)
+    continuation_indent = indent + "   "
+    wrapped: list[str] = []
+    current = body
+    while len(current) > max_length:
+        minimum = len(continuation_indent) + 8
+        maximum = max_length - 2
+        candidates = _break_candidates_for_wrap(current, minimum, maximum)
+        if not candidates:
+            return None
+        cut = _preferred_named_argument_break(current, minimum, maximum)
+        if cut is None:
+            cut = candidates[-1]
+        left = current[:cut].rstrip()
+        right = current[cut:].lstrip()
+        if not left or not right:
+            return None
+        wrapped.append(f"{left} &")
+        current = f"{continuation_indent}& {right}"
+    wrapped.append(current)
+    return wrapped
+
+
+def wrap_long_fortran_lines(
+    lines: Iterable[str], max_length: int = 100
+) -> list[str]:
+    """Wrap safely splittable long Fortran statements."""
+
+    wrapped: list[str] = []
+    for line in lines:
+        wrapped.extend(wrap_long_fortran_line(line, max_length) or [line])
+    return wrapped

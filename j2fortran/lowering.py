@@ -168,6 +168,23 @@ def _is_boolean_strand(expression: Expression) -> bool:
     )
 
 
+def _number_atom_type(expression: NumberLiteral) -> AtomType:
+    if "j" in expression.text:
+        return AtomType.COMPLEX
+    if "r" in expression.text or any(c in expression.text for c in ".eE"):
+        return AtomType.REAL
+    return AtomType.INTEGER
+
+
+def _strand_atom_type(expression: Strand) -> AtomType:
+    item_types = {_number_atom_type(item) for item in expression.items}
+    if AtomType.COMPLEX in item_types:
+        return AtomType.COMPLEX
+    if AtomType.REAL in item_types:
+        return AtomType.REAL
+    return AtomType.INTEGER
+
+
 def _shape_size(shape: Shape) -> int | str | None:
     if any(extent is None for extent in shape.extents):
         return None
@@ -436,22 +453,12 @@ def infer_type(
 ) -> TypeInfo:
     expression = ungroup(expression)
     if isinstance(expression, NumberLiteral):
-        if "j" in expression.text:
-            atom_type = AtomType.COMPLEX
-        elif "r" in expression.text:
-            atom_type = AtomType.REAL
-        elif any(c in expression.text for c in ".eE"):
-            atom_type = AtomType.REAL
-        else:
-            atom_type = AtomType.INTEGER
-        return TypeInfo(atom_type)
+        return TypeInfo(_number_atom_type(expression))
     if isinstance(expression, Strand):
         if _is_boolean_strand(expression):
             atom_type = AtomType.LOGICAL
-        elif any(any(c in item.text for c in ".eE") for item in expression.items):
-            atom_type = AtomType.REAL
         else:
-            atom_type = AtomType.INTEGER
+            atom_type = _strand_atom_type(expression)
         return TypeInfo(atom_type, Shape.vector(len(expression.items)))
     if isinstance(expression, Name):
         try:
@@ -1255,6 +1262,13 @@ def _render_fortran_expression(
             )
         else:
             values = ", ".join(_fortran_number(item.text) for item in expression.items)
+            item_types = {_number_atom_type(item) for item in expression.items}
+            if len(item_types) > 1:
+                type_spec = {
+                    AtomType.REAL: "real(kind=real64)",
+                    AtomType.COMPLEX: "complex(kind=real64)",
+                }[_strand_atom_type(expression)]
+                values = f"{type_spec} :: {values}"
         return f"[{values}]", _ATOM_PRECEDENCE, None
     if isinstance(expression, StringLiteral):
         escaped = expression.value.replace("'", "''")

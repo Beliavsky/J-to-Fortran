@@ -178,6 +178,22 @@ def test_complex_literals_arithmetic_and_match() -> None:
     assert render_fortran_expression(matched, names=names) == "result == expected"
 
 
+def test_numeric_strands_promote_to_the_widest_atom_type() -> None:
+    complex_values = parse_expression("1j2 3j4")
+    mixed_values = parse_expression("1 2.5 3j4")
+
+    assert infer_type(complex_values, {}) == TypeInfo(
+        AtomType.COMPLEX, Shape.vector(2)
+    )
+    assert infer_type(mixed_values, {}) == TypeInfo(
+        AtomType.COMPLEX, Shape.vector(3)
+    )
+    assert render_fortran_expression(mixed_values) == (
+        "[complex(kind=real64) :: 1, 2.5_real64, "
+        "cmplx(3.0_real64, 4.0_real64, kind=real64)]"
+    )
+
+
 def test_complex_magnitude_lowers_to_real_abs() -> None:
     expression = parse_expression("| 3j4")
 

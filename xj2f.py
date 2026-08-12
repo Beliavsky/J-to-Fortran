@@ -47,6 +47,7 @@ from j2fortran.fortran_style import (
     combine_declarations,
     procedure_prefix,
     safe_fortran_identifier,
+    wrap_long_fortran_lines,
 )
 from j2fortran.lexer import LexerError
 from j2fortran.lowering import (
@@ -2175,6 +2176,7 @@ def emit_fortran(program: Program, *, runtime: str = "embedded") -> str:
     lines.append(f"end program {program_name}")
     lines.append("")
     lines = combine_adjacent_row_extension_assignments(lines)
+    lines = wrap_long_fortran_lines(lines)
     return "\n".join(lines)
 
 
