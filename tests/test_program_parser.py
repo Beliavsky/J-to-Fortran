@@ -60,6 +60,26 @@ def test_nested_conditionals_parse() -> None:
     assert outer.else_body is not None
 
 
+def test_conditionless_elseif_is_the_default_branch() -> None:
+    source = """sgn =: 3 : 0
+  if. y < 0 do.
+    _1
+  elseif. y = 0 do.
+    0
+  elseif. do.
+    1
+  end.
+)
+"""
+    program = xj2f.parse_j_source(Path("sgn.ijs"), source)
+    verb = program.items[0]
+    assert isinstance(verb, xj2f.VerbDefinition)
+    conditional = verb.body[0]
+    assert isinstance(conditional, xj2f.IfStatement)
+    assert [branch.condition for branch in conditional.elseif_branches] == ["y = 0"]
+    assert conditional.else_body is not None
+
+
 def test_dyadic_explicit_verb_has_x_and_y_arguments() -> None:
     source = "lincomb =: 4 : 0\n  x + 2 * y\n)\n"
     program = xj2f.parse_j_source(Path("lincomb.ijs"), source)

@@ -324,7 +324,19 @@ class Parser:
         elseif_branches: list[ElseIfBranch] = []
         while self.index < len(self.lines):
             branch_line = self.lines[self.index]
-            branch = self._elseif.fullmatch(branch_line.text.strip())
+            branch_text = branch_line.text.strip()
+            if branch_text == "elseif. do.":
+                self.index += 1
+                else_body = tuple(self._parse_statements({"end."}))
+                self._expect("end.", line, "if. statement")
+                return IfStatement(
+                    line,
+                    condition,
+                    tuple(body),
+                    tuple(elseif_branches),
+                    else_body,
+                )
+            branch = self._elseif.fullmatch(branch_text)
             if branch is None:
                 break
             self.index += 1
