@@ -296,7 +296,7 @@ def _validate_index_selection(
                 normalized = index if index >= 0 else extent + index
                 if normalized < 0 or normalized >= extent:
                     raise LoweringError(
-                        f"index {index} is out of bounds for axis {axis_number} "
+                        f"index error: index {index} is out of bounds for axis {axis_number} "
                         f"with extent {extent}"
                     )
         if not axis.is_scalar:
@@ -457,7 +457,9 @@ def infer_type(
         try:
             return names[name_transform(expression.identifier)]
         except KeyError as exc:
-            raise LoweringError(f"type of name {expression.identifier!r} is unknown") from exc
+            raise LoweringError(
+                f"undefined name: type of name {expression.identifier!r} is unknown"
+            ) from exc
     if isinstance(expression, StringLiteral):
         length = len(expression.value)
         return TypeInfo(AtomType.CHARACTER, Shape.vector(length), length)
@@ -767,7 +769,7 @@ def infer_type(
                 and contracted_left != contracted_right
             ):
                 raise LoweringError(
-                    "inner-product contracted extents differ: "
+                    "length error: inner-product contracted extents differ: "
                     f"{contracted_left} versus {contracted_right}"
                 )
             atom_type = (
@@ -869,7 +871,8 @@ def infer_type(
             extents = constant_shape_extents(expression.left)
             if extents is None:
                 raise LoweringError(
-                    "reshape currently requires a constant nonnegative integer shape"
+                    "domain error: reshape currently requires a constant nonnegative "
+                    "integer shape"
                 )
             source_type = infer_type(
                 expression.right,
@@ -927,7 +930,7 @@ def infer_type(
             try:
                 vector_shape = agree_shapes(left_type.shape, right_type.shape)
             except ShapeMismatchError as exc:
-                raise LoweringError(f"laminate {exc}") from exc
+                raise LoweringError(f"length error: laminate {exc}") from exc
             return TypeInfo(
                 left_type.atom_type, Shape.matrix(2, vector_shape.extents[0])
             )
@@ -1061,7 +1064,7 @@ def infer_type(
         try:
             shape = agree_shapes(left_type.shape, right_type.shape)
         except ShapeMismatchError as exc:
-            raise LoweringError(str(exc)) from exc
+            raise LoweringError(f"length error: {exc}") from exc
         if spelling in {"=", "~:", "<", "<:", ">", ">:"}:
             return TypeInfo(AtomType.LOGICAL, shape)
         if spelling in {"*.", "+."}:
@@ -1122,7 +1125,9 @@ def infer_type(
                 AtomType.REAL,
                 AtomType.COMPLEX,
             }:
-                raise LoweringError("arithmetic requires numeric arguments")
+                raise LoweringError(
+                    "domain error: arithmetic requires numeric arguments"
+                )
             atom_type = (
                 AtomType.COMPLEX
                 if AtomType.COMPLEX in {left_type.atom_type, right_type.atom_type}
@@ -1826,7 +1831,7 @@ def render_fortran_expression(
         extents = constant_shape_extents(reshaped[0])
         if extents is None:
             raise LoweringError(
-                "reshape currently requires a constant nonnegative integer shape"
+                "domain error: reshape currently requires a constant nonnegative integer shape"
             )
         source_type = infer_type(
             reshaped[1], names, name_transform, named_verbs=named_verbs

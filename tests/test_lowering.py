@@ -720,7 +720,9 @@ def test_laminate_rejects_unequal_known_lengths() -> None:
         "b": TypeInfo(AtomType.INTEGER, Shape.vector(3)),
     }
 
-    with pytest.raises(LoweringError, match="laminate incompatible extent"):
+    with pytest.raises(
+        LoweringError, match="length error: laminate incompatible extent"
+    ):
         infer_type(expression, names)
 
 

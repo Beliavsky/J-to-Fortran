@@ -344,6 +344,32 @@ def test_unsupported_j_reports_the_source_line() -> None:
         xj2f.emit_fortran(program)
 
 
+@pytest.mark.parametrize(
+    ("source", "line_number", "category"),
+    [
+        ("result =: definitely_undefined_name\n", 1, "undefined name"),
+        ("result =: 1 2 + 1 2 3\n", 1, "length error"),
+        ("result =: 9 { 10 20 30\n", 1, "index error"),
+        ("result =: 'abc' + 1\n", 1, "domain error"),
+        (
+            "a =: 2 3 $ i. 6\nb =: 4 2 $ i. 8\nresult =: a (+/ . *) b\n",
+            3,
+            "length error",
+        ),
+        ("result =: 2.5 $ 1 2 3\n", 1, "domain error"),
+    ],
+)
+def test_negative_programs_report_j_error_categories(
+    source: str, line_number: int, category: str
+) -> None:
+    program = xj2f.parse_j_source(Path("negative.ijs"), source)
+
+    with pytest.raises(
+        xj2f.UnsupportedJError, match=rf"{line_number}: {category}"
+    ):
+        xj2f.emit_fortran(program)
+
+
 def test_expression_ast_report_includes_nested_control_flow() -> None:
     path = ROOT / "pythag.ijs"
     program = xj2f.parse_j_source(path, path.read_text(encoding="utf-8"))
