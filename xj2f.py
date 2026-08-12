@@ -148,7 +148,7 @@ Statement = Assign | ForLoop | IfStatement | ExpressionStatement
 class VerbDefinition:
     line: SourceLine
     name: str
-    argument: str
+    arguments: tuple[str, ...]
     body: tuple[Statement, ...]
 
 
@@ -198,7 +198,9 @@ def _source_lines(text: str) -> list[SourceLine]:
 
 
 class Parser:
-    _verb_start = re.compile(r"^([A-Za-z][A-Za-z0-9_]*)\s*=:\s*3\s*:\s*0\s*$")
+    _verb_start = re.compile(
+        r"^([A-Za-z][A-Za-z0-9_]*)\s*=:\s*([34])\s*:\s*0\s*$"
+    )
     _assignment = re.compile(
         r"^([A-Za-z][A-Za-z0-9_]*)\s*(=[:.])\s*(.*?)\s*$"
     )
@@ -223,7 +225,8 @@ class Parser:
                 self.index += 1
                 body = self._parse_statements({")"})
                 self._expect(")", line, "explicit verb")
-                items.append(VerbDefinition(line, verb.group(1), "y", tuple(body)))
+                arguments = ("y",) if verb.group(2) == "3" else ("x", "y")
+                items.append(VerbDefinition(line, verb.group(1), arguments, tuple(body)))
                 continue
             assignment = self._assignment.fullmatch(text)
             if assignment:
@@ -350,7 +353,8 @@ class FunctionEmitter:
         self.integer_results_boolean_compatible = True
 
     def emit(self) -> tuple[list[str], set[str], TypeInfo]:
-        self._declare(self.definition.argument, "integer, intent(in)")
+        for argument in self.definition.arguments:
+            self._declare(argument, "integer, intent(in)")
         for statement in self.definition.body:
             self._emit_statement(statement)
         if self.result_type is None:
@@ -367,10 +371,23 @@ class FunctionEmitter:
             )
 
         name = _fortran_name(self.definition.name)
-        argument_type = self.types[_fortran_name(self.definition.argument)]
-        purity = procedure_prefix([argument_type.rank], result_rank=self.result_type.rank)
-        result = [f"{purity} function {name}(y) result(j_result)"]
-        argument_names = {_fortran_name(self.definition.argument)}
+        argument_types = [
+            self.types[_fortran_name(argument)]
+            for argument in self.definition.arguments
+        ]
+        purity = procedure_prefix(
+            [argument_type.rank for argument_type in argument_types],
+            result_rank=self.result_type.rank,
+        )
+        rendered_arguments = ", ".join(
+            _fortran_name(argument) for argument in self.definition.arguments
+        )
+        result = [
+            f"{purity} function {name}({rendered_arguments}) result(j_result)"
+        ]
+        argument_names = {
+            _fortran_name(argument) for argument in self.definition.arguments
+        }
         arguments: list[tuple[str, str]] = []
         locals_: list[tuple[str, str]] = []
         for variable, declaration in self.declarations.items():
@@ -1514,10 +1531,10 @@ def expression_ast_report(program: Program) -> dict[str, object]:
     for item in program.items:
         if isinstance(item, VerbDefinition):
             verbs.append(
-                {
-                    "name": item.name,
-                    "argument": item.argument,
-                    "line": item.line.number,
+                    {
+                        "name": item.name,
+                        "arguments": list(item.arguments),
+                        "line": item.line.number,
                     "body": [statement_report(statement) for statement in item.body],
                 }
             )

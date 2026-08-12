@@ -654,6 +654,30 @@ def infer_type(
                     "amendment replacement shape does not match selected shape"
                 )
             return source_type
+        if isinstance(expression.verb, NamedVerb):
+            left_type = infer_type(
+                expression.left, names, name_transform, named_verbs=named_verbs
+            )
+            right_type = infer_type(
+                expression.right, names, name_transform, named_verbs=named_verbs
+            )
+            if (
+                left_type != TypeInfo(AtomType.INTEGER)
+                or right_type != TypeInfo(AtomType.INTEGER)
+            ):
+                raise LoweringError(
+                    "direct dyadic named-verb application currently requires integer scalars"
+                )
+            if named_verbs is None:
+                raise LoweringError(
+                    f"type of verb {expression.verb.identifier!r} is unknown"
+                )
+            try:
+                return named_verbs[name_transform(expression.verb.identifier)]
+            except KeyError as exc:
+                raise LoweringError(
+                    f"type of verb {expression.verb.identifier!r} is unknown"
+                ) from exc
         scan = insert_scan_spelling(expression.verb)
         if scan in {"+", "-"}:
             left_type = infer_type(
@@ -1138,6 +1162,18 @@ def _render_fortran_expression(
             return f"j_nub_int({operand})", _ATOM_PRECEDENCE, "call"
         raise LoweringError(f"monadic verb {spelling!r} needs a dedicated lowering rule")
     if isinstance(expression, DyadicApply):
+        if isinstance(expression.verb, NamedVerb):
+            left, _, _ = _render_fortran_expression(
+                expression.left, name_transform
+            )
+            right, _, _ = _render_fortran_expression(
+                expression.right, name_transform
+            )
+            return (
+                f"{name_transform(expression.verb.identifier)}({left}, {right})",
+                _ATOM_PRECEDENCE,
+                "call",
+            )
         scan = insert_scan_spelling(expression.verb)
         if scan in {"+", "-"}:
             width = integer_value(expression.left)

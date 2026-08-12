@@ -46,6 +46,14 @@ def test_direct_named_monadic_verb_application() -> None:
     assert isinstance(expression.operand, NumberLiteral)
 
 
+def test_direct_named_dyadic_verb_application() -> None:
+    expression = parse_expression("3 lincomb 5")
+
+    assert isinstance(expression, DyadicApply)
+    assert isinstance(expression.verb, NamedVerb)
+    assert expression.verb.identifier == "lincomb"
+
+
 def test_amendment_replacement_name_remains_a_noun() -> None:
     expression = parse_expression("new ((<1 2 ; 0 3)}) a")
 

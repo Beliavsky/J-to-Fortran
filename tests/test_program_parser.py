@@ -60,6 +60,15 @@ def test_nested_conditionals_parse() -> None:
     assert outer.else_body is not None
 
 
+def test_dyadic_explicit_verb_has_x_and_y_arguments() -> None:
+    source = "lincomb =: 4 : 0\n  x + 2 * y\n)\n"
+    program = xj2f.parse_j_source(Path("lincomb.ijs"), source)
+    verb = program.items[0]
+
+    assert isinstance(verb, xj2f.VerbDefinition)
+    assert verb.arguments == ("x", "y")
+
+
 def test_stray_else_is_rejected_at_its_source_line() -> None:
     source = "f =: 3 : 0\n  else.\n    0\n  end.\n)\n"
 

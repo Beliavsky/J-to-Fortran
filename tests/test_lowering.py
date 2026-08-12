@@ -97,6 +97,18 @@ def test_direct_named_monadic_verb_lowers_to_a_function_call() -> None:
     ) == "square(7)"
 
 
+def test_direct_named_dyadic_verb_lowers_to_a_function_call() -> None:
+    expression = parse_expression("3 lincomb 5")
+    verbs = {"lincomb": TypeInfo(AtomType.INTEGER)}
+
+    assert infer_type(expression, {}, named_verbs=verbs) == TypeInfo(
+        AtomType.INTEGER
+    )
+    assert render_fortran_expression(
+        expression, names={}, named_verbs=verbs
+    ) == "lincomb(3, 5)"
+
+
 def test_general_integer_copy_keeps_runtime_helper() -> None:
     expression = parse_expression("counts # nums")
     names = {
