@@ -71,6 +71,53 @@ def test_j_division_converts_integer_numerator_to_real() -> None:
     )
 
 
+@pytest.mark.parametrize(
+    ("left", "right", "expected_type", "expected_fortran"),
+    [
+        (
+            TypeInfo(AtomType.INTEGER, Shape.vector(3)),
+            TypeInfo(AtomType.INTEGER, Shape.vector(3)),
+            TypeInfo(AtomType.INTEGER),
+            "dot_product(a, b)",
+        ),
+        (
+            TypeInfo(AtomType.INTEGER, Shape.matrix(2, 3)),
+            TypeInfo(AtomType.INTEGER, Shape.vector(3)),
+            TypeInfo(AtomType.INTEGER, Shape.vector(2)),
+            "matmul(a, b)",
+        ),
+        (
+            TypeInfo(AtomType.INTEGER, Shape.matrix(2, 3)),
+            TypeInfo(AtomType.INTEGER, Shape.matrix(3, 4)),
+            TypeInfo(AtomType.INTEGER, Shape.matrix(2, 4)),
+            "matmul(a, b)",
+        ),
+    ],
+)
+def test_sum_product_inner_product_uses_fortran_intrinsics(
+    left: TypeInfo,
+    right: TypeInfo,
+    expected_type: TypeInfo,
+    expected_fortran: str,
+) -> None:
+    expression = parse_expression("a (+/ . *) b")
+    names = {"a": left, "b": right}
+
+    assert infer_type(expression, names) == expected_type
+    assert render_fortran_expression(expression, names=names) == expected_fortran
+
+
+def test_inner_product_rejects_mismatched_contracted_extents() -> None:
+    expression = parse_expression("a (+/ . *) b")
+    names = {
+        "a": TypeInfo(AtomType.INTEGER, Shape.matrix(2, 3)),
+        "b": TypeInfo(AtomType.INTEGER, Shape.vector(4)),
+    }
+
+    with pytest.raises(LoweringError, match="contracted extents differ: 3 versus 4"):
+        infer_type(expression, names)
+
+
 def test_prime_expression_primitives_lower_generically() -> None:
     names = {
         "limit": TypeInfo(AtomType.INTEGER),

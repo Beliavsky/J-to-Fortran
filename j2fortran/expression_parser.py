@@ -13,6 +13,7 @@ from .ast import (
     Expression,
     ForkVerb,
     Group,
+    InnerProductVerb,
     MonadicApply,
     Name,
     NamedVerb,
@@ -177,6 +178,25 @@ class ExpressionParser:
                 selector,
                 _cover(_token_span(token), _token_span(closing)),
             )
+        if token.kind is TokenKind.LPAREN and self._inner_product_end(self.index) is not None:
+            opening = self._take()
+            reduction = self._verb()
+            if (
+                self.index >= len(self.tokens)
+                or self._peek().kind is not TokenKind.PRIMITIVE
+                or self._peek().value != "."
+            ):
+                raise ExpressionParseError("inner product requires '.'", opening)
+            self._take()
+            product = self._verb()
+            if self.index >= len(self.tokens) or self._peek().kind is not TokenKind.RPAREN:
+                raise ExpressionParseError("unclosed inner-product verb", opening)
+            closing = self._take()
+            return InnerProductVerb(
+                reduction,
+                product,
+                _cover(_token_span(opening), _token_span(closing)),
+            )
         if token.kind is TokenKind.NAME:
             self._take()
             verb: Verb = NamedVerb(token.value, _token_span(token))
@@ -215,6 +235,8 @@ class ExpressionParser:
         token = self._peek()
         if self._amend_verb_end(self.index) is not None:
             return True
+        if self._inner_product_end(self.index) is not None:
+            return True
         if token.kind is TokenKind.PRIMITIVE:
             return token.value not in _ADVERBS | {'"'}
         if token.kind is not TokenKind.NAME or self.index + 1 >= len(self.tokens):
@@ -224,7 +246,10 @@ class ExpressionParser:
             return True
         if (
             following.kind is TokenKind.LPAREN
-            and self._amend_verb_end(self.index + 1) is not None
+            and (
+                self._amend_verb_end(self.index + 1) is not None
+                or self._inner_product_end(self.index + 1) is not None
+            )
         ):
             return False
         return following.kind in {
@@ -251,6 +276,27 @@ class ExpressionParser:
                 if closing < len(self.tokens) and self.tokens[closing].kind is TokenKind.RPAREN:
                     return index, closing
                 return None
+        return None
+
+    def _inner_product_end(self, start: int) -> int | None:
+        if start >= len(self.tokens) or self.tokens[start].kind is not TokenKind.LPAREN:
+            return None
+        depth = 0
+        has_dot = False
+        for index in range(start + 1, len(self.tokens)):
+            token = self.tokens[index]
+            if token.kind is TokenKind.LPAREN:
+                depth += 1
+            elif token.kind is TokenKind.RPAREN:
+                if depth == 0:
+                    return index if has_dot else None
+                depth -= 1
+            elif (
+                depth == 0
+                and token.kind is TokenKind.PRIMITIVE
+                and token.value == "."
+            ):
+                has_dot = True
         return None
 
     def _peek(self) -> Token:
@@ -283,6 +329,14 @@ class ExpressionParser:
             return " ".join(
                 ExpressionParser._verb_name(item)
                 for item in (verb.left, verb.center, verb.right)
+            )
+        if isinstance(verb, InnerProductVerb):
+            return (
+                "("
+                + ExpressionParser._verb_name(verb.reduction)
+                + " . "
+                + ExpressionParser._verb_name(verb.product)
+                + ")"
             )
         return ExpressionParser._verb_name(verb.operand) + '"' + verb.rank.text
 

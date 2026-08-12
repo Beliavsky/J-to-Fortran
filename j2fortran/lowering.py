@@ -12,6 +12,7 @@ from .ast import (
     DyadicApply,
     Expression,
     Group,
+    InnerProductVerb,
     MonadicApply,
     Name,
     NamedVerb,
@@ -82,6 +83,18 @@ def reflex_table_spelling(verb: Verb) -> str | None:
     if not isinstance(verb, AdverbApplication) or verb.adverb != "~":
         return None
     return table_spelling(verb.operand)
+
+
+def is_sum_product(verb: Verb) -> bool:
+    if not isinstance(verb, InnerProductVerb):
+        return False
+    reduction = verb.reduction
+    return (
+        isinstance(reduction, AdverbApplication)
+        and reduction.adverb == "/"
+        and primitive_spelling(reduction.operand) == "+"
+        and primitive_spelling(verb.product) == "*"
+    )
 
 
 def ranked_reduction_spelling(verb: Verb) -> str | None:
@@ -691,6 +704,48 @@ def infer_type(
                 raise LoweringError(
                     f"type of verb {expression.verb.identifier!r} is unknown"
                 ) from exc
+        if is_sum_product(expression.verb):
+            left_type = infer_type(
+                expression.left, names, name_transform, named_verbs=named_verbs
+            )
+            right_type = infer_type(
+                expression.right, names, name_transform, named_verbs=named_verbs
+            )
+            if left_type.rank not in {1, 2} or right_type.rank not in {1, 2}:
+                raise LoweringError(
+                    "sum-product inner product requires vector or matrix arguments"
+                )
+            if left_type.atom_type not in {AtomType.INTEGER, AtomType.REAL} or (
+                right_type.atom_type not in {AtomType.INTEGER, AtomType.REAL}
+            ):
+                raise LoweringError("sum-product inner product requires numeric arguments")
+            contracted_left = left_type.shape.extents[-1]
+            contracted_right = right_type.shape.extents[0]
+            if (
+                isinstance(contracted_left, int)
+                and isinstance(contracted_right, int)
+                and contracted_left != contracted_right
+            ):
+                raise LoweringError(
+                    "inner-product contracted extents differ: "
+                    f"{contracted_left} versus {contracted_right}"
+                )
+            atom_type = (
+                AtomType.REAL
+                if AtomType.REAL in {left_type.atom_type, right_type.atom_type}
+                else AtomType.INTEGER
+            )
+            if left_type.rank == 1 and right_type.rank == 1:
+                shape = Shape.scalar()
+            elif left_type.rank == 2 and right_type.rank == 2:
+                shape = Shape.matrix(
+                    left_type.shape.extents[0], right_type.shape.extents[1]
+                )
+            elif left_type.rank == 2:
+                shape = Shape.vector(left_type.shape.extents[0])
+            else:
+                shape = Shape.vector(right_type.shape.extents[1])
+            return TypeInfo(atom_type, shape)
         scan = insert_scan_spelling(expression.verb)
         if scan in {"+", "-"}:
             left_type = infer_type(
@@ -1348,7 +1403,10 @@ def _render_fortran_expression(
                 right_requires += 1
         right = _parenthesize(right, right_precedence, right_requires)
         return f"{left} {operator} {right}", precedence, operator
-    if isinstance(expression, (AdverbApplication, RankApplication, PrimitiveVerb)):
+    if isinstance(
+        expression,
+        (AdverbApplication, InnerProductVerb, RankApplication, PrimitiveVerb),
+    ):
         raise LoweringError("a verb cannot be rendered as a noun expression")
     raise LoweringError(f"cannot render {type(expression).__name__}")
 
@@ -1364,6 +1422,38 @@ def render_fortran_expression(
         raise LoweringError(
             "amendment currently requires a top-level assignment context"
         )
+    bare_expression = ungroup(expression)
+    if (
+        isinstance(bare_expression, DyadicApply)
+        and is_sum_product(bare_expression.verb)
+        and names is not None
+    ):
+        left_type = infer_type(
+            bare_expression.left,
+            names,
+            name_transform,
+            named_verbs=named_verbs,
+        )
+        right_type = infer_type(
+            bare_expression.right,
+            names,
+            name_transform,
+            named_verbs=named_verbs,
+        )
+        left = render_fortran_expression(
+            bare_expression.left,
+            name_transform,
+            names=names,
+            named_verbs=named_verbs,
+        )
+        right = render_fortran_expression(
+            bare_expression.right,
+            name_transform,
+            names=names,
+            named_verbs=named_verbs,
+        )
+        intrinsic = "dot_product" if left_type.rank == right_type.rank == 1 else "matmul"
+        return f"{intrinsic}({left}, {right})"
     divided = dyad(expression, "%")
     if divided is not None and names is not None:
         left_type = infer_type(
@@ -1378,7 +1468,6 @@ def render_fortran_expression(
         if left_type.atom_type is AtomType.INTEGER:
             left = f"real({left}, kind=real64)"
         return f"{left} / {right}"
-    bare_expression = ungroup(expression)
     if (
         isinstance(bare_expression, MonadicApply)
         and isinstance(bare_expression.verb, AdverbApplication)

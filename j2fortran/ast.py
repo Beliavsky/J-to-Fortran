@@ -100,6 +100,13 @@ class ForkVerb:
     span: SourceSpan
 
 
+@dataclass(frozen=True, slots=True)
+class InnerProductVerb:
+    reduction: Verb
+    product: Verb
+    span: SourceSpan
+
+
 Verb: TypeAlias = (
     AmendVerb
     | NamedVerb
@@ -109,6 +116,7 @@ Verb: TypeAlias = (
     | BondVerb
     | AtopVerb
     | ForkVerb
+    | InnerProductVerb
 )
 
 

@@ -10,6 +10,7 @@ from j2fortran.ast import (
     DyadicApply,
     ForkVerb,
     Group,
+    InnerProductVerb,
     MonadicApply,
     Name,
     NamedVerb,
@@ -64,6 +65,15 @@ def test_parse_tacit_fork_verb_phrase() -> None:
     assert primitive(verb.left) == "+"
     assert primitive(verb.center) == "%"
     assert primitive(verb.right) == "#"
+
+
+def test_parse_parenthesized_sum_product_verb() -> None:
+    expression = parse_expression("a (+/ . *) b")
+
+    assert isinstance(expression, DyadicApply)
+    assert isinstance(expression.verb, InnerProductVerb)
+    assert primitive(expression.verb.reduction) == "+"
+    assert primitive(expression.verb.product) == "*"
 
 
 def test_ranked_named_verb_application() -> None:
