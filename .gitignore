@@ -11,3 +11,4 @@ build_*/
 build*_output.txt
 dist/
 *.egg-info/
+jj.bat
