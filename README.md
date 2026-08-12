@@ -110,6 +110,7 @@ The parser currently recognizes:
 - vector reverse and constant rotate, plus rank-2 transpose;
 - integer-vector grade up and ascending or descending sort;
 - stable integer nub, membership, and zero-based index-of;
+- vector sum, product, minimum, maximum, Boolean-any, and Boolean-all reductions;
 - constant multidimensional `{` selection through rank 3: scalar coordinates,
   leading-axis rows, independent vector selectors, negative indices, and slices;
 - top-level noun-derived `}` amendment with scalar or conforming array values;

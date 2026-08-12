@@ -429,14 +429,32 @@ def infer_type(
                 ):
                     raise LoweringError("sort currently requires an integer vector")
                 return operand_type
-            if expression.verb.adverb == "/" and reduction == "+.":
-                if operand_type.atom_type is not AtomType.LOGICAL:
-                    raise LoweringError("Boolean OR reduction requires a logical operand")
+            if expression.verb.adverb == "/" and reduction in {
+                "+",
+                "*",
+                "<.",
+                ">.",
+                "+.",
+                "*.",
+            }:
                 if operand_type.rank != 1:
+                    raise LoweringError("reduction currently requires a vector")
+                if reduction in {"+.", "*."}:
+                    if operand_type.atom_type is not AtomType.LOGICAL:
+                        raise LoweringError(
+                            "Boolean reduction requires a logical operand"
+                        )
+                    return TypeInfo(AtomType.LOGICAL)
+                if operand_type.atom_type not in {
+                    AtomType.INTEGER,
+                    AtomType.REAL,
+                }:
+                    raise LoweringError("numeric reduction requires a numeric operand")
+                if reduction in {"<.", ">."} and operand_type.shape.extents[0] == 0:
                     raise LoweringError(
-                        "Boolean OR reduction currently requires a rank-1 operand"
+                        "minimum and maximum reduction require a nonempty vector"
                     )
-                return TypeInfo(AtomType.LOGICAL)
+                return TypeInfo(operand_type.atom_type)
             raise LoweringError(
                 "cannot infer the result type of this adverb-derived verb"
             )
@@ -678,9 +696,13 @@ def infer_type(
                 left_type.atom_type is AtomType.LOGICAL
                 and right_type.atom_type is AtomType.LOGICAL
             )
-            if not (both_numeric or both_logical):
+            logical_integer = {
+                left_type.atom_type,
+                right_type.atom_type,
+            } == {AtomType.LOGICAL, AtomType.INTEGER}
+            if not (both_numeric or both_logical or logical_integer):
                 raise LoweringError(
-                    "match requires two numeric arrays or two logical arrays"
+                    "match requires compatible numeric or logical arrays"
                 )
             return TypeInfo(AtomType.LOGICAL)
         try:
@@ -865,11 +887,26 @@ def _render_fortran_expression(
                     _ATOM_PRECEDENCE,
                     "call",
                 )
-            if expression.verb.adverb == "/" and reduction == "+.":
+            if expression.verb.adverb == "/" and reduction in {
+                "+",
+                "*",
+                "<.",
+                ">.",
+                "+.",
+                "*.",
+            }:
                 operand, _, _ = _render_fortran_expression(
                     expression.operand, name_transform
                 )
-                return f"any({operand})", _ATOM_PRECEDENCE, "call"
+                intrinsic = {
+                    "+": "sum",
+                    "*": "product",
+                    "<.": "minval",
+                    ">.": "maxval",
+                    "+.": "any",
+                    "*.": "all",
+                }[reduction]
+                return f"{intrinsic}({operand})", _ATOM_PRECEDENCE, "call"
             raise LoweringError("this adverb-derived verb needs a dedicated lowering rule")
         spelling = primitive_spelling(expression.verb)
         operand, operand_precedence, _ = _render_fortran_expression(
@@ -1154,7 +1191,12 @@ def render_fortran_expression(
                 right = f"real({right}, kind=real64)"
             comparison = f"j_match_real({left}, {right})"
         elif left_type.atom_type is AtomType.LOGICAL:
-            comparison = f"{left} .eqv. {right}"
+            if right_type.atom_type is AtomType.LOGICAL:
+                comparison = f"{left} .eqv. {right}"
+            else:
+                comparison = f"merge(1, 0, {left}) == {right}"
+        elif right_type.atom_type is AtomType.LOGICAL:
+            comparison = f"{left} == merge(1, 0, {right})"
         else:
             comparison = f"{left} == {right}"
         return comparison if left_type.is_scalar else f"all({comparison})"

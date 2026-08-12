@@ -150,14 +150,14 @@ def test_mixed_integer_real_match_converts_only_the_integer_operand() -> None:
     )
 
 
-def test_match_does_not_mix_logical_and_numeric_atoms() -> None:
+def test_match_does_not_mix_logical_and_real_atoms_yet() -> None:
     expression = parse_expression("logical_value -: integer_value")
     names = {
         "logical_value": TypeInfo(AtomType.LOGICAL),
-        "integer_value": TypeInfo(AtomType.INTEGER),
+        "integer_value": TypeInfo(AtomType.REAL),
     }
 
-    with pytest.raises(LoweringError, match="numeric arrays or two logical"):
+    with pytest.raises(LoweringError, match="compatible numeric or logical"):
         infer_type(expression, names)
 
 
@@ -172,6 +172,43 @@ def test_logical_match_uses_fortran_logical_equivalence() -> None:
     assert render_fortran_expression(expression, names=names) == (
         "all(result .eqv. expected)"
     )
+
+
+def test_logical_integer_match_uses_exact_zero_one_conversion() -> None:
+    expression = parse_expression("result -: expected")
+    names = {
+        "result": TypeInfo(AtomType.LOGICAL),
+        "expected": TypeInfo(AtomType.INTEGER),
+    }
+
+    assert infer_type(expression, names) == TypeInfo(AtomType.LOGICAL)
+    assert render_fortran_expression(expression, names=names) == (
+        "merge(1, 0, result) == expected"
+    )
+
+
+@pytest.mark.parametrize(
+    ("source", "operand_atom", "result_atom", "expected_fortran"),
+    [
+        ("+/ a", AtomType.INTEGER, AtomType.INTEGER, "sum(a)"),
+        ("*/ a", AtomType.INTEGER, AtomType.INTEGER, "product(a)"),
+        ("<./ a", AtomType.INTEGER, AtomType.INTEGER, "minval(a)"),
+        (">./ a", AtomType.INTEGER, AtomType.INTEGER, "maxval(a)"),
+        ("+./ a", AtomType.LOGICAL, AtomType.LOGICAL, "any(a)"),
+        ("*./ a", AtomType.LOGICAL, AtomType.LOGICAL, "all(a)"),
+    ],
+)
+def test_vector_reductions_use_fortran_intrinsics(
+    source: str,
+    operand_atom: AtomType,
+    result_atom: AtomType,
+    expected_fortran: str,
+) -> None:
+    expression = parse_expression(source)
+    names = {"a": TypeInfo(operand_atom, Shape.vector(4))}
+
+    assert infer_type(expression, names) == TypeInfo(result_atom)
+    assert render_fortran_expression(expression, names=names) == expected_fortran
 
 
 def test_real_literals_use_the_declared_fortran_kind() -> None:
