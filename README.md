@@ -271,8 +271,8 @@ The emitter applies these rules to generated procedures:
   `error stop` assertion so corpus programs cannot pass through empty output.
 
 The reserved-name policy, conservative elemental eligibility checks, and
-declaration-grouping approach are adapted from the sibling C-to-Fortran and
-R-to-Fortran `fortran_scan.py` and `fortran_post.py` implementations. They are
+declaration-grouping approach are adapted from the sibling [C-to-Fortran](https://github.com/Beliavsky/C-to-Fortran) and
+[R-to-Fortran](https://github.com/beliavsky/r-to-fortran) `fortran_scan.py` and `fortran_post.py` implementations. They are
 implemented locally so `xj2f` does not depend on either neighboring project.
 
 ## Architecture
