@@ -120,6 +120,13 @@ class ForLoop:
 
 
 @dataclasses.dataclass(frozen=True)
+class WhileLoop:
+    line: SourceLine
+    condition: str
+    body: tuple[Statement, ...]
+
+
+@dataclasses.dataclass(frozen=True)
 class ElseIfBranch:
     line: SourceLine
     condition: str
@@ -141,7 +148,7 @@ class ExpressionStatement:
     expression: str
 
 
-Statement = Assign | ForLoop | IfStatement | ExpressionStatement
+Statement = Assign | ForLoop | WhileLoop | IfStatement | ExpressionStatement
 
 
 @dataclasses.dataclass(frozen=True)
@@ -208,6 +215,7 @@ class Parser:
     _for = re.compile(
         r"^for_([A-Za-z][A-Za-z0-9_]*)\.\s+(.+?)\s+do\.\s*$"
     )
+    _while = re.compile(r"^while\.\s+(.+?)\s+do\.\s*$")
     _if = re.compile(r"^if\.\s+(.+?)\s+do\.\s*$")
     _elseif = re.compile(r"^elseif\.\s+(.+?)\s+do\.\s*$")
 
@@ -291,6 +299,15 @@ class Parser:
                 body = self._parse_statements({"end."})
                 self._expect("end.", line, f"for_{loop.group(1)}. loop")
                 statements.append(ForLoop(line, loop.group(1), loop.group(2), tuple(body)))
+                continue
+            while_loop = self._while.fullmatch(text)
+            if while_loop:
+                self.index += 1
+                body = self._parse_statements({"end."})
+                self._expect("end.", line, "while. loop")
+                statements.append(
+                    WhileLoop(line, while_loop.group(1), tuple(body))
+                )
                 continue
             conditional = self._if.fullmatch(text)
             if conditional:
@@ -529,6 +546,8 @@ class FunctionEmitter:
             self._emit_assignment(statement)
         elif isinstance(statement, ForLoop):
             self._emit_loop(statement)
+        elif isinstance(statement, WhileLoop):
+            self._emit_while(statement)
         elif isinstance(statement, IfStatement):
             self._emit_if(statement)
         else:
@@ -637,6 +656,15 @@ class FunctionEmitter:
         except LoweringError as exc:
             raise _error_at(UnsupportedJError, loop.line, str(exc)) from exc
         self._write(f"do {variable} = 1, {upper}")
+        self.indent += 1
+        for statement in loop.body:
+            self._emit_statement(statement)
+        self.indent -= 1
+        self._write("end do")
+
+    def _emit_while(self, loop: WhileLoop) -> None:
+        condition = self._render_condition(loop.condition, loop.line)
+        self._write(f"do while ({condition})")
         self.indent += 1
         for statement in loop.body:
             self._emit_statement(statement)
@@ -1560,6 +1588,11 @@ def expression_ast_report(program: Program) -> dict[str, object]:
             role = "for"
             expression = statement.expression
             extra = {"variable": statement.variable}
+            children = [statement_report(child) for child in statement.body]
+        elif isinstance(statement, WhileLoop):
+            role = "while"
+            expression = statement.condition
+            extra = {}
             children = [statement_report(child) for child in statement.body]
         elif isinstance(statement, IfStatement):
             role = "if"

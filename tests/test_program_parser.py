@@ -80,6 +80,34 @@ def test_conditionless_elseif_is_the_default_branch() -> None:
     assert conditional.else_body is not None
 
 
+def test_while_loop_parses_as_structured_control_flow() -> None:
+    source = """sumto =: 3 : 0
+  n =. y
+  s =. 0
+  while. n > 0 do.
+    s =. s + n
+    n =. n - 1
+  end.
+  s
+)
+"""
+    program = xj2f.parse_j_source(Path("sumto.ijs"), source)
+    verb = program.items[0]
+    assert isinstance(verb, xj2f.VerbDefinition)
+    loop = verb.body[2]
+    assert isinstance(loop, xj2f.WhileLoop)
+    assert loop.condition == "n > 0"
+    assert len(loop.body) == 2
+
+
+def test_while_loop_is_included_in_expression_report() -> None:
+    source = "f =: 3 : 0\n  while. y > 0 do.\n    y =. y - 1\n  end.\n  y\n)\n"
+    program = xj2f.parse_j_source(Path("loop.ijs"), source)
+    report = xj2f.expression_ast_report(program)
+
+    assert report["verbs"][0]["body"][0]["role"] == "while"
+
+
 def test_dyadic_explicit_verb_has_x_and_y_arguments() -> None:
     source = "lincomb =: 4 : 0\n  x + 2 * y\n)\n"
     program = xj2f.parse_j_source(Path("lincomb.ijs"), source)
