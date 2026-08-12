@@ -388,7 +388,7 @@ def test_prime_expression_primitives_lower_generically() -> None:
     assert infer_type(primality, names) == TypeInfo(AtomType.LOGICAL)
     assert (
         render_fortran_expression(primality)
-        == ".not. any(0 == modulo(y, divisors), dim=1)"
+        == ".not. any(0 == modulo(y, divisors))"
     )
 
 
@@ -554,14 +554,14 @@ def test_nested_matches_render_inside_logical_expressions() -> None:
 @pytest.mark.parametrize(
     ("source", "operand_atom", "result_atom", "expected_fortran"),
     [
-        ("+/ a", AtomType.INTEGER, AtomType.INTEGER, "sum(a, dim=1)"),
-        ("*/ a", AtomType.INTEGER, AtomType.INTEGER, "product(a, dim=1)"),
-        ("+/ a", AtomType.COMPLEX, AtomType.COMPLEX, "sum(a, dim=1)"),
-        ("*/ a", AtomType.COMPLEX, AtomType.COMPLEX, "product(a, dim=1)"),
-        ("<./ a", AtomType.INTEGER, AtomType.INTEGER, "minval(a, dim=1)"),
-        (">./ a", AtomType.INTEGER, AtomType.INTEGER, "maxval(a, dim=1)"),
-        ("+./ a", AtomType.LOGICAL, AtomType.LOGICAL, "any(a, dim=1)"),
-        ("*./ a", AtomType.LOGICAL, AtomType.LOGICAL, "all(a, dim=1)"),
+        ("+/ a", AtomType.INTEGER, AtomType.INTEGER, "sum(a)"),
+        ("*/ a", AtomType.INTEGER, AtomType.INTEGER, "product(a)"),
+        ("+/ a", AtomType.COMPLEX, AtomType.COMPLEX, "sum(a)"),
+        ("*/ a", AtomType.COMPLEX, AtomType.COMPLEX, "product(a)"),
+        ("<./ a", AtomType.INTEGER, AtomType.INTEGER, "minval(a)"),
+        (">./ a", AtomType.INTEGER, AtomType.INTEGER, "maxval(a)"),
+        ("+./ a", AtomType.LOGICAL, AtomType.LOGICAL, "any(a)"),
+        ("*./ a", AtomType.LOGICAL, AtomType.LOGICAL, "all(a)"),
     ],
 )
 def test_vector_reductions_use_fortran_intrinsics(
@@ -599,14 +599,27 @@ def test_integer_scans_use_regular_loop_helpers(
     assert required_runtime_helpers(expression, names) == {helper}
 
 
-def test_matrix_insert_reduces_the_leading_axis() -> None:
-    expression = parse_expression("+/ a")
-    names = {"a": TypeInfo(AtomType.INTEGER, Shape.matrix(2, 3))}
+@pytest.mark.parametrize(
+    ("source", "atom_type", "expected_fortran"),
+    [
+        ("+/ a", AtomType.INTEGER, "sum(a, dim=1)"),
+        ("*/ a", AtomType.INTEGER, "product(a, dim=1)"),
+        ("<./ a", AtomType.INTEGER, "minval(a, dim=1)"),
+        (">./ a", AtomType.INTEGER, "maxval(a, dim=1)"),
+        ("+./ a", AtomType.LOGICAL, "any(a, dim=1)"),
+        ("*./ a", AtomType.LOGICAL, "all(a, dim=1)"),
+    ],
+)
+def test_matrix_insert_reduces_the_leading_axis(
+    source: str, atom_type: AtomType, expected_fortran: str
+) -> None:
+    expression = parse_expression(source)
+    names = {"a": TypeInfo(atom_type, Shape.matrix(2, 3))}
 
     assert infer_type(expression, names) == TypeInfo(
-        AtomType.INTEGER, Shape.vector(3)
+        atom_type, Shape.vector(3)
     )
-    assert render_fortran_expression(expression, names=names) == "sum(a, dim=1)"
+    assert render_fortran_expression(expression, names=names) == expected_fortran
 
 
 @pytest.mark.parametrize(

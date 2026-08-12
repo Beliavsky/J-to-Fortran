@@ -576,7 +576,12 @@ def infer_type(
                         raise LoweringError(
                             "Boolean reduction requires a logical operand"
                         )
-                    return TypeInfo(AtomType.LOGICAL)
+                    result_shape = (
+                        Shape.scalar()
+                        if operand_type.rank == 1
+                        else Shape.vector(operand_type.shape.extents[1])
+                    )
+                    return TypeInfo(AtomType.LOGICAL, result_shape)
                 if reduction == "+" and operand_type.atom_type is AtomType.LOGICAL:
                     result_shape = (
                         Shape.scalar()
@@ -1368,7 +1373,7 @@ def _render_fortran_expression(
                     "+.": "any",
                     "*.": "all",
                 }[reduction]
-                return f"{intrinsic}({operand}, dim=1)", _ATOM_PRECEDENCE, "call"
+                return f"{intrinsic}({operand})", _ATOM_PRECEDENCE, "call"
             raise LoweringError("this adverb-derived verb needs a dedicated lowering rule")
         spelling = primitive_spelling(expression.verb)
         operand, operand_precedence, _ = _render_fortran_expression(
@@ -1828,23 +1833,34 @@ def render_fortran_expression(
         isinstance(bare_expression, MonadicApply)
         and isinstance(bare_expression.verb, AdverbApplication)
         and bare_expression.verb.adverb == "/"
-        and primitive_spelling(bare_expression.verb.operand) == "+"
         and names is not None
     ):
+        reduction = primitive_spelling(bare_expression.verb.operand)
         operand_type = infer_type(
             bare_expression.operand,
             names,
             name_transform,
             named_verbs=named_verbs,
         )
-        if operand_type.atom_type is AtomType.LOGICAL:
+        if reduction in {"+", "*", "<.", ">.", "+.", "*."}:
             operand = render_fortran_expression(
                 bare_expression.operand,
                 name_transform,
                 names=names,
                 named_verbs=named_verbs,
             )
-            return f"sum(merge(1, 0, {operand}), dim=1)"
+            if reduction == "+" and operand_type.atom_type is AtomType.LOGICAL:
+                operand = f"merge(1, 0, {operand})"
+            intrinsic = {
+                "+": "sum",
+                "*": "product",
+                "<.": "minval",
+                ">.": "maxval",
+                "+.": "any",
+                "*.": "all",
+            }[reduction]
+            dimension = "" if operand_type.rank == 1 else ", dim=1"
+            return f"{intrinsic}({operand}{dimension})"
     selection = match_index_selection(expression)
     if selection is not None and names is not None:
         source_type = infer_type(

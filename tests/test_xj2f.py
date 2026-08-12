@@ -237,8 +237,8 @@ def test_complex_vector_arithmetic_emits_complex_arrays() -> None:
     assert "conjugated = conjg(result_j)" in generated
     assert "negated = -result_j" in generated
     assert "squared = result_j**2" in generated
-    assert "total = sum(conjugated, dim=1)" in generated
-    assert "combined = product(conjugated, dim=1)" in generated
+    assert "total = sum(conjugated)" in generated
+    assert "combined = product(conjugated)" in generated
     assert "ok = all(conjugated == conjugated_expected) .and. " in generated
 
 

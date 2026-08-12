@@ -175,7 +175,7 @@ ok =: result -: expected
 
     assert "pure function countpos(y) result(j_result)" in generated
     assert "integer, intent(in) :: y(:)" in generated
-    assert "j_result = sum(merge(1, 0, y > 0), dim=1)" in generated
+    assert "j_result = sum(merge(1, 0, y > 0))" in generated
 
 
 def test_tacit_reflex_verb_swaps_dyadic_arguments() -> None:
@@ -218,7 +218,7 @@ ok =: result -: expected
 @pytest.mark.parametrize(
     ("definition", "call", "expected_expression"),
     [
-        ("sumsq =: +/ @: *:", "sumsq 1 2 3 4", "sum(y**2, dim=1)"),
+        ("sumsq =: +/ @: *:", "sumsq 1 2 3 4", "sum(y**2)"),
         ("f =: *: @: >:", "f 1 2 3 4", "(y + 1)**2"),
     ],
 )
@@ -249,7 +249,7 @@ ok =: result -: expected
     assert isinstance(program.items[0], xj2f.TacitVerbDefinition)
     assert "pure function mean(y) result(j_result)" in generated
     assert "real(kind=real64) :: j_result" in generated
-    assert "j_result = real(sum(y, dim=1), kind=real64) / size(y, 1)" in generated
+    assert "j_result = real(sum(y), kind=real64) / size(y, 1)" in generated
 
 
 def test_tacit_call_infers_rank_from_a_preceding_top_level_noun() -> None:
@@ -362,7 +362,7 @@ def test_isprime_body_lowers_to_intrinsics_and_iota_helper() -> None:
     assert "j_result = .true." in generated
     assert "limit = floor(sqrt(real(y, kind=real64)))" in generated
     assert "divisors = 2 + j_iota(limit - 1)" in generated
-    assert "j_result = .not. any(0 == modulo(y, divisors), dim=1)" in generated
+    assert "j_result = .not. any(0 == modulo(y, divisors))" in generated
     assert "pure function j_iota(n) result(values)" in generated
     assert "allocate(values(n))" in generated
     assert "do value_index = 1, n" in generated

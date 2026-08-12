@@ -84,7 +84,7 @@ pure function sumsq(y) result(j_result)
 
   ! *: squares each item and +/ sums the result.
   ! J: +/ *: y
-  j_result = sum(y**2, dim=1)
+  j_result = sum(y**2)
 end function sumsq
 
 program sumsq_j
