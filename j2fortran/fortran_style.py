@@ -55,9 +55,14 @@ FORTRAN_AVOIDED_IDENTIFIERS = FORTRAN_KEYWORDS | FORTRAN_COMMON_INTRINSICS | {"m
 def safe_fortran_identifier(name: str) -> str:
     """Return a readable Fortran identifier that avoids policy collisions."""
 
+    uppercase_positions = [
+        str(index + 1) for index, character in enumerate(name) if character.isupper()
+    ]
     cleaned = re.sub(r"[^A-Za-z0-9_]", "_", name).lower()
     if not cleaned or not cleaned[0].isalpha():
         cleaned = "j_" + cleaned
+    if uppercase_positions:
+        cleaned += "_uppercase_" + "_".join(uppercase_positions)
     if cleaned in FORTRAN_AVOIDED_IDENTIFIERS:
         cleaned += "_j"
     return cleaned

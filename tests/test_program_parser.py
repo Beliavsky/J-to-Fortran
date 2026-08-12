@@ -347,6 +347,22 @@ exit 0
     assert 'write (*,"(*(i0, 1x))")' in generated
 
 
+def test_j_names_that_differ_only_by_case_remain_distinct() -> None:
+    source = """a =: 1 2 3
+A =: 4 5 6
+result =: a + A
+expected =: 5 7 9
+ok =: result -: expected
+"""
+
+    generated = xj2f.emit_fortran(
+        xj2f.parse_j_source(Path("case_names.ijs"), source)
+    )
+
+    assert "integer, allocatable :: a(:), a_uppercase_1(:)" in generated
+    assert "result_j = a + a_uppercase_1" in generated
+
+
 def test_tacit_call_infers_rank_from_a_preceding_top_level_noun() -> None:
     source = """mean =: +/ % #
 x =: 2 4 6 8

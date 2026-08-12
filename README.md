@@ -249,6 +249,9 @@ The emitter applies these rules to generated procedures:
 - J names that collide with Fortran construct words, selected common
   intrinsics, or explicitly avoided identifiers such as `mask` receive a
   readable `_j` suffix.
+- Because J names are case-sensitive and Fortran names are not, uppercase
+  positions are encoded in generated names; for example, `a` remains `a` while
+  `A` becomes `a_uppercase_1`.
 - Every generated `use` statement has an `only:` clause.
 - Printing a rank-2 result with a statically known column count uses one
   formatted `write` over its transpose, allowing format reversion to emit one

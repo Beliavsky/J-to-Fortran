@@ -17,6 +17,12 @@ def test_reserved_and_intrinsic_identifiers_are_renamed() -> None:
     assert safe_fortran_identifier("ordinary_name") == "ordinary_name"
 
 
+def test_uppercase_positions_preserve_j_case_distinctions() -> None:
+    assert safe_fortran_identifier("a") == "a"
+    assert safe_fortran_identifier("A") == "a_uppercase_1"
+    assert safe_fortran_identifier("FooBar") == "foobar_uppercase_1_4"
+
+
 def test_only_scalar_pure_procedures_are_elemental() -> None:
     assert procedure_prefix([0, 0], result_rank=0) == "pure elemental"
     assert procedure_prefix([0], result_rank=1) == "pure"
