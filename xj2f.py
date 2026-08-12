@@ -98,6 +98,7 @@ RUNTIME_PROCEDURES = {
     "factorial": "j_factorial",
     "grade_up_int": "j_grade_up_int",
     "infix_subtract_int": "j_infix_subtract_int",
+    "infix_max_int": "j_infix_max_int",
     "infix_sum_int": "j_infix_sum_int",
     "index_of_int": "j_index_of_int",
     "match_real": "j_match_real",
@@ -1312,6 +1313,23 @@ def _runtime_helpers(helpers: set[str]) -> list[str]:
                 "    sums(window_start) = sum(values(window_start:window_start + width - 1))",
                 "  end do",
                 "end function j_infix_sum_int",
+                "",
+            ]
+        )
+    if "infix_max_int" in helpers:
+        result.extend(
+            [
+                "pure function j_infix_max_int(values, width) result(maxima)",
+                "  integer, intent(in) :: values(:), width",
+                "  integer, allocatable :: maxima(:)",
+                "  integer :: window_start",
+                "",
+                '  if (width <= 0 .or. width > size(values)) error stop "invalid infix width"',
+                "  allocate(maxima(size(values) - width + 1))",
+                "  do window_start = 1, size(maxima)",
+                "    maxima(window_start) = maxval(values(window_start:window_start + width - 1))",
+                "  end do",
+                "end function j_infix_max_int",
                 "",
             ]
         )

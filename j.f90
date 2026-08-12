@@ -6,7 +6,8 @@ module j2f_runtime
   public :: j_cartesian_square, j_compress_hcat
   public :: j_copy_int_vector, j_factorial, j_grade_up_int, j_index_of_int
   public :: j_decode_int, j_encode_int
-  public :: j_infix_subtract_int, j_infix_sum_int, j_iota, j_match_real
+  public :: j_infix_max_int, j_infix_subtract_int, j_infix_sum_int
+  public :: j_iota, j_match_real
   public :: j_membership_int, j_multiplication_table_int, j_nub_int
   public :: j_power_table_int, j_prefix_max_int, j_prefix_product_int
   public :: j_prefix_sum_int
@@ -139,6 +140,18 @@ pure function j_infix_sum_int(values, width) result(sums)
     sums(window_start) = sum(values(window_start:window_start + width - 1))
   end do
 end function j_infix_sum_int
+
+pure function j_infix_max_int(values, width) result(maxima)
+  integer, intent(in) :: values(:), width
+  integer, allocatable :: maxima(:)
+  integer :: window_start
+
+  if (width <= 0 .or. width > size(values)) error stop "invalid infix width"
+  allocate(maxima(size(values) - width + 1))
+  do window_start = 1, size(maxima)
+    maxima(window_start) = maxval(values(window_start:window_start + width - 1))
+  end do
+end function j_infix_max_int
 
 pure function j_infix_subtract_int(values, width) result(differences)
   integer, intent(in) :: values(:), width

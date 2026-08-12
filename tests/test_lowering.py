@@ -584,6 +584,7 @@ def test_vector_reductions_use_fortran_intrinsics(
         ("*/\\ a", "j_prefix_product_int(a)", "prefix_product_int"),
         (">./\\ a", "j_prefix_max_int(a)", "prefix_max_int"),
         ("3 +/\\ a", "j_infix_sum_int(a, 3)", "infix_sum_int"),
+        ("4 >./\\ a", "j_infix_max_int(a, 4)", "infix_max_int"),
         ("2 -/\\ a", "j_infix_subtract_int(a, 2)", "infix_subtract_int"),
     ],
 )

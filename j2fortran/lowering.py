@@ -886,7 +886,7 @@ def infer_type(
                 shape = Shape.vector(right_type.shape.extents[1])
             return TypeInfo(atom_type, shape)
         scan = insert_scan_spelling(expression.verb)
-        if scan in {"+", "-"}:
+        if scan in {"+", "-", ">."}:
             left_type = infer_type(
                 expression.left, names, name_transform, named_verbs=named_verbs
             )
@@ -1563,7 +1563,7 @@ def _render_fortran_expression(
                 "call",
             )
         scan = insert_scan_spelling(expression.verb)
-        if scan in {"+", "-"}:
+        if scan in {"+", "-", ">."}:
             width = integer_value(expression.left)
             if width is None or width <= 0:
                 raise LoweringError(
@@ -1572,7 +1572,11 @@ def _render_fortran_expression(
             values, _, _ = _render_fortran_expression(
                 expression.right, name_transform
             )
-            helper = "j_infix_sum_int" if scan == "+" else "j_infix_subtract_int"
+            helper = {
+                "+": "j_infix_sum_int",
+                "-": "j_infix_subtract_int",
+                ">.": "j_infix_max_int",
+            }[scan]
             return f"{helper}({values}, {width})", _ATOM_PRECEDENCE, "call"
         table = table_spelling(expression.verb)
         if table in {"*", "^"}:
@@ -2322,6 +2326,8 @@ def required_runtime_helpers(
             helpers.add("infix_sum_int")
         if scan == "-":
             helpers.add("infix_subtract_int")
+        if scan == ">.":
+            helpers.add("infix_max_int")
         table = table_spelling(expression.verb)
         if table == "*":
             helpers.add("multiplication_table_int")
