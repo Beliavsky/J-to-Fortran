@@ -84,6 +84,8 @@ RUNTIME_PROCEDURES = {
     "cartesian": "j_cartesian_square",
     "compress_hcat": "j_compress_hcat",
     "copy_int_vector": "j_copy_int_vector",
+    "decode_int": "j_decode_int",
+    "encode_int": "j_encode_int",
     "iota": "j_iota",
     "factorial": "j_factorial",
     "grade_up_int": "j_grade_up_int",
@@ -1042,6 +1044,44 @@ class FunctionEmitter:
 
 def _runtime_helpers(helpers: set[str]) -> list[str]:
     result: list[str] = []
+    if "decode_int" in helpers:
+        result.extend(
+            [
+                "pure function j_decode_int(base, digits) result(value)",
+                "  integer, intent(in) :: base, digits(:)",
+                "  integer :: value",
+                "  integer :: digit_index",
+                "",
+                '  if (base <= 1) error stop "base decode requires base greater than one"',
+                '  if (any(digits < 0 .or. digits >= base)) error stop "invalid base digit"',
+                "  value = 0",
+                "  do digit_index = 1, size(digits)",
+                "    value = value * base + digits(digit_index)",
+                "  end do",
+                "end function j_decode_int",
+                "",
+            ]
+        )
+    if "encode_int" in helpers:
+        result.extend(
+            [
+                "pure function j_encode_int(bases, value) result(digits)",
+                "  integer, intent(in) :: bases(:), value",
+                "  integer, allocatable :: digits(:)",
+                "  integer :: base_index, remaining",
+                "",
+                '  if (any(bases <= 1)) error stop "base encode requires bases greater than one"',
+                '  if (value < 0) error stop "base encode requires a nonnegative value"',
+                "  allocate(digits(size(bases)))",
+                "  remaining = value",
+                "  do base_index = size(bases), 1, -1",
+                "    digits(base_index) = modulo(remaining, bases(base_index))",
+                "    remaining = remaining / bases(base_index)",
+                "  end do",
+                "end function j_encode_int",
+                "",
+            ]
+        )
     if "addition_table_int" in helpers:
         result.extend(
             [

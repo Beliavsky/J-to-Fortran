@@ -143,6 +143,7 @@ The parser currently recognizes:
 - complex literals and arithmetic;
 - complex magnitude lowered to the real-valued `abs` intrinsic;
 - rational literals represented as `real64` numerator/denominator quotients;
+- integer base decode and mixed-radix encode;
 - mixed Boolean expressions and integer literal `0`/`1` branches, inferred as
   logical results and emitted with `.false.`/`.true.` literals;
 - rank-0 application of a translated scalar verb to an integer vector;

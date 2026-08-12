@@ -5,6 +5,7 @@ module j2f_runtime
   public :: j_addition_table_int, j_append_int_row, j_binomial
   public :: j_cartesian_square, j_compress_hcat
   public :: j_copy_int_vector, j_factorial, j_grade_up_int, j_index_of_int
+  public :: j_decode_int, j_encode_int
   public :: j_infix_subtract_int, j_infix_sum_int, j_iota, j_match_real
   public :: j_membership_int, j_multiplication_table_int, j_nub_int
   public :: j_power_table_int, j_prefix_product_int, j_prefix_sum_int
@@ -15,6 +16,34 @@ module j2f_runtime
   public :: j_solve_2x2_matrix_int, j_solve_2x2_vector_int
 
 contains
+
+pure function j_decode_int(base, digits) result(value)
+  integer, intent(in) :: base, digits(:)
+  integer :: value
+  integer :: digit_index
+
+  if (base <= 1) error stop "base decode requires base greater than one"
+  if (any(digits < 0 .or. digits >= base)) error stop "invalid base digit"
+  value = 0
+  do digit_index = 1, size(digits)
+    value = value * base + digits(digit_index)
+  end do
+end function j_decode_int
+
+pure function j_encode_int(bases, value) result(digits)
+  integer, intent(in) :: bases(:), value
+  integer, allocatable :: digits(:)
+  integer :: base_index, remaining
+
+  if (any(bases <= 1)) error stop "base encode requires bases greater than one"
+  if (value < 0) error stop "base encode requires a nonnegative value"
+  allocate(digits(size(bases)))
+  remaining = value
+  do base_index = size(bases), 1, -1
+    digits(base_index) = modulo(remaining, bases(base_index))
+    remaining = remaining / bases(base_index)
+  end do
+end function j_encode_int
 
 pure function j_addition_table_int(values) result(table_values)
   integer, intent(in) :: values(:)

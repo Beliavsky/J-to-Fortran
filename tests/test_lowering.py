@@ -206,6 +206,33 @@ def test_zero_rational_denominator_is_rejected() -> None:
 
 
 @pytest.mark.parametrize(
+    ("source", "expected_type", "expected_fortran", "helper"),
+    [
+        (
+            "2 #. 1 0 1 1",
+            TypeInfo(AtomType.INTEGER),
+            "j_decode_int(2, merge(1, 0, [.true., .false., .true., .true.]))",
+            "decode_int",
+        ),
+        (
+            "2 2 2 2 #: 11",
+            TypeInfo(AtomType.INTEGER, Shape.vector(4)),
+            "j_encode_int([2, 2, 2, 2], 11)",
+            "encode_int",
+        ),
+    ],
+)
+def test_base_decode_and_encode_use_integer_helpers(
+    source: str, expected_type: TypeInfo, expected_fortran: str, helper: str
+) -> None:
+    expression = parse_expression(source)
+
+    assert infer_type(expression, {}) == expected_type
+    assert render_fortran_expression(expression, names={}) == expected_fortran
+    assert required_runtime_helpers(expression, {}) == {helper}
+
+
+@pytest.mark.parametrize(
     ("left", "right", "expected_type", "expected_fortran"),
     [
         (

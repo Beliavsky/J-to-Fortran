@@ -1029,6 +1029,25 @@ def infer_type(
                     "2 by 2 matrix division requires a length-2 vector or two-row matrix dividend"
                 )
             return TypeInfo(AtomType.REAL, left_type.shape)
+        if spelling == "#.":
+            if left_type != TypeInfo(AtomType.INTEGER) or (
+                right_type.atom_type not in {AtomType.INTEGER, AtomType.LOGICAL}
+                or right_type.rank != 1
+            ):
+                raise LoweringError(
+                    "base decode currently requires an integer scalar base and integer digit vector"
+                )
+            return TypeInfo(AtomType.INTEGER)
+        if spelling == "#:":
+            if (
+                left_type.atom_type is not AtomType.INTEGER
+                or left_type.rank != 1
+                or right_type != TypeInfo(AtomType.INTEGER)
+            ):
+                raise LoweringError(
+                    "base encode currently requires an integer base vector and integer scalar value"
+                )
+            return TypeInfo(AtomType.INTEGER, left_type.shape)
         try:
             shape = agree_shapes(left_type.shape, right_type.shape)
         except ShapeMismatchError as exc:
@@ -1554,6 +1573,31 @@ def render_fortran_expression(
             "amendment currently requires a top-level assignment context"
         )
     bare_expression = ungroup(expression)
+    decoded = dyad(bare_expression, "#.")
+    if decoded is not None and names is not None:
+        infer_type(bare_expression, names, name_transform, named_verbs=named_verbs)
+        base = render_fortran_expression(
+            decoded[0], name_transform, names=names, named_verbs=named_verbs
+        )
+        digits = render_fortran_expression(
+            decoded[1], name_transform, names=names, named_verbs=named_verbs
+        )
+        digit_type = infer_type(
+            decoded[1], names, name_transform, named_verbs=named_verbs
+        )
+        if digit_type.atom_type is AtomType.LOGICAL:
+            digits = f"merge(1, 0, {digits})"
+        return f"j_decode_int({base}, {digits})"
+    encoded = dyad(bare_expression, "#:")
+    if encoded is not None and names is not None:
+        infer_type(bare_expression, names, name_transform, named_verbs=named_verbs)
+        bases = render_fortran_expression(
+            encoded[0], name_transform, names=names, named_verbs=named_verbs
+        )
+        value = render_fortran_expression(
+            encoded[1], name_transform, names=names, named_verbs=named_verbs
+        )
+        return f"j_encode_int({bases}, {value})"
     if isinstance(bare_expression, MonadicApply) and names is not None:
         operand_type = infer_type(
             bare_expression.operand,
@@ -1982,6 +2026,10 @@ def required_runtime_helpers(
             helpers.add("index_of_int")
         if primitive_spelling(expression.verb) == "!":
             helpers.add("binomial")
+        if primitive_spelling(expression.verb) == "#.":
+            helpers.add("decode_int")
+        if primitive_spelling(expression.verb) == "#:":
+            helpers.add("encode_int")
         if primitive_spelling(expression.verb) == "%." and names is not None:
             left_type = infer_type(
                 expression.left,
