@@ -508,11 +508,11 @@ def infer_type(
                     f"type of verb {expression.verb.identifier!r} is unknown"
                 )
             if (
-                operand_type.atom_type is not AtomType.INTEGER
-                or operand_type.rank not in {0, 1}
+                operand_type.atom_type not in {AtomType.INTEGER, AtomType.REAL}
+                or operand_type.rank not in {0, 1, 2}
             ):
                 raise LoweringError(
-                    "direct named-verb application currently requires an integer scalar or vector"
+                    "direct named-verb application currently requires a numeric scalar, vector, or matrix"
                 )
             try:
                 return named_verbs[name_transform(expression.verb.identifier)]
@@ -846,12 +846,12 @@ def infer_type(
                 expression.right, names, name_transform, named_verbs=named_verbs
             )
             if any(
-                type_info.atom_type is not AtomType.INTEGER
+                type_info.atom_type not in {AtomType.INTEGER, AtomType.REAL}
                 or type_info.rank not in {0, 1, 2}
                 for type_info in (left_type, right_type)
             ):
                 raise LoweringError(
-                    "direct dyadic named-verb application currently requires integer scalar, vector, or matrix arguments"
+                    "direct dyadic named-verb application currently requires numeric scalar, vector, or matrix arguments"
                 )
             if named_verbs is None:
                 raise LoweringError(

@@ -597,7 +597,14 @@ class FunctionEmitter:
         for argument, argument_type in zip(
             self.definition.arguments, self.argument_types, strict=True
         ):
-            declaration = "integer, intent(in)"
+            declaration = {
+                AtomType.INTEGER: "integer, intent(in)",
+                AtomType.REAL: "real(kind=real64), intent(in)",
+            }.get(argument_type.atom_type)
+            if declaration is None:
+                raise UnsupportedJError(
+                    "function arguments currently require integer or real values"
+                )
             if argument_type.rank == 1:
                 declaration += "-vector"
             elif argument_type.rank == 2:
@@ -732,6 +739,13 @@ class FunctionEmitter:
             ),
             "integer, intent(in)-matrix": TypeInfo(
                 AtomType.INTEGER, Shape.matrix()
+            ),
+            "real(kind=real64), intent(in)": TypeInfo(AtomType.REAL),
+            "real(kind=real64), intent(in)-vector": TypeInfo(
+                AtomType.REAL, Shape.vector()
+            ),
+            "real(kind=real64), intent(in)-matrix": TypeInfo(
+                AtomType.REAL, Shape.matrix()
             ),
             "integer": TypeInfo(AtomType.INTEGER),
             "integer, allocatable-vector": TypeInfo(AtomType.INTEGER, Shape.vector()),
@@ -1890,10 +1904,10 @@ def _main_entity_declaration(assignment: LoweredTopAssignment) -> tuple[str, str
 
 def _definition_argument_types(
     program: Program,
-) -> dict[tuple[str, int], tuple[TypeInfo, ...]]:
+) -> dict[tuple[str, int], tuple[tuple[TypeInfo, ...], ...]]:
     """Infer initial explicit-verb dummy ranks from translatable top-level calls."""
 
-    inferred: dict[tuple[str, int], tuple[TypeInfo, ...]] = {}
+    inferred: dict[tuple[str, int], list[tuple[TypeInfo, ...]]] = {}
     top_types: dict[str, TypeInfo] = {}
     noun_names: set[str] = set()
 
@@ -1963,21 +1977,30 @@ def _definition_argument_types(
                 except LoweringError:
                     argument_types = ()
             if argument_types and all(
-                argument_type.atom_type is AtomType.INTEGER
+                argument_type.atom_type in {AtomType.INTEGER, AtomType.REAL}
                 and argument_type.rank in {0, 1, 2}
                 for argument_type in argument_types
             ):
                 key = (call_name, len(argument_types))
-                previous = inferred.get(key)
-                if previous is not None and previous != argument_types:
-                    if any(
-                        old.atom_type is not new.atom_type or old.rank != new.rank
-                        for old, new in zip(previous, argument_types, strict=True)
-                    ):
-                        raise J2FError(
-                            f"calls to {call_name!r} use inconsistent argument ranks"
+                signatures = inferred.setdefault(key, [])
+                matching_index = next(
+                    (
+                        index
+                        for index, signature in enumerate(signatures)
+                        if all(
+                            old.atom_type is new.atom_type and old.rank == new.rank
+                            for old, new in zip(
+                                signature, argument_types, strict=True
+                            )
                         )
-                    argument_types = tuple(
+                    ),
+                    None,
+                )
+                if matching_index is None:
+                    signatures.append(argument_types)
+                else:
+                    previous = signatures[matching_index]
+                    signatures[matching_index] = tuple(
                         TypeInfo(
                             old.atom_type,
                             old.shape
@@ -1986,7 +2009,6 @@ def _definition_argument_types(
                         )
                         for old, new in zip(previous, argument_types, strict=True)
                     )
-                inferred[key] = argument_types
         if isinstance(expression, Group):
             visit(expression.expression, names)
         elif isinstance(expression, MonadicApply):
@@ -2013,7 +2035,7 @@ def _definition_argument_types(
             except LoweringError:
                 pass
             noun_names.add(item.name)
-    return inferred
+    return {key: tuple(signatures) for key, signatures in inferred.items()}
 
 
 def _simple_verb_source(verb: Verb) -> str | None:
@@ -2312,6 +2334,35 @@ def emit_fortran(
                 )
 
     definitions = _explicit_definitions(program)
+    argument_types = _definition_argument_types(program)
+    specialized_definitions: list[tuple[VerbDefinition, tuple[TypeInfo, ...] | None]] = []
+    for definition in definitions:
+        exported_name = _fortran_name(definition.generic_name or definition.name)
+        signatures = argument_types.get(
+            (exported_name, len(definition.arguments)), ()
+        )
+        if len(signatures) <= 1:
+            specialized_definitions.append(
+                (definition, signatures[0] if signatures else None)
+            )
+            continue
+        generic_name = definition.generic_name or definition.name
+        for signature in signatures:
+            suffix = "_".join(
+                f"{type_info.atom_type.name.lower()}_rank{type_info.rank}"
+                for type_info in signature
+            )
+            specialized_definitions.append(
+                (
+                    dataclasses.replace(
+                        definition,
+                        name=f"{definition.name}_{suffix}",
+                        generic_name=generic_name,
+                    ),
+                    signature,
+                )
+            )
+    definitions = [definition for definition, _ in specialized_definitions]
     if not definitions and not any(
         isinstance(item, (Assign, EchoStatement)) for item in program.items
     ):
@@ -2350,12 +2401,8 @@ def emit_fortran(
     helpers: set[str] = set()
     function_names: set[str] = set()
     function_types: dict[str, TypeInfo] = {}
-    argument_types = _definition_argument_types(program)
-    for definition in definitions:
+    for definition, signature in specialized_definitions:
         exported_name = _fortran_name(definition.generic_name or definition.name)
-        signature = argument_types.get(
-            (exported_name, len(definition.arguments))
-        )
         emitted, required, result_type = FunctionEmitter(
             definition,
             signature,

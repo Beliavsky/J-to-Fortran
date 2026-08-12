@@ -364,7 +364,9 @@ exit 0
 
     assert xj2f._definition_argument_types(program) == {
         ("length", 1): (
-            xj2f.TypeInfo(xj2f.AtomType.INTEGER, xj2f.Shape.vector(3)),
+            (
+                xj2f.TypeInfo(xj2f.AtomType.INTEGER, xj2f.Shape.vector(3)),
+            ),
         )
     }
     generated = xj2f.emit_fortran(program)
@@ -377,6 +379,65 @@ exit 0
         "j_ranked_echo_1(j_cell_1) = length(points(j_cell_1, :))"
         in generated
     )
+
+
+def test_tacit_verb_specializes_for_integer_and_real_vectors() -> None:
+    source = """mean =: +/ % #
+ints =: 2 4 6
+reals =: 2.0 4.0 6.0
+smoutput mean ints
+smoutput mean reals
+exit 0
+"""
+
+    generated = xj2f.emit_fortran(
+        xj2f.parse_j_source(Path("numeric_mean.ijs"), source)
+    )
+
+    assert "interface mean" in generated
+    assert (
+        "module procedure mean_integer_rank1, mean_real_rank1" in generated
+    )
+    assert "pure function mean_integer_rank1(y) result(j_result)" in generated
+    assert "integer, intent(in) :: y(:)" in generated
+    assert "j_result = real(sum(y), kind=real64) / size(y, 1)" in generated
+    assert "pure function mean_real_rank1(y) result(j_result)" in generated
+    assert "real(kind=real64), intent(in) :: y(:)" in generated
+    assert "j_result = sum(y) / size(y, 1)" in generated
+    assert 'write (*,"(g0)") mean(ints)' in generated
+    assert 'write (*,"(g0)") mean(reals)' in generated
+
+
+@pytest.mark.requires_gfortran
+def test_numeric_tacit_specializations_compile_and_run(tmp_path: Path) -> None:
+    compiler = shutil.which("gfortran")
+    if compiler is None:
+        pytest.skip("gfortran is not installed")
+    j_source = """mean =: +/ % #
+ints =: 2 4 6
+reals =: 2.0 4.0 6.0
+smoutput mean ints
+smoutput mean reals
+exit 0
+"""
+    source = tmp_path / "numeric_mean_j.f90"
+    executable = tmp_path / "numeric_mean.exe"
+    program = xj2f.parse_j_source(Path("numeric_mean.ijs"), j_source)
+    source.write_text(xj2f.emit_fortran(program), encoding="utf-8")
+
+    compiled = subprocess.run(
+        [compiler, "-std=f2018", str(source), "-o", str(executable)],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert compiled.returncode == 0, compiled.stdout + compiled.stderr
+    completed = subprocess.run(
+        [str(executable)], cwd=tmp_path, capture_output=True, text=True, check=False
+    )
+    assert completed.returncode == 0
+    assert [float(value) for value in completed.stdout.split()] == [4.0, 4.0]
 
 
 def test_ranked_tacit_call_maps_over_rank_three_array_cells() -> None:
