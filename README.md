@@ -112,6 +112,7 @@ The parser currently recognizes:
 - stable integer nub, membership, and zero-based index-of;
 - vector sum, product, minimum, maximum, Boolean-any, and Boolean-all reductions;
 - integer prefix sum/product and fixed-width infix sum/subtraction scans;
+- leading-axis and rank-1 matrix reductions plus integer arithmetic tables;
 - constant multidimensional `{` selection through rank 3: scalar coordinates,
   leading-axis rows, independent vector selectors, negative indices, and slices;
 - top-level noun-derived `}` amendment with scalar or conforming array values;

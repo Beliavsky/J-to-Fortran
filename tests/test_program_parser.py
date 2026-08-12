@@ -137,7 +137,7 @@ def test_isprime_body_lowers_to_intrinsics_and_iota_helper() -> None:
     assert "j_result = .true." in generated
     assert "limit = floor(sqrt(real(y, kind=real64)))" in generated
     assert "divisors = 2 + j_iota(limit - 1)" in generated
-    assert "j_result = .not. any(0 == modulo(y, divisors))" in generated
+    assert "j_result = .not. any(0 == modulo(y, divisors), dim=1)" in generated
     assert "pure function j_iota(n) result(values)" in generated
     assert "allocate(values(n))" in generated
     assert "do value_index = 1, n" in generated

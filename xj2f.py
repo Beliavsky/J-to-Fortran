@@ -60,6 +60,7 @@ from j2fortran.type_system import (
 VERSION = "0.1.0"
 RUNTIME_MODULE = "j2f_runtime"
 RUNTIME_PROCEDURES = {
+    "addition_table_int": "j_addition_table_int",
     "append": "j_append_int_row",
     "binomial": "j_binomial",
     "cartesian": "j_cartesian_square",
@@ -73,9 +74,11 @@ RUNTIME_PROCEDURES = {
     "index_of_int": "j_index_of_int",
     "match_real": "j_match_real",
     "membership_int": "j_membership_int",
+    "multiplication_table_int": "j_multiplication_table_int",
     "nub_int": "j_nub_int",
     "prefix_product_int": "j_prefix_product_int",
     "prefix_sum_int": "j_prefix_sum_int",
+    "power_table_int": "j_power_table_int",
     "reverse_int_vector": "j_reverse_int_vector",
     "signum_int": "j_signum_int",
     "sort_int_vector": "j_sort_int_vector",
@@ -758,6 +761,55 @@ class FunctionEmitter:
 
 def _runtime_helpers(helpers: set[str]) -> list[str]:
     result: list[str] = []
+    if "addition_table_int" in helpers:
+        result.extend(
+            [
+                "pure function j_addition_table_int(values) result(table_values)",
+                "  integer, intent(in) :: values(:)",
+                "  integer, allocatable :: table_values(:,:)",
+                "  integer :: row_index",
+                "",
+                "  allocate(table_values(size(values), size(values)))",
+                "  do row_index = 1, size(values)",
+                "    table_values(row_index, :) = values(row_index) + values",
+                "  end do",
+                "end function j_addition_table_int",
+                "",
+            ]
+        )
+    if "multiplication_table_int" in helpers:
+        result.extend(
+            [
+                "pure function j_multiplication_table_int(left, right) result(table_values)",
+                "  integer, intent(in) :: left(:), right(:)",
+                "  integer, allocatable :: table_values(:,:)",
+                "  integer :: row_index",
+                "",
+                "  allocate(table_values(size(left), size(right)))",
+                "  do row_index = 1, size(left)",
+                "    table_values(row_index, :) = left(row_index) * right",
+                "  end do",
+                "end function j_multiplication_table_int",
+                "",
+            ]
+        )
+    if "power_table_int" in helpers:
+        result.extend(
+            [
+                "pure function j_power_table_int(bases, exponents) result(table_values)",
+                "  integer, intent(in) :: bases(:), exponents(:)",
+                "  integer, allocatable :: table_values(:,:)",
+                "  integer :: row_index",
+                "",
+                '  if (any(exponents < 0)) error stop "negative integer table exponent"',
+                "  allocate(table_values(size(bases), size(exponents)))",
+                "  do row_index = 1, size(bases)",
+                "    table_values(row_index, :) = bases(row_index)**exponents",
+                "  end do",
+                "end function j_power_table_int",
+                "",
+            ]
+        )
     if "prefix_sum_int" in helpers:
         result.extend(
             [

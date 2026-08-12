@@ -65,7 +65,7 @@ def test_prime_expression_primitives_lower_generically() -> None:
     assert infer_type(primality, names) == TypeInfo(AtomType.LOGICAL)
     assert (
         render_fortran_expression(primality)
-        == ".not. any(0 == modulo(y, divisors))"
+        == ".not. any(0 == modulo(y, divisors), dim=1)"
     )
 
 
@@ -190,12 +190,12 @@ def test_logical_integer_match_uses_exact_zero_one_conversion() -> None:
 @pytest.mark.parametrize(
     ("source", "operand_atom", "result_atom", "expected_fortran"),
     [
-        ("+/ a", AtomType.INTEGER, AtomType.INTEGER, "sum(a)"),
-        ("*/ a", AtomType.INTEGER, AtomType.INTEGER, "product(a)"),
-        ("<./ a", AtomType.INTEGER, AtomType.INTEGER, "minval(a)"),
-        (">./ a", AtomType.INTEGER, AtomType.INTEGER, "maxval(a)"),
-        ("+./ a", AtomType.LOGICAL, AtomType.LOGICAL, "any(a)"),
-        ("*./ a", AtomType.LOGICAL, AtomType.LOGICAL, "all(a)"),
+        ("+/ a", AtomType.INTEGER, AtomType.INTEGER, "sum(a, dim=1)"),
+        ("*/ a", AtomType.INTEGER, AtomType.INTEGER, "product(a, dim=1)"),
+        ("<./ a", AtomType.INTEGER, AtomType.INTEGER, "minval(a, dim=1)"),
+        (">./ a", AtomType.INTEGER, AtomType.INTEGER, "maxval(a, dim=1)"),
+        ("+./ a", AtomType.LOGICAL, AtomType.LOGICAL, "any(a, dim=1)"),
+        ("*./ a", AtomType.LOGICAL, AtomType.LOGICAL, "all(a, dim=1)"),
     ],
 )
 def test_vector_reductions_use_fortran_intrinsics(
@@ -229,6 +229,67 @@ def test_integer_scans_use_regular_loop_helpers(
     result_type = infer_type(expression, names)
     assert result_type.atom_type is AtomType.INTEGER
     assert result_type.rank == 1
+    assert render_fortran_expression(expression, names=names) == expected_fortran
+    assert required_runtime_helpers(expression, names) == {helper}
+
+
+def test_matrix_insert_reduces_the_leading_axis() -> None:
+    expression = parse_expression("+/ a")
+    names = {"a": TypeInfo(AtomType.INTEGER, Shape.matrix(2, 3))}
+
+    assert infer_type(expression, names) == TypeInfo(
+        AtomType.INTEGER, Shape.vector(3)
+    )
+    assert render_fortran_expression(expression, names=names) == "sum(a, dim=1)"
+
+
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    [("+/\"1 a", "sum(a, dim=2)"), ("*/\"1 a", "product(a, dim=2)")],
+)
+def test_rank_one_reduction_operates_on_rows(source: str, expected: str) -> None:
+    expression = parse_expression(source)
+    names = {"a": TypeInfo(AtomType.INTEGER, Shape.matrix(2, 3))}
+
+    assert infer_type(expression, names) == TypeInfo(
+        AtomType.INTEGER, Shape.vector(2)
+    )
+    assert render_fortran_expression(expression, names=names) == expected
+
+
+@pytest.mark.parametrize(
+    ("source", "expected_type", "expected_fortran", "helper"),
+    [
+        (
+            "+/~ a",
+            TypeInfo(AtomType.INTEGER, Shape.matrix(3, 3)),
+            "j_addition_table_int(a)",
+            "addition_table_int",
+        ),
+        (
+            "a */ b",
+            TypeInfo(AtomType.INTEGER, Shape.matrix(3, 4)),
+            "j_multiplication_table_int(a, b)",
+            "multiplication_table_int",
+        ),
+        (
+            "a ^/ 0 1 2 3",
+            TypeInfo(AtomType.INTEGER, Shape.matrix(3, 4)),
+            "j_power_table_int(a, [0, 1, 2, 3])",
+            "power_table_int",
+        ),
+    ],
+)
+def test_integer_tables_use_pure_helpers(
+    source: str, expected_type: TypeInfo, expected_fortran: str, helper: str
+) -> None:
+    expression = parse_expression(source)
+    names = {
+        "a": TypeInfo(AtomType.INTEGER, Shape.vector(3)),
+        "b": TypeInfo(AtomType.INTEGER, Shape.vector(4)),
+    }
+
+    assert infer_type(expression, names) == expected_type
     assert render_fortran_expression(expression, names=names) == expected_fortran
     assert required_runtime_helpers(expression, names) == {helper}
 

@@ -2,13 +2,49 @@ module j2f_runtime
   use, intrinsic :: iso_fortran_env, only: real64
   implicit none
   private
-  public :: j_append_int_row, j_binomial, j_cartesian_square, j_compress_hcat
+  public :: j_addition_table_int, j_append_int_row, j_binomial
+  public :: j_cartesian_square, j_compress_hcat
   public :: j_copy_int_vector, j_factorial, j_grade_up_int, j_index_of_int
   public :: j_infix_subtract_int, j_infix_sum_int, j_iota, j_match_real
-  public :: j_membership_int, j_nub_int, j_prefix_product_int, j_prefix_sum_int
+  public :: j_membership_int, j_multiplication_table_int, j_nub_int
+  public :: j_power_table_int, j_prefix_product_int, j_prefix_sum_int
   public :: j_reverse_int_vector, j_signum_int, j_sort_int_vector
 
 contains
+
+pure function j_addition_table_int(values) result(table_values)
+  integer, intent(in) :: values(:)
+  integer, allocatable :: table_values(:,:)
+  integer :: row_index
+
+  allocate(table_values(size(values), size(values)))
+  do row_index = 1, size(values)
+    table_values(row_index, :) = values(row_index) + values
+  end do
+end function j_addition_table_int
+
+pure function j_multiplication_table_int(left, right) result(table_values)
+  integer, intent(in) :: left(:), right(:)
+  integer, allocatable :: table_values(:,:)
+  integer :: row_index
+
+  allocate(table_values(size(left), size(right)))
+  do row_index = 1, size(left)
+    table_values(row_index, :) = left(row_index) * right
+  end do
+end function j_multiplication_table_int
+
+pure function j_power_table_int(bases, exponents) result(table_values)
+  integer, intent(in) :: bases(:), exponents(:)
+  integer, allocatable :: table_values(:,:)
+  integer :: row_index
+
+  if (any(exponents < 0)) error stop "negative integer table exponent"
+  allocate(table_values(size(bases), size(exponents)))
+  do row_index = 1, size(bases)
+    table_values(row_index, :) = bases(row_index)**exponents
+  end do
+end function j_power_table_int
 
 pure function j_prefix_sum_int(values) result(prefixes)
   integer, intent(in) :: values(:)

@@ -72,6 +72,24 @@ def insert_scan_spelling(verb: Verb) -> str | None:
     return primitive_spelling(inserted.operand)
 
 
+def table_spelling(verb: Verb) -> str | None:
+    if not isinstance(verb, AdverbApplication) or verb.adverb != "/":
+        return None
+    return primitive_spelling(verb.operand)
+
+
+def reflex_table_spelling(verb: Verb) -> str | None:
+    if not isinstance(verb, AdverbApplication) or verb.adverb != "~":
+        return None
+    return table_spelling(verb.operand)
+
+
+def ranked_reduction_spelling(verb: Verb) -> str | None:
+    if not isinstance(verb, RankApplication) or integer_value(verb.rank) != 1:
+        return None
+    return table_spelling(verb.operand)
+
+
 def monad(expression: Expression, spelling: str) -> Expression | None:
     expression = ungroup(expression)
     if isinstance(expression, MonadicApply) and primitive_spelling(expression.verb) == spelling:
@@ -411,6 +429,33 @@ def infer_type(
     if isinstance(expression, StringLiteral):
         raise LoweringError("character arrays are not supported by the Fortran lowerer yet")
     if isinstance(expression, MonadicApply):
+        operand_type = infer_type(
+            expression.operand, names, name_transform, named_verbs=named_verbs
+        )
+        reflex_table = reflex_table_spelling(expression.verb)
+        if reflex_table == "+":
+            if (
+                operand_type.atom_type is not AtomType.INTEGER
+                or operand_type.rank != 1
+            ):
+                raise LoweringError(
+                    "reflex addition table currently requires an integer vector"
+                )
+            extent = operand_type.shape.extents[0]
+            return TypeInfo(AtomType.INTEGER, Shape.matrix(extent, extent))
+        ranked_reduction = ranked_reduction_spelling(expression.verb)
+        if ranked_reduction in {"+", "*"}:
+            if (
+                operand_type.atom_type is not AtomType.INTEGER
+                or operand_type.rank != 2
+            ):
+                raise LoweringError(
+                    "rank-1 reduction currently requires an integer matrix"
+                )
+            return TypeInfo(
+                AtomType.INTEGER,
+                Shape.vector(operand_type.shape.extents[0]),
+            )
         ranked_application = match_ranked_named_application(expression)
         if ranked_application is not None:
             verb_name, operand = ranked_application
@@ -427,9 +472,6 @@ def infer_type(
             )
             return TypeInfo(result_type.atom_type, operand_type.shape)
         if isinstance(expression.verb, AdverbApplication):
-            operand_type = infer_type(
-                expression.operand, names, name_transform, named_verbs=named_verbs
-            )
             scan = insert_scan_spelling(expression.verb)
             if scan in {"+", "*"}:
                 if (
@@ -456,8 +498,10 @@ def infer_type(
                 "+.",
                 "*.",
             }:
-                if operand_type.rank != 1:
-                    raise LoweringError("reduction currently requires a vector")
+                if operand_type.rank not in {1, 2}:
+                    raise LoweringError(
+                        "reduction currently requires a vector or matrix"
+                    )
                 if reduction in {"+.", "*."}:
                     if operand_type.atom_type is not AtomType.LOGICAL:
                         raise LoweringError(
@@ -473,14 +517,16 @@ def infer_type(
                     raise LoweringError(
                         "minimum and maximum reduction require a nonempty vector"
                     )
-                return TypeInfo(operand_type.atom_type)
+                result_shape = (
+                    Shape.scalar()
+                    if operand_type.rank == 1
+                    else Shape.vector(operand_type.shape.extents[1])
+                )
+                return TypeInfo(operand_type.atom_type, result_shape)
             raise LoweringError(
                 "cannot infer the result type of this adverb-derived verb"
             )
         spelling = primitive_spelling(expression.verb)
-        operand_type = infer_type(
-            expression.operand, names, name_transform, named_verbs=named_verbs
-        )
         if spelling == "$":
             return TypeInfo(AtomType.INTEGER, Shape.vector(operand_type.rank))
         if spelling == "#":
@@ -621,6 +667,33 @@ def infer_type(
             else:
                 result_extent = None
             return TypeInfo(AtomType.INTEGER, Shape.vector(result_extent))
+        table = table_spelling(expression.verb)
+        if table in {"*", "^"}:
+            left_type = infer_type(
+                expression.left, names, name_transform, named_verbs=named_verbs
+            )
+            right_type = infer_type(
+                expression.right, names, name_transform, named_verbs=named_verbs
+            )
+            if (
+                left_type.atom_type is not AtomType.INTEGER
+                or right_type.atom_type is not AtomType.INTEGER
+                or left_type.rank != 1
+                or right_type.rank != 1
+            ):
+                raise LoweringError("table currently requires two integer vectors")
+            if table == "^":
+                exponents = _integer_values(expression.right)
+                if exponents is None or any(exponent < 0 for exponent in exponents):
+                    raise LoweringError(
+                        "power table currently requires constant nonnegative exponents"
+                    )
+            return TypeInfo(
+                AtomType.INTEGER,
+                Shape.matrix(
+                    left_type.shape.extents[0], right_type.shape.extents[0]
+                ),
+            )
         spelling = primitive_spelling(expression.verb)
         if spelling is None:
             raise LoweringError("modified verbs require a dedicated lowering rule")
@@ -913,6 +986,19 @@ def _render_fortran_expression(
         escaped = expression.value.replace("'", "''")
         return f"'{escaped}'", _ATOM_PRECEDENCE, None
     if isinstance(expression, MonadicApply):
+        reflex_table = reflex_table_spelling(expression.verb)
+        if reflex_table == "+":
+            operand, _, _ = _render_fortran_expression(
+                expression.operand, name_transform
+            )
+            return f"j_addition_table_int({operand})", _ATOM_PRECEDENCE, "call"
+        ranked_reduction = ranked_reduction_spelling(expression.verb)
+        if ranked_reduction in {"+", "*"}:
+            operand, _, _ = _render_fortran_expression(
+                expression.operand, name_transform
+            )
+            intrinsic = "sum" if ranked_reduction == "+" else "product"
+            return f"{intrinsic}({operand}, dim=2)", _ATOM_PRECEDENCE, "call"
         ranked_application = match_ranked_named_application(expression)
         if ranked_application is not None:
             verb_name, argument = ranked_application
@@ -960,7 +1046,7 @@ def _render_fortran_expression(
                     "+.": "any",
                     "*.": "all",
                 }[reduction]
-                return f"{intrinsic}({operand})", _ATOM_PRECEDENCE, "call"
+                return f"{intrinsic}({operand}, dim=1)", _ATOM_PRECEDENCE, "call"
             raise LoweringError("this adverb-derived verb needs a dedicated lowering rule")
         spelling = primitive_spelling(expression.verb)
         operand, operand_precedence, _ = _render_fortran_expression(
@@ -1040,6 +1126,16 @@ def _render_fortran_expression(
             )
             helper = "j_infix_sum_int" if scan == "+" else "j_infix_subtract_int"
             return f"{helper}({values}, {width})", _ATOM_PRECEDENCE, "call"
+        table = table_spelling(expression.verb)
+        if table in {"*", "^"}:
+            left, _, _ = _render_fortran_expression(
+                expression.left, name_transform
+            )
+            right, _, _ = _render_fortran_expression(
+                expression.right, name_transform
+            )
+            helper = "j_multiplication_table_int" if table == "*" else "j_power_table_int"
+            return f"{helper}({left}, {right})", _ATOM_PRECEDENCE, "call"
         spelling = primitive_spelling(expression.verb)
         if spelling == ",":
             left, _, _ = _render_fortran_expression(expression.left, name_transform)
@@ -1339,6 +1435,8 @@ def required_runtime_helpers(
     helpers: set[str] = set()
     if isinstance(expression, MonadicApply):
         spelling = primitive_spelling(expression.verb)
+        if reflex_table_spelling(expression.verb) == "+":
+            helpers.add("addition_table_int")
         scan = insert_scan_spelling(expression.verb)
         if scan == "+":
             helpers.add("prefix_sum_int")
@@ -1374,6 +1472,11 @@ def required_runtime_helpers(
             helpers.add("infix_sum_int")
         if scan == "-":
             helpers.add("infix_subtract_int")
+        table = table_spelling(expression.verb)
+        if table == "*":
+            helpers.add("multiplication_table_int")
+        if table == "^":
+            helpers.add("power_table_int")
         if primitive_spelling(expression.verb) == "e.":
             helpers.add("membership_int")
         if primitive_spelling(expression.verb) == "i.":
