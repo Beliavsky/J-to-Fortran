@@ -24,6 +24,7 @@ from typing import Sequence
 
 from j2fortran.ast import (
     AdverbApplication,
+    AtopVerb,
     BondVerb,
     DyadicApply,
     Group,
@@ -295,7 +296,7 @@ class Parser:
                     tacit_verb = parse_verb(assignment.group(3))
                 except (LexerError, ExpressionParseError, ValueError):
                     tacit_verb = None
-                if isinstance(tacit_verb, (AdverbApplication, BondVerb)):
+                if isinstance(tacit_verb, (AdverbApplication, AtopVerb, BondVerb)):
                     items.append(
                         TacitVerbDefinition(line, assignment.group(1), tacit_verb)
                     )
@@ -1598,6 +1599,16 @@ def _definition_argument_types(
     return inferred
 
 
+def _simple_verb_source(verb: Verb) -> str | None:
+    if isinstance(verb, PrimitiveVerb):
+        return verb.spelling
+    if isinstance(verb, AdverbApplication):
+        operand = _simple_verb_source(verb.operand)
+        if operand is not None:
+            return operand + verb.adverb
+    return None
+
+
 def _explicit_definitions(program: Program) -> list[VerbDefinition]:
     """Expand supported tacit definitions into the explicit internal form."""
 
@@ -1640,6 +1651,19 @@ def _explicit_definitions(program: Program) -> list[VerbDefinition]:
                 )
             )
             continue
+        if isinstance(item.verb, AtopVerb):
+            outer = _simple_verb_source(item.verb.outer)
+            inner = _simple_verb_source(item.verb.inner)
+            if outer is not None and inner is not None:
+                definitions.append(
+                    VerbDefinition(
+                        item.line,
+                        item.name,
+                        ("y",),
+                        (ExpressionStatement(item.line, f"{outer} ({inner} y)"),),
+                    )
+                )
+                continue
         raise _error_at(
             UnsupportedJError,
             item.line,

@@ -193,6 +193,28 @@ ok =: result -: expected
     assert f"j_result = {expected_expression}" in generated
 
 
+@pytest.mark.parametrize(
+    ("definition", "call", "expected_expression"),
+    [
+        ("sumsq =: +/ @: *:", "sumsq 1 2 3 4", "sum(y**2, dim=1)"),
+        ("f =: *: @: >:", "f 1 2 3 4", "(y + 1)**2"),
+    ],
+)
+def test_tacit_atop_becomes_a_monadic_verb(
+    definition: str, call: str, expected_expression: str
+) -> None:
+    source = f"""{definition}
+result =: {call}
+expected =: 0
+ok =: result -: expected
+"""
+    program = xj2f.parse_j_source(Path("atop.ijs"), source)
+    generated = xj2f.emit_fortran(program)
+
+    assert isinstance(program.items[0], xj2f.TacitVerbDefinition)
+    assert f"j_result = {expected_expression}" in generated
+
+
 def test_dyadic_explicit_verb_has_x_and_y_arguments() -> None:
     source = "lincomb =: 4 : 0\n  x + 2 * y\n)\n"
     program = xj2f.parse_j_source(Path("lincomb.ijs"), source)

@@ -48,6 +48,15 @@ def test_generic_arithmetic_and_logical_lowering() -> None:
     assert render_fortran_expression(logical) == "a < b .and. c <= y"
 
 
+@pytest.mark.parametrize(("source", "expected"), [(">: y", "y + 1"), ("<: y", "y - 1")])
+def test_monadic_increment_and_decrement(source: str, expected: str) -> None:
+    expression = parse_expression(source)
+    names = {"y": TypeInfo(AtomType.INTEGER, Shape.vector())}
+
+    assert infer_type(expression, names) == names["y"]
+    assert render_fortran_expression(expression, names=names) == expected
+
+
 def test_prime_expression_primitives_lower_generically() -> None:
     names = {
         "limit": TypeInfo(AtomType.INTEGER),

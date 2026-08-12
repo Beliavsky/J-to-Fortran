@@ -7,6 +7,7 @@ from collections.abc import Sequence
 from .ast import (
     AdverbApplication,
     AmendVerb,
+    AtopVerb,
     BondVerb,
     DyadicApply,
     Expression,
@@ -92,6 +93,14 @@ class ExpressionParser:
             verb: Verb = BondVerb(noun, operand, _cover(noun.span, operand.span))
         else:
             verb = self._verb()
+        while (
+            self.index < len(self.tokens)
+            and self._peek().kind is TokenKind.PRIMITIVE
+            and self._peek().value == "@:"
+        ):
+            self._take()
+            inner = self._verb()
+            verb = AtopVerb(verb, inner, _cover(verb.span, inner.span))
         if self.index != len(self.tokens):
             token = self.tokens[self.index]
             raise ExpressionParseError(f"unexpected token {token.value!r}", token)
@@ -256,6 +265,12 @@ class ExpressionParser:
             return ExpressionParser._verb_name(verb.operand) + verb.adverb
         if isinstance(verb, BondVerb):
             return "&" + ExpressionParser._verb_name(verb.operand)
+        if isinstance(verb, AtopVerb):
+            return (
+                ExpressionParser._verb_name(verb.outer)
+                + "@:"
+                + ExpressionParser._verb_name(verb.inner)
+            )
         return ExpressionParser._verb_name(verb.operand) + '"' + verb.rank.text
 
 

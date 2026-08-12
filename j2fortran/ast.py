@@ -85,6 +85,13 @@ class BondVerb:
     span: SourceSpan
 
 
+@dataclass(frozen=True, slots=True)
+class AtopVerb:
+    outer: Verb
+    inner: Verb
+    span: SourceSpan
+
+
 Verb: TypeAlias = (
     AmendVerb
     | NamedVerb
@@ -92,6 +99,7 @@ Verb: TypeAlias = (
     | AdverbApplication
     | RankApplication
     | BondVerb
+    | AtopVerb
 )
 
 

@@ -5,6 +5,7 @@ import pytest
 from j2fortran.ast import (
     AdverbApplication,
     AmendVerb,
+    AtopVerb,
     BondVerb,
     DyadicApply,
     Group,
@@ -41,6 +42,18 @@ def test_parse_noun_bond_verb_phrase() -> None:
     assert isinstance(verb.noun, NumberLiteral)
     assert verb.noun.text == "10"
     assert primitive(verb.operand) == "+"
+
+
+@pytest.mark.parametrize(
+    ("source", "outer", "inner"),
+    [("+/ @: *:", "+", "*:"), ("*: @: >:", "*:", ">:")],
+)
+def test_parse_atop_verb_phrase(source: str, outer: str, inner: str) -> None:
+    verb = parse_verb(source)
+
+    assert isinstance(verb, AtopVerb)
+    assert primitive(verb.outer) == outer
+    assert primitive(verb.inner) == inner
 
 
 def test_ranked_named_verb_application() -> None:

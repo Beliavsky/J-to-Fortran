@@ -607,7 +607,9 @@ def infer_type(
             ):
                 raise LoweringError("nub currently requires an integer vector")
             return TypeInfo(AtomType.INTEGER, Shape.vector())
-        if spelling in {"+", "-", "*:"}:
+        if spelling in {"+", "-", "*:", "<:", ">:"}:
+            if operand_type.atom_type not in {AtomType.INTEGER, AtomType.REAL}:
+                raise LoweringError(f"monadic {spelling!r} requires a numeric operand")
             return operand_type
         if spelling == "|":
             if operand_type.atom_type not in {AtomType.INTEGER, AtomType.REAL}:
@@ -1124,6 +1126,11 @@ def _render_fortran_expression(
         if spelling == "*:":
             operand = _parenthesize(operand, operand_precedence, _POWER_PRECEDENCE)
             return f"{operand}**2", _POWER_PRECEDENCE, "**"
+        if spelling in {"<:", ">:"}:
+            operator = "-" if spelling == "<:" else "+"
+            precedence = _FORTRAN_PRECEDENCE[operator]
+            operand = _parenthesize(operand, operand_precedence, precedence)
+            return f"{operand} {operator} 1", precedence, operator
         if spelling == "|":
             return f"abs({operand})", _ATOM_PRECEDENCE, "call"
         if spelling == "*":
