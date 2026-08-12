@@ -451,6 +451,20 @@ def infer_type(
                 raise LoweringError("behead and curtail require a nonempty vector")
             result_extent = extent - 1 if isinstance(extent, int) else None
             return TypeInfo(operand_type.atom_type, Shape.vector(result_extent))
+        if spelling == "|.":
+            if operand_type.rank != 1:
+                raise LoweringError("reverse currently requires a vector")
+            if operand_type.atom_type is not AtomType.INTEGER:
+                raise LoweringError("reverse currently requires an integer vector")
+            return operand_type
+        if spelling == "|:":
+            if operand_type.rank != 2:
+                raise LoweringError("transpose currently requires a rank-2 array")
+            try:
+                transposed_shape = operand_type.shape.transpose()
+            except ShapeMismatchError as exc:
+                raise LoweringError(str(exc)) from exc
+            return TypeInfo(operand_type.atom_type, transposed_shape)
         if spelling in {"+", "-", "*:"}:
             return operand_type
         if spelling == "|":
@@ -589,6 +603,15 @@ def infer_type(
             return TypeInfo(
                 right_type.atom_type, Shape.vector(result_extent)
             )
+        if spelling == "|.":
+            shift = integer_value(expression.left)
+            if left_type != TypeInfo(AtomType.INTEGER) or shift is None:
+                raise LoweringError(
+                    "rotate currently requires a constant integer scalar shift"
+                )
+            if right_type.rank != 1:
+                raise LoweringError("rotate currently requires a vector")
+            return right_type
         if spelling == "-:":
             numeric_types = {AtomType.INTEGER, AtomType.REAL}
             both_numeric = (
@@ -838,6 +861,10 @@ def _render_fortran_expression(
                 _ATOM_PRECEDENCE,
                 "section",
             )
+        if spelling == "|.":
+            return f"j_reverse_int_vector({operand})", _ATOM_PRECEDENCE, "call"
+        if spelling == "|:":
+            return f"transpose({operand})", _ATOM_PRECEDENCE, "call"
         raise LoweringError(f"monadic verb {spelling!r} needs a dedicated lowering rule")
     if isinstance(expression, DyadicApply):
         spelling = primitive_spelling(expression.verb)
@@ -879,6 +906,16 @@ def _render_fortran_expression(
             else:
                 section = f":size({values}) - {magnitude}"
             return f"{values}({section})", _ATOM_PRECEDENCE, "section"
+        if spelling == "|.":
+            shift = integer_value(expression.left)
+            if shift is None:
+                raise LoweringError(
+                    "rotate currently requires a constant integer scalar shift"
+                )
+            values, _, _ = _render_fortran_expression(
+                expression.right, name_transform
+            )
+            return f"cshift({values}, {shift})", _ATOM_PRECEDENCE, "call"
         if spelling == "^":
             left, left_precedence, _ = _render_fortran_expression(
                 expression.left, name_transform
@@ -1106,6 +1143,8 @@ def required_runtime_helpers(
             helpers.add("factorial")
         if spelling == "*":
             helpers.add("signum_int")
+        if spelling == "|.":
+            helpers.add("reverse_int_vector")
         helpers.update(
             required_runtime_helpers(
                 expression.operand,

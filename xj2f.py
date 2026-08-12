@@ -68,6 +68,7 @@ RUNTIME_PROCEDURES = {
     "iota": "j_iota",
     "factorial": "j_factorial",
     "match_real": "j_match_real",
+    "reverse_int_vector": "j_reverse_int_vector",
     "signum_int": "j_signum_int",
 }
 
@@ -748,6 +749,22 @@ class FunctionEmitter:
 
 def _runtime_helpers(helpers: set[str]) -> list[str]:
     result: list[str] = []
+    if "reverse_int_vector" in helpers:
+        result.extend(
+            [
+                "pure function j_reverse_int_vector(values) result(reversed_values)",
+                "  integer, intent(in) :: values(:)",
+                "  integer, allocatable :: reversed_values(:)",
+                "  integer :: value_index",
+                "",
+                "  allocate(reversed_values(size(values)))",
+                "  do value_index = 1, size(values)",
+                "    reversed_values(value_index) = values(size(values) - value_index + 1)",
+                "  end do",
+                "end function j_reverse_int_vector",
+                "",
+            ]
+        )
     if "factorial" in helpers:
         result.extend(
             [

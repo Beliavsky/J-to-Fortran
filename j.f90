@@ -3,9 +3,21 @@ module j2f_runtime
   implicit none
   private
   public :: j_append_int_row, j_binomial, j_cartesian_square, j_compress_hcat
-  public :: j_copy_int_vector, j_factorial, j_iota, j_match_real, j_signum_int
+  public :: j_copy_int_vector, j_factorial, j_iota, j_match_real
+  public :: j_reverse_int_vector, j_signum_int
 
 contains
+
+pure function j_reverse_int_vector(values) result(reversed_values)
+  integer, intent(in) :: values(:)
+  integer, allocatable :: reversed_values(:)
+  integer :: value_index
+
+  allocate(reversed_values(size(values)))
+  do value_index = 1, size(values)
+    reversed_values(value_index) = values(size(values) - value_index + 1)
+  end do
+end function j_reverse_int_vector
 
 pure elemental function j_factorial(n) result(value)
   integer, intent(in) :: n

@@ -107,6 +107,7 @@ The parser currently recognizes:
 - monadic shape and constant-shape reshape through rank 3, including cyclic fill;
 - tally, rank-2 ravel, vector catenate, and equal-length vector laminate;
 - constant in-bounds vector take/drop, plus head, tail, behead, and curtail;
+- vector reverse and constant rotate, plus rank-2 transpose;
 - constant multidimensional `{` selection through rank 3: scalar coordinates,
   leading-axis rows, independent vector selectors, negative indices, and slices;
 - top-level noun-derived `}` amendment with scalar or conforming array values;

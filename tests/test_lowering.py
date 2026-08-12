@@ -324,6 +324,43 @@ def test_head_rejects_an_empty_vector() -> None:
         infer_type(expression, names)
 
 
+def test_reverse_uses_the_integer_vector_helper() -> None:
+    expression = parse_expression("|. a")
+    names = {"a": TypeInfo(AtomType.INTEGER, Shape.vector(5))}
+
+    assert infer_type(expression, names) == names["a"]
+    assert render_fortran_expression(expression, names=names) == (
+        "j_reverse_int_vector(a)"
+    )
+    assert required_runtime_helpers(expression, names) == {"reverse_int_vector"}
+
+
+def test_constant_vector_rotate_uses_cshift() -> None:
+    expression = parse_expression("2 |. a")
+    names = {"a": TypeInfo(AtomType.INTEGER, Shape.vector(5))}
+
+    assert infer_type(expression, names) == names["a"]
+    assert render_fortran_expression(expression, names=names) == "cshift(a, 2)"
+
+
+def test_rank_two_transpose_swaps_extents() -> None:
+    expression = parse_expression("|: a")
+    names = {"a": TypeInfo(AtomType.INTEGER, Shape.matrix(2, 3))}
+
+    assert infer_type(expression, names) == TypeInfo(
+        AtomType.INTEGER, Shape.matrix(3, 2)
+    )
+    assert render_fortran_expression(expression, names=names) == "transpose(a)"
+
+
+def test_transpose_rejects_an_unsupported_rank() -> None:
+    expression = parse_expression("|: a")
+    names = {"a": TypeInfo(AtomType.INTEGER, Shape.vector(3))}
+
+    with pytest.raises(LoweringError, match="rank-2"):
+        infer_type(expression, names)
+
+
 def test_constant_reshape_preserves_j_axis_order_and_cyclic_fill() -> None:
     matrix = parse_expression("2 3 $ i. 6")
     cyclic = parse_expression("2 3 $ 1 2")
