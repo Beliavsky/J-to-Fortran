@@ -525,6 +525,8 @@ def test_logical_integer_match_uses_exact_zero_one_conversion() -> None:
     [
         ("+/ a", AtomType.INTEGER, AtomType.INTEGER, "sum(a, dim=1)"),
         ("*/ a", AtomType.INTEGER, AtomType.INTEGER, "product(a, dim=1)"),
+        ("+/ a", AtomType.COMPLEX, AtomType.COMPLEX, "sum(a, dim=1)"),
+        ("*/ a", AtomType.COMPLEX, AtomType.COMPLEX, "product(a, dim=1)"),
         ("<./ a", AtomType.INTEGER, AtomType.INTEGER, "minval(a, dim=1)"),
         (">./ a", AtomType.INTEGER, AtomType.INTEGER, "maxval(a, dim=1)"),
         ("+./ a", AtomType.LOGICAL, AtomType.LOGICAL, "any(a, dim=1)"),
@@ -588,6 +590,16 @@ def test_rank_one_reduction_operates_on_rows(source: str, expected: str) -> None
         AtomType.INTEGER, Shape.vector(2)
     )
     assert render_fortran_expression(expression, names=names) == expected
+
+
+def test_rank_one_complex_reduction_preserves_complex_type() -> None:
+    expression = parse_expression("+/\"1 a")
+    names = {"a": TypeInfo(AtomType.COMPLEX, Shape.matrix(2, 3))}
+
+    assert infer_type(expression, names) == TypeInfo(
+        AtomType.COMPLEX, Shape.vector(2)
+    )
+    assert render_fortran_expression(expression, names=names) == "sum(a, dim=2)"
 
 
 @pytest.mark.parametrize(

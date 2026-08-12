@@ -514,14 +514,15 @@ def infer_type(
         ranked_reduction = ranked_reduction_spelling(expression.verb)
         if ranked_reduction in {"+", "*"}:
             if (
-                operand_type.atom_type is not AtomType.INTEGER
+                operand_type.atom_type
+                not in {AtomType.INTEGER, AtomType.REAL, AtomType.COMPLEX}
                 or operand_type.rank != 2
             ):
                 raise LoweringError(
-                    "rank-1 reduction currently requires an integer matrix"
+                    "rank-1 reduction currently requires a numeric matrix"
                 )
             return TypeInfo(
-                AtomType.INTEGER,
+                operand_type.atom_type,
                 Shape.vector(operand_type.shape.extents[0]),
             )
         ranked_application = match_ranked_named_application(expression)
@@ -583,10 +584,10 @@ def infer_type(
                         else Shape.vector(operand_type.shape.extents[1])
                     )
                     return TypeInfo(AtomType.INTEGER, result_shape)
-                if operand_type.atom_type not in {
-                    AtomType.INTEGER,
-                    AtomType.REAL,
-                }:
+                numeric_types = {AtomType.INTEGER, AtomType.REAL}
+                if reduction in {"+", "*"}:
+                    numeric_types.add(AtomType.COMPLEX)
+                if operand_type.atom_type not in numeric_types:
                     raise LoweringError("numeric reduction requires a numeric operand")
                 if reduction in {"<.", ">."} and operand_type.shape.extents[0] == 0:
                     raise LoweringError(
