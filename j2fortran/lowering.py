@@ -445,6 +445,25 @@ def match_ranked_named_application(
     return ranked_verb.operand.identifier, expression.operand, rank
 
 
+def match_named_infix_application(
+    expression: Expression,
+) -> tuple[str, Expression, Expression] | None:
+    expression = ungroup(expression)
+    if not isinstance(expression, DyadicApply) or not isinstance(
+        expression.verb, AdverbApplication
+    ):
+        return None
+    if expression.verb.adverb != "\\" or not isinstance(
+        expression.verb.operand, NamedVerb
+    ):
+        return None
+    return (
+        expression.verb.operand.identifier,
+        expression.left,
+        expression.right,
+    )
+
+
 def infer_type(
     expression: Expression,
     names: Mapping[str, TypeInfo],
@@ -741,6 +760,38 @@ def infer_type(
             return TypeInfo(AtomType.CHARACTER, Shape.vector(), None, False)
         raise LoweringError(f"cannot infer the result type of monadic {spelling!r}")
     if isinstance(expression, DyadicApply):
+        named_infix = match_named_infix_application(expression)
+        if named_infix is not None:
+            verb_name, width_expression, values_expression = named_infix
+            width = integer_value(width_expression)
+            values_type = infer_type(
+                values_expression,
+                names,
+                name_transform,
+                named_verbs=named_verbs,
+            )
+            if width is None or width <= 0:
+                raise LoweringError(
+                    "named infix application requires a positive constant width"
+                )
+            if values_type.rank != 1:
+                raise LoweringError("named infix application requires a vector")
+            if named_verbs is None:
+                raise LoweringError(f"type of verb {verb_name!r} is unknown")
+            try:
+                result_type = named_verbs[name_transform(verb_name)]
+            except KeyError as exc:
+                raise LoweringError(f"type of verb {verb_name!r} is unknown") from exc
+            if not result_type.is_scalar:
+                raise LoweringError("named infix verb must return a scalar")
+            extent = values_type.shape.extents[0]
+            if isinstance(extent, int):
+                if width > extent:
+                    raise LoweringError("infix width exceeds the vector length")
+                result_extent: int | None = extent - width + 1
+            else:
+                result_extent = None
+            return TypeInfo(result_type.atom_type, Shape.vector(result_extent))
         amendment = match_amendment(expression)
         if amendment is not None:
             source_type = infer_type(

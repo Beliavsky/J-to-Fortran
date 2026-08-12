@@ -63,6 +63,7 @@ from j2fortran.lowering import (
     match_column_selection,
     match_compress_hcat,
     match_iota_sequence,
+    match_named_infix_application,
     match_ranked_named_application,
     match_zero_integer_matrix,
     required_runtime_helpers,
@@ -1907,7 +1908,27 @@ def _definition_argument_types(
                             Shape.vector(operand_type.shape.extents[-1]),
                         ),
                     )
-        elif isinstance(expression, DyadicApply) and isinstance(
+        elif isinstance(expression, DyadicApply):
+            named_infix = match_named_infix_application(expression)
+            if named_infix is not None:
+                verb_name, width_expression, values_expression = named_infix
+                width = integer_value(width_expression)
+                try:
+                    values_type = infer_type(
+                        values_expression, names, _fortran_name
+                    )
+                except LoweringError:
+                    pass
+                else:
+                    if width is not None and values_type.rank == 1:
+                        call_name = _fortran_name(verb_name)
+                        ranked_argument_types = (
+                            TypeInfo(
+                                values_type.atom_type,
+                                Shape.vector(width),
+                            ),
+                        )
+        if isinstance(expression, DyadicApply) and isinstance(
             expression.verb, NamedVerb
         ):
             call_name = _fortran_name(expression.verb.identifier)
@@ -2389,7 +2410,7 @@ def emit_fortran(
             str,
             TypeInfo,
             tuple[int, ...],
-            tuple[str, str, int] | None,
+            tuple[str, str, str, int] | None,
         ]
     ] = []
     for echo in echos:
@@ -2428,6 +2449,7 @@ def emit_fortran(
             continue
         if echo_ast is not None:
             ranked_application = match_ranked_named_application(echo_ast)
+            named_infix = match_named_infix_application(echo_ast)
             try:
                 result_type = infer_type(
                     echo_ast,
@@ -2435,7 +2457,7 @@ def emit_fortran(
                     _fortran_name,
                     named_verbs=function_types,
                 )
-                ranked_echo = None
+                mapped_echo = None
                 if ranked_application is not None and ranked_application[2] == 1:
                     verb_name, argument, _ = ranked_application
                     argument_type = infer_type(
@@ -2452,13 +2474,34 @@ def emit_fortran(
                     )
                     if argument_type.rank > 1:
                         expression = f"j_ranked_echo_{len(echo_calls) + 1}"
-                        ranked_echo = (
+                        mapped_echo = (
+                            "rank",
                             _fortran_name(verb_name),
                             argument_text,
                             argument_type.rank,
                         )
                     else:
                         expression = f"{_fortran_name(verb_name)}({argument_text})"
+                elif named_infix is not None:
+                    verb_name, width_expression, argument = named_infix
+                    width = integer_value(width_expression)
+                    if width is None:
+                        raise LoweringError(
+                            "named infix width must be a constant integer"
+                        )
+                    argument_text = render_fortran_expression(
+                        argument,
+                        _fortran_name,
+                        names=top_types,
+                        named_verbs=function_types,
+                    )
+                    expression = f"j_infix_echo_{len(echo_calls) + 1}"
+                    mapped_echo = (
+                        "infix",
+                        _fortran_name(verb_name),
+                        argument_text,
+                        width,
+                    )
                 else:
                     expression = render_fortran_expression(
                         echo_ast,
@@ -2470,7 +2513,7 @@ def emit_fortran(
                 pass
             else:
                 echo_calls.append(
-                    (expression, result_type, (echo.line.number,), ranked_echo)
+                    (expression, result_type, (echo.line.number,), mapped_echo)
                 )
                 continue
         match = re.fullmatch(
@@ -2495,21 +2538,23 @@ def emit_fortran(
         )
     unknown_echoes = [
         index
-        for index, (_, result_type, _, ranked_echo) in enumerate(echo_calls, 1)
+        for index, (_, result_type, _, mapped_echo) in enumerate(echo_calls, 1)
         if result_type.rank == 2
         and not isinstance(result_type.shape.extents[1], int)
-        and ranked_echo is None
+        and mapped_echo is None
     ]
     for index in unknown_echoes:
         lines.append(f"  integer, allocatable :: j_echo_{index}(:,:)")
     if unknown_echoes:
         lines.append("  integer :: j_row")
-    ranked_echoes = [
-        (index, result_type, ranked_echo)
-        for index, (_, result_type, _, ranked_echo) in enumerate(echo_calls, 1)
-        if ranked_echo is not None
+    mapped_echoes = [
+        (index, expression, result_type, mapped_echo)
+        for index, (expression, result_type, _, mapped_echo) in enumerate(
+            echo_calls, 1
+        )
+        if mapped_echo is not None
     ]
-    for index, result_type, _ in ranked_echoes:
+    for _, expression, result_type, _ in mapped_echoes:
         intrinsic = {
             AtomType.INTEGER: "integer",
             AtomType.REAL: "real(kind=real64)",
@@ -2517,25 +2562,30 @@ def emit_fortran(
         }[result_type.atom_type]
         dimensions = ",".join(":" for _ in range(result_type.rank))
         lines.append(
-            f"  {intrinsic}, allocatable :: j_ranked_echo_{index}({dimensions})"
+            f"  {intrinsic}, allocatable :: {expression}({dimensions})"
         )
+    ranked_echoes = [
+        mapped for mapped in mapped_echoes if mapped[3][0] == "rank"
+    ]
     if ranked_echoes:
         indices = "j_cell_1, j_cell_2" if any(
-            ranked_echo[2] == 3 for _, _, ranked_echo in ranked_echoes
+            mapped_echo[3] == 3 for _, _, _, mapped_echo in ranked_echoes
         ) else "j_cell_1"
         lines.append(f"  integer :: {indices}")
+    if any(mapped_echo[0] == "infix" for _, _, _, mapped_echo in mapped_echoes):
+        lines.append("  integer :: j_window")
     lines.append("")
     for assignment in active_assignments:
         append_comments(lines, assignment.line.number, indent="  ")
         lines.append(f"  {assignment.name} = {assignment.expression}")
         lines.extend(f"  {update}" for update in assignment.updates)
-    for index, (expression, result_type, comment_targets, ranked_echo) in enumerate(
+    for index, (expression, result_type, comment_targets, mapped_echo) in enumerate(
         echo_calls, 1
     ):
         for target_line in comment_targets:
             append_comments(lines, target_line, indent="  ")
-        if ranked_echo is not None:
-            function, argument, argument_rank = ranked_echo
+        if mapped_echo is not None and mapped_echo[0] == "rank":
+            _, function, argument, argument_rank = mapped_echo
             extents = ", ".join(
                 f"size({argument}, {axis})" for axis in range(1, argument_rank)
             )
@@ -2554,6 +2604,19 @@ def emit_fortran(
                     f"        {function}({argument}(j_cell_1, j_cell_2, :))"
                 )
                 lines.append("    end do")
+            lines.append("  end do")
+        elif mapped_echo is not None:
+            _, function, argument, width = mapped_echo
+            lines.append(
+                f"  allocate({expression}(size({argument}) - {width - 1}))"
+            )
+            lines.append(f"  do j_window = 1, size({expression})")
+            lines.append(
+                f"    {expression}(j_window) = &"
+            )
+            lines.append(
+                f"      {function}({argument}(j_window:j_window + {width - 1}))"
+            )
             lines.append("  end do")
         if result_type.atom_type is AtomType.CHARACTER:
             lines.append(f'  write (*,"(a)") {expression}')

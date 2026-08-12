@@ -286,7 +286,10 @@ class ExpressionParser:
         if token.kind is not TokenKind.NAME or self.index + 1 >= len(self.tokens):
             return False
         following = self.tokens[self.index + 1]
-        if following.kind is TokenKind.PRIMITIVE and following.value == '"':
+        if (
+            following.kind is TokenKind.PRIMITIVE
+            and following.value in _ADVERBS | {'"'}
+        ):
             return True
         if (
             following.kind is TokenKind.LPAREN

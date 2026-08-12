@@ -232,6 +232,16 @@ def test_insert_then_scan_builds_nested_adverbs() -> None:
     assert expression.verb.operand.adverb == "/"
 
 
+def test_parse_named_infix_application() -> None:
+    expression = parse_expression("3 mean\\ data", noun_names={"data"})
+
+    assert isinstance(expression, DyadicApply)
+    assert isinstance(expression.verb, AdverbApplication)
+    assert expression.verb.adverb == "\\"
+    assert isinstance(expression.verb.operand, NamedVerb)
+    assert expression.verb.operand.identifier == "mean"
+
+
 def test_compression_and_laminate_follow_right_to_left_order() -> None:
     expression = parse_expression("keep # ab ,. c")
 

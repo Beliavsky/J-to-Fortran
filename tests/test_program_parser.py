@@ -464,6 +464,25 @@ exit 0
     )
 
 
+def test_named_infix_application_uses_a_regular_window_loop() -> None:
+    source = """mean =: +/ % #
+data =: 2 5 3 8 7
+smoutput 3 mean\\ data
+exit 0
+"""
+
+    generated = xj2f.emit_fortran(
+        xj2f.parse_j_source(Path("moving_mean.ijs"), source)
+    )
+
+    assert "real(kind=real64), allocatable :: j_infix_echo_1(:)" in generated
+    assert "integer :: j_window" in generated
+    assert "allocate(j_infix_echo_1(size(data_j) - 2))" in generated
+    assert "do j_window = 1, size(j_infix_echo_1)" in generated
+    assert "mean(data_j(j_window:j_window + 2))" in generated
+    assert 'write (*,"(*(g0, 1x))") j_infix_echo_1' in generated
+
+
 def test_tacit_call_infers_rank_from_a_preceding_top_level_noun() -> None:
     source = """mean =: +/ % #
 x =: 2 4 6 8
