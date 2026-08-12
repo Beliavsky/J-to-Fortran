@@ -35,6 +35,7 @@ include = ["j2fortran*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["."]
 markers = [
   "requires_gfortran: integration test requiring gfortran",
   "requires_j: integration test requiring jconsole",
