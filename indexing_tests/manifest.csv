@@ -1,0 +1,13 @@
+file,feature
+multidim_01_scalar.ijs,matrix scalar indexing
+multidim_02_row.ijs,leading-axis row selection
+multidim_03_rank3_scalar.ijs,rank-3 scalar indexing
+multidim_04_rank3_slice.ijs,rank-3 trailing-axis slice
+multidim_05_submatrix.ijs,independent row/column index vectors
+multidim_06_reorder.ijs,index-order preservation
+multidim_07_repeated.ijs,duplicate indices
+multidim_08_negative.ijs,negative indices
+multidim_09_rank3_subarray.ijs,rank-3 vector indexing on every axis
+multidim_10_amend_scalar.ijs,single-element amendment
+multidim_11_amend_submatrix.ijs,scalar amendment over submatrix
+multidim_12_amend_values.ijs,array-valued amendment over submatrix

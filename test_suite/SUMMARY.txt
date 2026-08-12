@@ -1,0 +1,10 @@
+J -> Fortran transpiler test suite
+
+Total scripts: 131
+advanced: 6
+core: 108
+extended: 8
+integration: 3
+negative: 6
+
+See README.md and manifest.csv.

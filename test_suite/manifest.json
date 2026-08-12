@@ -1,0 +1,788 @@
+[
+  {
+    "file": "00_literals/001_integer_vector.ijs",
+    "feature": "integer vector literal",
+    "level": "core",
+    "expected": "ok=1"
+  },
+  {
+    "file": "00_literals/002_float_vector.ijs",
+    "feature": "floating-point literals",
+    "level": "core",
+    "expected": "ok=1"
+  },
+  {
+    "file": "00_literals/003_boolean_vector.ijs",
+    "feature": "Boolean literals",
+    "level": "core",
+    "expected": "ok=1"
+  },
+  {
+    "file": "00_literals/004_negative_numbers.ijs",
+    "feature": "negative numeric literal syntax",
+    "level": "core",
+    "expected": "ok=1"
+  },
+  {
+    "file": "00_literals/005_global_assignment.ijs",
+    "feature": "global assignment =:",
+    "level": "core",
+    "expected": "ok=1"
+  },
+  {
+    "file": "00_literals/006_scalar_shape.ijs",
+    "feature": "scalar shape and empty vector",
+    "level": "core",
+    "expected": "ok=1"
+  },
+  {
+    "file": "01_arithmetic/010_add.ijs",
+    "feature": "dyadic addition",
+    "level": "core",
+    "expected": "ok=1"
+  },
+  {
+    "file": "01_arithmetic/011_subtract.ijs",
+    "feature": "dyadic subtraction",
+    "level": "core",
+    "expected": "ok=1"
+  },
+  {
+    "file": "01_arithmetic/012_multiply.ijs",
+    "feature": "dyadic multiplication",
+    "level": "core",
+    "expected": "ok=1"
+  },
+  {
+    "file": "01_arithmetic/013_divide.ijs",
+    "feature": "dyadic division",
+    "level": "core",
+    "expected": "ok=1"
+  },
+  {
+    "file": "01_arithmetic/014_scalar_extension.ijs",
+    "feature": "scalar extension",
+    "level": "core",
+    "expected": "ok=1"
+  },
+  {
+    "file": "01_arithmetic/015_negate.ijs",
+    "feature": "monadic negation",
+    "level": "core",
+    "expected": "ok=1"
+  },
+  {
+    "file": "01_arithmetic/016_power.ijs",
+    "feature": "power",
+    "level": "core",
+    "expected": "ok=1"
+  },
+  {
+    "file": "01_arithmetic/017_square.ijs",
+    "feature": "square *:",
+    "level": "core",
+    "expected": "ok=1"
+  },
+  {
+    "file": "01_arithmetic/018_square_root.ijs",
+    "feature": "square root %:",
+    "level": "core",
+    "expected": "ok=1"
+  },
+  {
+    "file": "01_arithmetic/019_residue.ijs",
+    "feature": "residue |",
+    "level": "core",
+    "expected": "ok=1"
+  },
+  {
+    "file": "01_arithmetic/020_floor.ijs",
+    "feature": "floor <.",
+    "level": "core",
+    "expected": "ok=1"
+  },
+  {
+    "file": "01_arithmetic/021_ceiling.ijs",
+    "feature": "ceiling >.",
+    "level": "core",
+    "expected": "ok=1"
+  },
+  {
+    "file": "01_arithmetic/022_minimum.ijs",
+    "feature": "dyadic minimum",
+    "level": "core",
+    "expected": "ok=1"
+  },
+  {
+    "file": "01_arithmetic/023_maximum.ijs",
+    "feature": "dyadic maximum",
+    "level": "core",
+    "expected": "ok=1"
+  },
+  {
+    "file": "01_arithmetic/024_absolute_value.ijs",
+    "feature": "absolute value",
+    "level": "core",
+    "expected": "ok=1"
+  },
+  {
+    "file": "01_arithmetic/025_signum.ijs",
+    "feature": "signum",
+    "level": "core",
+    "expected": "ok=1"
+  },
+  {
+    "file": "01_arithmetic/026_factorial.ijs",
+    "feature": "factorial !",
+    "level": "core",
+    "expected": "ok=1"
+  },
+  {
+    "file": "01_arithmetic/027_binomial.ijs",
+    "feature": "dyadic ! (out of / binomial coefficient)",
+    "level": "core",
+    "expected": "ok=1"
+  },
+  {
+    "file": "01_arithmetic/028_equal.ijs",
+    "feature": "equality",
+    "level": "core",
+    "expected": "ok=1"
+  },
+  {
+    "file": "01_arithmetic/029_not_equal.ijs",
+    "feature": "not equal",
+    "level": "core",
+    "expected": "ok=1"
+  },
+  {
+    "file": "01_arithmetic/030_less_than.ijs",
+    "feature": "less than",
+    "level": "core",
+    "expected": "ok=1"
+  },
+  {
+    "file": "01_arithmetic/031_less_equal.ijs",
+    "feature": "less than or equal",
+    "level": "core",
+    "expected": "ok=1"
+  },
+  {
+    "file": "01_arithmetic/032_boolean_and.ijs",
+    "feature": "Boolean AND *.",
+    "level": "core",
+    "expected": "ok=1"
+  },
+  {
+    "file": "01_arithmetic/033_boolean_or.ijs",
+    "feature": "Boolean OR +.",
+    "level": "core",
+    "expected": "ok=1"
+  },
+  {
+    "file": "02_arrays/040_tally.ijs",
+    "feature": "tally #",
+    "level": "core",
+    "expected": "ok=1"
+  },
+  {
+    "file": "02_arrays/041_shape.ijs",
+    "feature": "shape $",
+    "level": "core",
+    "expected": "ok=1"
+  },
+  {
+    "file": "02_arrays/042_reshape.ijs",
+    "feature": "reshape $ with cyclic fill",
+    "level": "core",
+    "expected": "ok=1"
+  },
+  {
+    "file": "02_arrays/043_iota.ijs",
+    "feature": "iota i.",
+    "level": "core",
+    "expected": "ok=1"
+  },
+  {
+    "file": "02_arrays/044_ravel.ijs",
+    "feature": "ravel ,",
+    "level": "core",
+    "expected": "ok=1"
+  },
+  {
+    "file": "02_arrays/045_catenate.ijs",
+    "feature": "catenate ,",
+    "level": "core",
+    "expected": "ok=1"
+  },
+  {
+    "file": "02_arrays/046_laminate.ijs",
+    "feature": "laminate ,:",
+    "level": "core",
+    "expected": "ok=1"
+  },
+  {
+    "file": "02_arrays/047_take_positive.ijs",
+    "feature": "take {.",
+    "level": "core",
+    "expected": "ok=1"
+  },
+  {
+    "file": "02_arrays/048_take_negative.ijs",
+    "feature": "negative take",
+    "level": "core",
+    "expected": "ok=1"
+  },
+  {
+    "file": "02_arrays/049_drop_positive.ijs",
+    "feature": "drop }.",
+    "level": "core",
+    "expected": "ok=1"
+  },
+  {
+    "file": "02_arrays/050_drop_negative.ijs",
+    "feature": "negative drop",
+    "level": "core",
+    "expected": "ok=1"
+  },
+  {
+    "file": "02_arrays/051_head.ijs",
+    "feature": "head {.",
+    "level": "core",
+    "expected": "ok=1"
+  },
+  {
+    "file": "02_arrays/052_tail.ijs",
+    "feature": "tail {:",
+    "level": "core",
+    "expected": "ok=1"
+  },
+  {
+    "file": "02_arrays/053_behead.ijs",
+    "feature": "behead }.",
+    "level": "core",
+    "expected": "ok=1"
+  },
+  {
+    "file": "02_arrays/054_curtail.ijs",
+    "feature": "curtail }:",
+    "level": "core",
+    "expected": "ok=1"
+  },
+  {
+    "file": "02_arrays/055_reverse.ijs",
+    "feature": "reverse |.",
+    "level": "core",
+    "expected": "ok=1"
+  },
+  {
+    "file": "02_arrays/056_rotate.ijs",
+    "feature": "rotate |.",
+    "level": "core",
+    "expected": "ok=1"
+  },
+  {
+    "file": "02_arrays/057_transpose.ijs",
+    "feature": "transpose |:",
+    "level": "core",
+    "expected": "ok=1"
+  },
+  {
+    "file": "02_arrays/058_from_scalar.ijs",
+    "feature": "from { scalar index",
+    "level": "core",
+    "expected": "ok=1"
+  },
+  {
+    "file": "02_arrays/059_from_vector.ijs",
+    "feature": "from { index vector",
+    "level": "core",
+    "expected": "ok=1"
+  },
+  {
+    "file": "02_arrays/060_grade_up.ijs",
+    "feature": "grade up /:",
+    "level": "core",
+    "expected": "ok=1"
+  },
+  {
+    "file": "02_arrays/061_sort_up.ijs",
+    "feature": "sort ascending /:~",
+    "level": "core",
+    "expected": "ok=1"
+  },
+  {
+    "file": "02_arrays/062_sort_down.ijs",
+    "feature": "sort descending \\:~",
+    "level": "core",
+    "expected": "ok=1"
+  },
+  {
+    "file": "02_arrays/063_nub.ijs",
+    "feature": "nub ~.",
+    "level": "core",
+    "expected": "ok=1"
+  },
+  {
+    "file": "02_arrays/064_membership.ijs",
+    "feature": "membership e.",
+    "level": "core",
+    "expected": "ok=1"
+  },
+  {
+    "file": "02_arrays/065_index_of.ijs",
+    "feature": "index of dyadic i.",
+    "level": "core",
+    "expected": "ok=1"
+  },
+  {
+    "file": "02_arrays/066_boolean_copy.ijs",
+    "feature": "Boolean copy/filter #",
+    "level": "core",
+    "expected": "ok=1"
+  },
+  {
+    "file": "02_arrays/067_counted_copy.ijs",
+    "feature": "counted copy #",
+    "level": "core",
+    "expected": "ok=1"
+  },
+  {
+    "file": "03_reductions_scans/070_sum_reduce.ijs",
+    "feature": "sum reduction +/",
+    "level": "core",
+    "expected": "ok=1"
+  },
+  {
+    "file": "03_reductions_scans/071_product_reduce.ijs",
+    "feature": "product reduction */",
+    "level": "core",
+    "expected": "ok=1"
+  },
+  {
+    "file": "03_reductions_scans/072_min_reduce.ijs",
+    "feature": "minimum reduction <./",
+    "level": "core",
+    "expected": "ok=1"
+  },
+  {
+    "file": "03_reductions_scans/073_max_reduce.ijs",
+    "feature": "maximum reduction >./",
+    "level": "core",
+    "expected": "ok=1"
+  },
+  {
+    "file": "03_reductions_scans/074_any_reduce.ijs",
+    "feature": "Boolean OR reduction",
+    "level": "core",
+    "expected": "ok=1"
+  },
+  {
+    "file": "03_reductions_scans/075_all_reduce.ijs",
+    "feature": "Boolean AND reduction",
+    "level": "core",
+    "expected": "ok=1"
+  },
+  {
+    "file": "03_reductions_scans/076_prefix_sum.ijs",
+    "feature": "prefix sum +/\\",
+    "level": "core",
+    "expected": "ok=1"
+  },
+  {
+    "file": "03_reductions_scans/077_prefix_product.ijs",
+    "feature": "prefix product */\\",
+    "level": "core",
+    "expected": "ok=1"
+  },
+  {
+    "file": "03_reductions_scans/078_sliding_sum.ijs",
+    "feature": "infix/sliding reduction",
+    "level": "core",
+    "expected": "ok=1"
+  },
+  {
+    "file": "03_reductions_scans/079_pair_differences.ijs",
+    "feature": "infix subtraction",
+    "level": "core",
+    "expected": "ok=1"
+  },
+  {
+    "file": "04_rank_tables/080_column_sums.ijs",
+    "feature": "insert over matrix items / column sums",
+    "level": "core",
+    "expected": "ok=1"
+  },
+  {
+    "file": "04_rank_tables/081_row_sums_rank.ijs",
+    "feature": "rank conjunction on rows",
+    "level": "core",
+    "expected": "ok=1"
+  },
+  {
+    "file": "04_rank_tables/082_row_products_rank.ijs",
+    "feature": "ranked product reduction",
+    "level": "core",
+    "expected": "ok=1"
+  },
+  {
+    "file": "04_rank_tables/083_addition_table.ijs",
+    "feature": "reflexive table /~",
+    "level": "core",
+    "expected": "ok=1"
+  },
+  {
+    "file": "04_rank_tables/084_multiplication_table.ijs",
+    "feature": "dyadic table */",
+    "level": "core",
+    "expected": "ok=1"
+  },
+  {
+    "file": "04_rank_tables/085_power_table.ijs",
+    "feature": "dyadic table ^/",
+    "level": "core",
+    "expected": "ok=1"
+  },
+  {
+    "file": "05_functions_control/090_monadic_explicit.ijs",
+    "feature": "explicit monadic verb 3 : 0",
+    "level": "core",
+    "expected": "ok=1"
+  },
+  {
+    "file": "05_functions_control/091_dyadic_explicit.ijs",
+    "feature": "explicit dyadic verb 4 : 0",
+    "level": "core",
+    "expected": "ok=1"
+  },
+  {
+    "file": "05_functions_control/092_ambivalent_explicit.ijs",
+    "feature": "ambivalent explicit verb",
+    "level": "core",
+    "expected": "ok=1"
+  },
+  {
+    "file": "05_functions_control/093_local_assignment.ijs",
+    "feature": "local assignment =.",
+    "level": "core",
+    "expected": "ok=1"
+  },
+  {
+    "file": "05_functions_control/094_if_else.ijs",
+    "feature": "if./else./end. and rank",
+    "level": "core",
+    "expected": "ok=1"
+  },
+  {
+    "file": "05_functions_control/095_elseif.ijs",
+    "feature": "elseif. control flow",
+    "level": "core",
+    "expected": "ok=1"
+  },
+  {
+    "file": "05_functions_control/096_while_loop.ijs",
+    "feature": "while. loop",
+    "level": "core",
+    "expected": "ok=1"
+  },
+  {
+    "file": "05_functions_control/097_for_loop.ijs",
+    "feature": "for_name. loop",
+    "level": "core",
+    "expected": "ok=1"
+  },
+  {
+    "file": "05_functions_control/098_factorial_iterative.ijs",
+    "feature": "iterative factorial",
+    "level": "core",
+    "expected": "ok=1"
+  },
+  {
+    "file": "05_functions_control/099_factorial_recursive.ijs",
+    "feature": "recursive explicit verb",
+    "level": "core",
+    "expected": "ok=1"
+  },
+  {
+    "file": "05_functions_control/100_gcd_euclid.ijs",
+    "feature": "Euclidean algorithm and dyadic explicit verb",
+    "level": "core",
+    "expected": "ok=1"
+  },
+  {
+    "file": "05_functions_control/101_count_positive.ijs",
+    "feature": "vector comparison inside explicit verb",
+    "level": "core",
+    "expected": "ok=1"
+  },
+  {
+    "file": "06_tacit/110_tacit_mean.ijs",
+    "feature": "tacit fork mean +/ % #",
+    "level": "core",
+    "expected": "ok=1"
+  },
+  {
+    "file": "06_tacit/111_atop_sum_squares.ijs",
+    "feature": "at @: composition",
+    "level": "core",
+    "expected": "ok=1"
+  },
+  {
+    "file": "06_tacit/112_bond_double.ijs",
+    "feature": "bond &",
+    "level": "core",
+    "expected": "ok=1"
+  },
+  {
+    "file": "06_tacit/113_bond_add10.ijs",
+    "feature": "bond left noun to verb",
+    "level": "core",
+    "expected": "ok=1"
+  },
+  {
+    "file": "06_tacit/114_compose_increment_square.ijs",
+    "feature": "composition of monadic verbs",
+    "level": "core",
+    "expected": "ok=1"
+  },
+  {
+    "file": "06_tacit/115_reflex_subtract.ijs",
+    "feature": "reflex ~ on dyadic verb",
+    "level": "core",
+    "expected": "ok=1"
+  },
+  {
+    "file": "07_linear_algebra/120_vector_dot.ijs",
+    "feature": "dot product +/ . *",
+    "level": "core",
+    "expected": "ok=1"
+  },
+  {
+    "file": "07_linear_algebra/121_matrix_vector.ijs",
+    "feature": "matrix-vector multiplication",
+    "level": "core",
+    "expected": "ok=1"
+  },
+  {
+    "file": "07_linear_algebra/122_matrix_matrix.ijs",
+    "feature": "matrix-matrix multiplication",
+    "level": "core",
+    "expected": "ok=1"
+  },
+  {
+    "file": "07_linear_algebra/123_determinant_2x2.ijs",
+    "feature": "determinant via -/ . *",
+    "level": "core",
+    "expected": "ok=1"
+  },
+  {
+    "file": "07_linear_algebra/124_matrix_solve.ijs",
+    "feature": "matrix divide / linear solve %.",
+    "level": "core",
+    "expected": "ok=1"
+  },
+  {
+    "file": "07_linear_algebra/125_identity_product.ijs",
+    "feature": "matrix identity via matrix divide",
+    "level": "core",
+    "expected": "ok=1"
+  },
+  {
+    "file": "08_algorithms/130_primes_to_20.ijs",
+    "feature": "manual primality test and filter",
+    "level": "core",
+    "expected": "ok=1"
+  },
+  {
+    "file": "08_algorithms/131_fibonacci.ijs",
+    "feature": "Fibonacci loop",
+    "level": "core",
+    "expected": "ok=1"
+  },
+  {
+    "file": "08_algorithms/132_moving_sum.ijs",
+    "feature": "sliding window sum",
+    "level": "core",
+    "expected": "ok=1"
+  },
+  {
+    "file": "08_algorithms/133_moving_average.ijs",
+    "feature": "moving average",
+    "level": "core",
+    "expected": "ok=1"
+  },
+  {
+    "file": "08_algorithms/134_center_data.ijs",
+    "feature": "mean centering",
+    "level": "core",
+    "expected": "ok=1"
+  },
+  {
+    "file": "08_algorithms/135_sum_of_squares.ijs",
+    "feature": "sum of squares",
+    "level": "core",
+    "expected": "ok=1"
+  },
+  {
+    "file": "08_algorithms/136_manual_dot.ijs",
+    "feature": "manual vector dot product",
+    "level": "core",
+    "expected": "ok=1"
+  },
+  {
+    "file": "08_algorithms/137_horner_cubic.ijs",
+    "feature": "Horner polynomial evaluation",
+    "level": "core",
+    "expected": "ok=1"
+  },
+  {
+    "file": "08_algorithms/138_is_even_filter.ijs",
+    "feature": "Boolean filtering with residue",
+    "level": "core",
+    "expected": "ok=1"
+  },
+  {
+    "file": "08_algorithms/139_cumulative_growth.ijs",
+    "feature": "cumulative product",
+    "level": "core",
+    "expected": "ok=1"
+  },
+  {
+    "file": "09_strings_boxes/140_string_literal.ijs",
+    "feature": "literal character vector",
+    "level": "extended",
+    "expected": "ok=1"
+  },
+  {
+    "file": "09_strings_boxes/141_string_tally.ijs",
+    "feature": "character vector tally",
+    "level": "extended",
+    "expected": "ok=1"
+  },
+  {
+    "file": "09_strings_boxes/142_string_catenate.ijs",
+    "feature": "character catenate",
+    "level": "extended",
+    "expected": "ok=1"
+  },
+  {
+    "file": "09_strings_boxes/143_string_reverse.ijs",
+    "feature": "character reverse",
+    "level": "extended",
+    "expected": "ok=1"
+  },
+  {
+    "file": "09_strings_boxes/144_string_from.ijs",
+    "feature": "character indexing",
+    "level": "extended",
+    "expected": "ok=1"
+  },
+  {
+    "file": "09_strings_boxes/145_box_open.ijs",
+    "feature": "box < and open >",
+    "level": "extended",
+    "expected": "ok=1"
+  },
+  {
+    "file": "09_strings_boxes/146_boxed_list_index.ijs",
+    "feature": "boxed list and indexing",
+    "level": "extended",
+    "expected": "ok=1"
+  },
+  {
+    "file": "09_strings_boxes/147_raze.ijs",
+    "feature": "raze ;",
+    "level": "extended",
+    "expected": "ok=1"
+  },
+  {
+    "file": "10_advanced/150_complex_add.ijs",
+    "feature": "complex arithmetic",
+    "level": "advanced",
+    "expected": "ok=1"
+  },
+  {
+    "file": "10_advanced/151_complex_magnitude.ijs",
+    "feature": "complex magnitude",
+    "level": "advanced",
+    "expected": "ok=1"
+  },
+  {
+    "file": "10_advanced/152_exact_rational.ijs",
+    "feature": "exact rational arithmetic",
+    "level": "advanced",
+    "expected": "ok=1"
+  },
+  {
+    "file": "10_advanced/153_binary_decode.ijs",
+    "feature": "base decode #.",
+    "level": "advanced",
+    "expected": "ok=1"
+  },
+  {
+    "file": "10_advanced/154_binary_encode.ijs",
+    "feature": "antibase #:",
+    "level": "advanced",
+    "expected": "ok=1"
+  },
+  {
+    "file": "10_advanced/155_polynomial_primitive.ijs",
+    "feature": "polynomial evaluation p.",
+    "level": "advanced",
+    "expected": "ok=1"
+  },
+  {
+    "file": "negative/200_undefined_name.ijs",
+    "feature": "undefined name",
+    "level": "negative",
+    "expected": "undefined name"
+  },
+  {
+    "file": "negative/201_length_error.ijs",
+    "feature": "length error",
+    "level": "negative",
+    "expected": "length error"
+  },
+  {
+    "file": "negative/202_index_error.ijs",
+    "feature": "index error",
+    "level": "negative",
+    "expected": "index error"
+  },
+  {
+    "file": "negative/203_domain_error_char_add.ijs",
+    "feature": "domain error",
+    "level": "negative",
+    "expected": "domain error"
+  },
+  {
+    "file": "negative/204_bad_matrix_product.ijs",
+    "feature": "length error / incompatible matrix dimensions",
+    "level": "negative",
+    "expected": "length error / incompatible matrix dimensions"
+  },
+  {
+    "file": "negative/205_bad_reshape_shape.ijs",
+    "feature": "domain error",
+    "level": "negative",
+    "expected": "domain error"
+  },
+  {
+    "file": "integration/300_statistics_pipeline.ijs",
+    "feature": "multi-feature statistics pipeline",
+    "level": "integration",
+    "expected": "ok=1"
+  },
+  {
+    "file": "integration/301_prime_sum.ijs",
+    "feature": "manual primes through 100 and reduction",
+    "level": "integration",
+    "expected": "ok=1"
+  },
+  {
+    "file": "integration/302_matrix_pipeline.ijs",
+    "feature": "matrix pipeline",
+    "level": "integration",
+    "expected": "ok=1"
+  }
+]
