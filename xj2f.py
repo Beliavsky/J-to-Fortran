@@ -1859,18 +1859,21 @@ def _definition_argument_types(
             visit(expression.left, names)
             visit(expression.right, names)
 
-    for assignment in (item for item in program.items if isinstance(item, Assign)):
+    for item in program.items:
+        if not isinstance(item, (Assign, EchoStatement)):
+            continue
         try:
-            expression = parse_expression(assignment.expression)
+            expression = parse_expression(item.expression)
         except (LexerError, ExpressionParseError):
             continue
         visit(expression, top_types)
-        try:
-            top_types[_fortran_name(assignment.name)] = infer_type(
-                expression, top_types, _fortran_name
-            )
-        except LoweringError:
-            pass
+        if isinstance(item, Assign):
+            try:
+                top_types[_fortran_name(item.name)] = infer_type(
+                    expression, top_types, _fortran_name
+                )
+            except LoweringError:
+                pass
     return inferred
 
 
@@ -2212,6 +2215,9 @@ def emit_fortran(
     declarations = [_main_entity_declaration(assignment) for assignment in active_assignments]
     lines.extend(f"  {line}" for line in combine_declarations(declarations))
     assignment_by_name = {assignment.name: assignment for assignment in top_assignments}
+    top_types = {
+        assignment.name: assignment.type_info for assignment in top_assignments
+    }
     echo_calls: list[tuple[str, TypeInfo, tuple[int, ...]]] = []
     for echo in echos:
         normalized_echo = _normalized_expression(echo.expression)
@@ -2244,6 +2250,27 @@ def emit_fortran(
                 (expression, noun_assignment.type_info, comment_targets)
             )
             continue
+        if echo_ast is not None:
+            try:
+                result_type = infer_type(
+                    echo_ast,
+                    top_types,
+                    _fortran_name,
+                    named_verbs=function_types,
+                )
+                expression = render_fortran_expression(
+                    echo_ast,
+                    _fortran_name,
+                    names=top_types,
+                    named_verbs=function_types,
+                )
+            except LoweringError:
+                pass
+            else:
+                echo_calls.append(
+                    (expression, result_type, (echo.line.number,))
+                )
+                continue
         match = re.fullmatch(
             r"([A-Za-z][A-Za-z0-9_]*)\s+([0-9]+)",
             _normalized_expression(echo.expression),

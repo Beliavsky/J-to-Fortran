@@ -252,6 +252,20 @@ ok =: result -: expected
     assert "j_result = real(sum(y), kind=real64) / size(y, 1)" in generated
 
 
+def test_tacit_argument_rank_is_inferred_from_smoutput_call() -> None:
+    source = """mean =: +/ % #
+x =: 2 4 6 8
+smoutput mean x
+exit 0
+"""
+
+    generated = xj2f.emit_fortran(xj2f.parse_j_source(Path("mean_output.ijs"), source))
+
+    assert "integer, intent(in) :: y(:)" in generated
+    assert "j_result = real(sum(y), kind=real64) / size(y, 1)" in generated
+    assert 'write (*,"(g0)") mean(x)' in generated
+
+
 def test_tacit_call_infers_rank_from_a_preceding_top_level_noun() -> None:
     source = """mean =: +/ % #
 x =: 2 4 6 8
