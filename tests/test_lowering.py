@@ -385,6 +385,61 @@ def test_integer_sort_uses_direction_flag(source: str, descending: str) -> None:
     assert required_runtime_helpers(expression, names) == {"sort_int_vector"}
 
 
+def test_integer_nub_has_a_data_dependent_extent() -> None:
+    expression = parse_expression("~. a")
+    names = {"a": TypeInfo(AtomType.INTEGER, Shape.vector(7))}
+
+    assert infer_type(expression, names) == TypeInfo(
+        AtomType.INTEGER, Shape.vector()
+    )
+    assert render_fortran_expression(expression, names=names) == "j_nub_int(a)"
+    assert required_runtime_helpers(expression, names) == {"nub_int"}
+
+
+def test_integer_membership_preserves_the_query_shape() -> None:
+    expression = parse_expression("queries e. values")
+    names = {
+        "queries": TypeInfo(AtomType.INTEGER, Shape.vector(3)),
+        "values": TypeInfo(AtomType.INTEGER, Shape.vector(5)),
+    }
+
+    assert infer_type(expression, names) == TypeInfo(
+        AtomType.LOGICAL, Shape.vector(3)
+    )
+    assert render_fortran_expression(expression, names=names) == (
+        "j_membership_int(queries=queries, values=values)"
+    )
+    assert required_runtime_helpers(expression, names) == {"membership_int"}
+
+
+def test_integer_index_of_preserves_query_shape() -> None:
+    expression = parse_expression("values i. queries")
+    names = {
+        "values": TypeInfo(AtomType.INTEGER, Shape.vector(4)),
+        "queries": TypeInfo(AtomType.INTEGER, Shape.vector(3)),
+    }
+
+    assert infer_type(expression, names) == TypeInfo(
+        AtomType.INTEGER, Shape.vector(3)
+    )
+    assert render_fortran_expression(expression, names=names) == (
+        "j_index_of_int(values=values, queries=queries)"
+    )
+    assert required_runtime_helpers(expression, names) == {"index_of_int"}
+
+
+def test_unknown_extent_match_is_not_folded_to_false() -> None:
+    expression = parse_expression("actual -: expected")
+    names = {
+        "actual": TypeInfo(AtomType.INTEGER, Shape.vector()),
+        "expected": TypeInfo(AtomType.INTEGER, Shape.vector(4)),
+    }
+
+    assert render_fortran_expression(expression, names=names) == (
+        "all(actual == expected)"
+    )
+
+
 def test_constant_reshape_preserves_j_axis_order_and_cyclic_fill() -> None:
     matrix = parse_expression("2 3 $ i. 6")
     cyclic = parse_expression("2 3 $ 1 2")

@@ -109,6 +109,7 @@ The parser currently recognizes:
 - constant in-bounds vector take/drop, plus head, tail, behead, and curtail;
 - vector reverse and constant rotate, plus rank-2 transpose;
 - integer-vector grade up and ascending or descending sort;
+- stable integer nub, membership, and zero-based index-of;
 - constant multidimensional `{` selection through rank 3: scalar coordinates,
   leading-axis rows, independent vector selectors, negative indices, and slices;
 - top-level noun-derived `}` amendment with scalar or conforming array values;

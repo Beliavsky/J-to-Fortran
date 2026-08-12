@@ -85,6 +85,7 @@ _ALPHABETIC_PRIMITIVES = {
     "D.",
     "D:",
     "E.",
+    "e.",
     "i.",
     "i:",
     "L.",

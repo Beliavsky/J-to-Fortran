@@ -35,6 +35,14 @@ def test_array_pipeline_uses_longest_primitive_spellings() -> None:
     assert values == ["keep", "#", "ab", ",.", "<.", "%:", "sumsq"]
 
 
+def test_membership_is_an_alphabetic_primitive() -> None:
+    assert significant("queries e. values") == [
+        (TokenKind.NAME, "queries"),
+        (TokenKind.PRIMITIVE, "e."),
+        (TokenKind.NAME, "values"),
+    ]
+
+
 def test_control_words_and_loop_names() -> None:
     tokens = significant("for_item. 1 + i. y do.\nif. y <: 3 do.\nend.")
     controls = [value for kind, value in tokens if kind is TokenKind.CONTROL]

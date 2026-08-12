@@ -3,10 +3,57 @@ module j2f_runtime
   implicit none
   private
   public :: j_append_int_row, j_binomial, j_cartesian_square, j_compress_hcat
-  public :: j_copy_int_vector, j_factorial, j_grade_up_int, j_iota, j_match_real
+  public :: j_copy_int_vector, j_factorial, j_grade_up_int, j_index_of_int
+  public :: j_iota, j_match_real, j_membership_int, j_nub_int
   public :: j_reverse_int_vector, j_signum_int, j_sort_int_vector
 
 contains
+
+pure function j_nub_int(values) result(unique_values)
+  integer, intent(in) :: values(:)
+  integer, allocatable :: unique_values(:)
+  integer, allocatable :: workspace(:)
+  integer :: unique_count, value_index
+
+  allocate(workspace(size(values)))
+  unique_count = 0
+  do value_index = 1, size(values)
+    if (unique_count == 0 .or. &
+        .not. any(workspace(1:unique_count) == values(value_index))) then
+      unique_count = unique_count + 1
+      workspace(unique_count) = values(value_index)
+    end if
+  end do
+  unique_values = workspace(1:unique_count)
+end function j_nub_int
+
+pure function j_membership_int(queries, values) result(is_member)
+  integer, intent(in) :: queries(:), values(:)
+  logical, allocatable :: is_member(:)
+  integer :: query_index
+
+  allocate(is_member(size(queries)))
+  do query_index = 1, size(queries)
+    is_member(query_index) = any(values == queries(query_index))
+  end do
+end function j_membership_int
+
+pure function j_index_of_int(values, queries) result(indices)
+  integer, intent(in) :: values(:), queries(:)
+  integer, allocatable :: indices(:)
+  integer :: query_index, value_index
+
+  allocate(indices(size(queries)))
+  indices = size(values)
+  do query_index = 1, size(queries)
+    do value_index = 1, size(values)
+      if (queries(query_index) == values(value_index)) then
+        indices(query_index) = value_index - 1
+        exit
+      end if
+    end do
+  end do
+end function j_index_of_int
 
 pure function j_grade_up_int(values) result(indices)
   integer, intent(in) :: values(:)

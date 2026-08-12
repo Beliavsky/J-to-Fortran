@@ -132,6 +132,19 @@ def _sum_extents(left: int | str | None, right: int | str | None) -> int | str |
     return f"({left}) + ({right})"
 
 
+def _shapes_provably_different(left: Shape, right: Shape) -> bool:
+    if left.rank != right.rank:
+        return True
+    return any(
+        isinstance(left_extent, int)
+        and isinstance(right_extent, int)
+        and left_extent != right_extent
+        for left_extent, right_extent in zip(
+            left.extents, right.extents, strict=True
+        )
+    )
+
+
 def constant_shape_extents(expression: Expression) -> tuple[int, ...] | None:
     expression = ungroup(expression)
     if isinstance(expression, NumberLiteral):
@@ -479,6 +492,13 @@ def infer_type(
             ):
                 raise LoweringError("grade up currently requires an integer vector")
             return TypeInfo(AtomType.INTEGER, operand_type.shape)
+        if spelling == "~.":
+            if (
+                operand_type.atom_type is not AtomType.INTEGER
+                or operand_type.rank != 1
+            ):
+                raise LoweringError("nub currently requires an integer vector")
+            return TypeInfo(AtomType.INTEGER, Shape.vector())
         if spelling in {"+", "-", "*:"}:
             return operand_type
         if spelling == "|":
@@ -626,6 +646,28 @@ def infer_type(
             if right_type.rank != 1:
                 raise LoweringError("rotate currently requires a vector")
             return right_type
+        if spelling == "e.":
+            if (
+                left_type.atom_type is not AtomType.INTEGER
+                or right_type.atom_type is not AtomType.INTEGER
+                or left_type.rank != 1
+                or right_type.rank != 1
+            ):
+                raise LoweringError(
+                    "membership currently requires two integer vectors"
+                )
+            return TypeInfo(AtomType.LOGICAL, left_type.shape)
+        if spelling == "i.":
+            if (
+                left_type.atom_type is not AtomType.INTEGER
+                or right_type.atom_type is not AtomType.INTEGER
+                or left_type.rank != 1
+                or right_type.rank != 1
+            ):
+                raise LoweringError(
+                    "index-of currently requires two integer vectors"
+                )
+            return TypeInfo(AtomType.INTEGER, right_type.shape)
         if spelling == "-:":
             numeric_types = {AtomType.INTEGER, AtomType.REAL}
             both_numeric = (
@@ -891,6 +933,8 @@ def _render_fortran_expression(
             return f"transpose({operand})", _ATOM_PRECEDENCE, "call"
         if spelling == "/:":
             return f"j_grade_up_int({operand})", _ATOM_PRECEDENCE, "call"
+        if spelling == "~.":
+            return f"j_nub_int({operand})", _ATOM_PRECEDENCE, "call"
         raise LoweringError(f"monadic verb {spelling!r} needs a dedicated lowering rule")
     if isinstance(expression, DyadicApply):
         spelling = primitive_spelling(expression.verb)
@@ -942,6 +986,30 @@ def _render_fortran_expression(
                 expression.right, name_transform
             )
             return f"cshift({values}, {shift})", _ATOM_PRECEDENCE, "call"
+        if spelling == "e.":
+            queries, _, _ = _render_fortran_expression(
+                expression.left, name_transform
+            )
+            values, _, _ = _render_fortran_expression(
+                expression.right, name_transform
+            )
+            return (
+                f"j_membership_int(queries={queries}, values={values})",
+                _ATOM_PRECEDENCE,
+                "call",
+            )
+        if spelling == "i.":
+            values, _, _ = _render_fortran_expression(
+                expression.left, name_transform
+            )
+            queries, _, _ = _render_fortran_expression(
+                expression.right, name_transform
+            )
+            return (
+                f"j_index_of_int(values={values}, queries={queries})",
+                _ATOM_PRECEDENCE,
+                "call",
+            )
         if spelling == "^":
             left, left_precedence, _ = _render_fortran_expression(
                 expression.left, name_transform
@@ -1065,7 +1133,7 @@ def render_fortran_expression(
         right_type = infer_type(
             matched[1], names, name_transform, named_verbs=named_verbs
         )
-        if left_type.shape != right_type.shape:
+        if _shapes_provably_different(left_type.shape, right_type.shape):
             return ".false."
         left = render_fortran_expression(
             matched[0],
@@ -1177,6 +1245,8 @@ def required_runtime_helpers(
             helpers.add("reverse_int_vector")
         if spelling == "/:":
             helpers.add("grade_up_int")
+        if spelling == "~.":
+            helpers.add("nub_int")
         helpers.update(
             required_runtime_helpers(
                 expression.operand,
@@ -1186,6 +1256,10 @@ def required_runtime_helpers(
             )
         )
     elif isinstance(expression, DyadicApply):
+        if primitive_spelling(expression.verb) == "e.":
+            helpers.add("membership_int")
+        if primitive_spelling(expression.verb) == "i.":
+            helpers.add("index_of_int")
         if primitive_spelling(expression.verb) == "!":
             helpers.add("binomial")
         if primitive_spelling(expression.verb) == "-:" and names is not None:

@@ -68,7 +68,10 @@ RUNTIME_PROCEDURES = {
     "iota": "j_iota",
     "factorial": "j_factorial",
     "grade_up_int": "j_grade_up_int",
+    "index_of_int": "j_index_of_int",
     "match_real": "j_match_real",
+    "membership_int": "j_membership_int",
+    "nub_int": "j_nub_int",
     "reverse_int_vector": "j_reverse_int_vector",
     "signum_int": "j_signum_int",
     "sort_int_vector": "j_sort_int_vector",
@@ -751,6 +754,67 @@ class FunctionEmitter:
 
 def _runtime_helpers(helpers: set[str]) -> list[str]:
     result: list[str] = []
+    if "nub_int" in helpers:
+        result.extend(
+            [
+                "pure function j_nub_int(values) result(unique_values)",
+                "  integer, intent(in) :: values(:)",
+                "  integer, allocatable :: unique_values(:)",
+                "  integer, allocatable :: workspace(:)",
+                "  integer :: unique_count, value_index",
+                "",
+                "  allocate(workspace(size(values)))",
+                "  unique_count = 0",
+                "  do value_index = 1, size(values)",
+                "    if (unique_count == 0 .or. &",
+                "        .not. any(workspace(1:unique_count) == values(value_index))) then",
+                "      unique_count = unique_count + 1",
+                "      workspace(unique_count) = values(value_index)",
+                "    end if",
+                "  end do",
+                "  unique_values = workspace(1:unique_count)",
+                "end function j_nub_int",
+                "",
+            ]
+        )
+    if "membership_int" in helpers:
+        result.extend(
+            [
+                "pure function j_membership_int(queries, values) result(is_member)",
+                "  integer, intent(in) :: queries(:), values(:)",
+                "  logical, allocatable :: is_member(:)",
+                "  integer :: query_index",
+                "",
+                "  allocate(is_member(size(queries)))",
+                "  do query_index = 1, size(queries)",
+                "    is_member(query_index) = any(values == queries(query_index))",
+                "  end do",
+                "end function j_membership_int",
+                "",
+            ]
+        )
+    if "index_of_int" in helpers:
+        result.extend(
+            [
+                "pure function j_index_of_int(values, queries) result(indices)",
+                "  integer, intent(in) :: values(:), queries(:)",
+                "  integer, allocatable :: indices(:)",
+                "  integer :: query_index, value_index",
+                "",
+                "  allocate(indices(size(queries)))",
+                "  indices = size(values)",
+                "  do query_index = 1, size(queries)",
+                "    do value_index = 1, size(values)",
+                "      if (queries(query_index) == values(value_index)) then",
+                "        indices(query_index) = value_index - 1",
+                "        exit",
+                "      end if",
+                "    end do",
+                "  end do",
+                "end function j_index_of_int",
+                "",
+            ]
+        )
     if "grade_up_int" in helpers:
         result.extend(
             [
