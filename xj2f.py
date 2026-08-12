@@ -29,6 +29,7 @@ from j2fortran.ast import (
     DyadicApply,
     Group,
     ForkVerb,
+    InnerProductVerb,
     MonadicApply,
     Name,
     NamedVerb,
@@ -341,7 +342,8 @@ class Parser:
                     and _monadic_tacit_source(tacit_verb.right, "y") is not None
                 )
                 if isinstance(
-                    tacit_verb, (AdverbApplication, AtopVerb, BondVerb)
+                    tacit_verb,
+                    (AdverbApplication, AtopVerb, BondVerb, InnerProductVerb),
                 ) or supported_fork:
                     items.append(
                         TacitVerbDefinition(line, assignment.group(1), tacit_verb)
@@ -564,6 +566,8 @@ class FunctionEmitter:
             declaration = "integer, intent(in)"
             if argument_type.rank == 1:
                 declaration += "-vector"
+            elif argument_type.rank == 2:
+                declaration += "-matrix"
             self._declare(argument, declaration)
         self._emit_statements(self.definition.body)
         if self.result_type is None:
@@ -671,7 +675,7 @@ class FunctionEmitter:
     def _shape_suffix(declaration: str) -> str:
         if declaration.endswith("-vector"):
             return "(:)"
-        if declaration.endswith("allocatable-matrix"):
+        if declaration.endswith("-matrix"):
             return "(:,:)"
         return ""
 
@@ -691,6 +695,9 @@ class FunctionEmitter:
             "integer, intent(in)": TypeInfo(AtomType.INTEGER),
             "integer, intent(in)-vector": TypeInfo(
                 AtomType.INTEGER, Shape.vector()
+            ),
+            "integer, intent(in)-matrix": TypeInfo(
+                AtomType.INTEGER, Shape.matrix()
             ),
             "integer": TypeInfo(AtomType.INTEGER),
             "integer, allocatable-vector": TypeInfo(AtomType.INTEGER, Shape.vector()),
@@ -1717,6 +1724,7 @@ def _lower_top_assignments(
     types: dict[str, TypeInfo] = {}
     lowered: list[LoweredTopAssignment] = []
     helpers: set[str] = set()
+    noun_names: set[str] = set()
     print_only = _print_only_top_names(program)
     for assignment in (item for item in program.items if isinstance(item, Assign)):
         name = _fortran_name(assignment.name)
@@ -1727,7 +1735,9 @@ def _lower_top_assignments(
                 f"top-level reassignment of {assignment.name!r} is not supported",
             )
         try:
-            expression = parse_expression(assignment.expression)
+            expression = parse_expression(
+                assignment.expression, noun_names=noun_names
+            )
             type_info = infer_type(
                 expression,
                 types,
@@ -1767,6 +1777,7 @@ def _lower_top_assignments(
                 "top-level assignments currently require a value of rank 3 or less",
             )
         types[name] = type_info
+        noun_names.add(assignment.name)
         helpers.update(
             required_runtime_helpers(
                 expression,
@@ -1816,6 +1827,7 @@ def _definition_argument_types(
 
     inferred: dict[tuple[str, int], tuple[TypeInfo, ...]] = {}
     top_types: dict[str, TypeInfo] = {}
+    noun_names: set[str] = set()
 
     def visit(expression, names: dict[str, TypeInfo]) -> None:
         expression = ungroup(expression)
@@ -1864,7 +1876,7 @@ def _definition_argument_types(
                     argument_types = ()
             if argument_types and all(
                 argument_type.atom_type is AtomType.INTEGER
-                and argument_type.rank in {0, 1}
+                and argument_type.rank in {0, 1, 2}
                 for argument_type in argument_types
             ):
                 key = (call_name, len(argument_types))
@@ -1882,7 +1894,7 @@ def _definition_argument_types(
                             old.atom_type,
                             old.shape
                             if old.shape == new.shape
-                            else Shape.vector(),
+                            else Shape((None,) * old.rank),
                         )
                         for old, new in zip(previous, argument_types, strict=True)
                     )
@@ -1899,7 +1911,9 @@ def _definition_argument_types(
         if not isinstance(item, (Assign, EchoStatement)):
             continue
         try:
-            expression = parse_expression(item.expression)
+            expression = parse_expression(
+                item.expression, noun_names=noun_names
+            )
         except (LexerError, ExpressionParseError):
             continue
         visit(expression, top_types)
@@ -1910,6 +1924,7 @@ def _definition_argument_types(
                 )
             except LoweringError:
                 pass
+            noun_names.add(item.name)
     return inferred
 
 
@@ -1995,6 +2010,23 @@ def _explicit_definitions(program: Program) -> list[VerbDefinition]:
                         item.name,
                         ("y",),
                         (ExpressionStatement(item.line, application),),
+                    )
+                )
+                continue
+        if isinstance(item.verb, InnerProductVerb):
+            reduction = _simple_verb_source(item.verb.reduction)
+            product = _simple_verb_source(item.verb.product)
+            if reduction is not None and product is not None:
+                definitions.append(
+                    VerbDefinition(
+                        item.line,
+                        item.name,
+                        ("x", "y"),
+                        (
+                            ExpressionStatement(
+                                item.line, f"x ({reduction} . {product}) y"
+                            ),
+                        ),
                     )
                 )
                 continue
@@ -2274,11 +2306,16 @@ def emit_fortran(
     top_types = {
         assignment.name: assignment.type_info for assignment in top_assignments
     }
+    top_noun_names = {
+        item.name for item in program.items if isinstance(item, Assign)
+    }
     echo_calls: list[tuple[str, TypeInfo, tuple[int, ...]]] = []
     for echo in echos:
         normalized_echo = _normalized_expression(echo.expression)
         try:
-            echo_ast = parse_expression(normalized_echo)
+            echo_ast = parse_expression(
+                normalized_echo, noun_names=top_noun_names
+            )
         except (ExpressionParseError, LexerError):
             echo_ast = None
         if isinstance(echo_ast, StringLiteral):

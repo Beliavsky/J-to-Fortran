@@ -363,6 +363,24 @@ ok =: result -: expected
     assert "result_j = a + a_uppercase_1" in generated
 
 
+def test_named_sum_product_inner_product_accepts_matrices() -> None:
+    source = """matmul =: +/ . *
+A =: 2 3 $ 1 2 3 4 5 6
+B =: 3 2 $ 7 8 9 10 11 12
+smoutput A matmul B
+exit 0
+"""
+
+    generated = xj2f.emit_fortran(
+        xj2f.parse_j_source(Path("named_matmul.ijs"), source)
+    )
+
+    assert "pure function matmul_j(x, y) result(j_result)" in generated
+    assert "integer, intent(in) :: x(:,:), y(:,:)" in generated
+    assert "j_result = matmul(x, y)" in generated
+    assert "j_echo_1 = matmul_j(a_uppercase_1, b_uppercase_1)" in generated
+
+
 def test_tacit_call_infers_rank_from_a_preceding_top_level_noun() -> None:
     source = """mean =: +/ % #
 x =: 2 4 6 8

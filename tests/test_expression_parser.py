@@ -89,6 +89,16 @@ def test_parse_parenthesized_sum_product_verb() -> None:
     assert primitive(expression.verb.product) == "*"
 
 
+def test_known_nouns_disambiguate_a_dyadic_named_verb_call() -> None:
+    expression = parse_expression(
+        "A matmul B", noun_names={"A", "B"}
+    )
+
+    assert isinstance(expression, DyadicApply)
+    assert isinstance(expression.verb, NamedVerb)
+    assert expression.verb.identifier == "matmul"
+
+
 def test_parse_monadic_determinant_inner_product() -> None:
     expression = parse_expression("-/ . * a")
 

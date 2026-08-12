@@ -62,11 +62,14 @@ def _cover(first: SourceSpan, last: SourceSpan) -> SourceSpan:
 
 
 class ExpressionParser:
-    def __init__(self, tokens: Sequence[Token]):
+    def __init__(
+        self, tokens: Sequence[Token], *, noun_names: Sequence[str] = ()
+    ):
         self.tokens = tuple(
             token for token in tokens if token.kind not in {TokenKind.NEWLINE, TokenKind.EOF}
         )
         self.index = 0
+        self.noun_names = frozenset(noun_names)
 
     def parse(self) -> Expression:
         if not self.tokens:
@@ -172,7 +175,9 @@ class ExpressionParser:
             selector_tokens = self.tokens[self.index + 1 : marker_index]
             if not selector_tokens:
                 raise ExpressionParseError("amend requires an index selector", token)
-            selector = ExpressionParser(selector_tokens).parse()
+            selector = ExpressionParser(
+                selector_tokens, noun_names=self.noun_names
+            ).parse()
             closing = self.tokens[closing_index]
             self.index = closing_index + 1
             return AmendVerb(
@@ -270,6 +275,8 @@ class ExpressionParser:
         if self.index >= len(self.tokens):
             return False
         token = self._peek()
+        if token.kind is TokenKind.NAME and token.value in self.noun_names:
+            return False
         if self._amend_verb_end(self.index) is not None:
             return True
         if self._inner_product_end(self.index) is not None:
@@ -378,8 +385,10 @@ class ExpressionParser:
         return ExpressionParser._verb_name(verb.operand) + '"' + verb.rank.text
 
 
-def parse_expression(source: str) -> Expression:
-    return ExpressionParser(tokenize(source)).parse()
+def parse_expression(
+    source: str, *, noun_names: Sequence[str] = ()
+) -> Expression:
+    return ExpressionParser(tokenize(source), noun_names=noun_names).parse()
 
 
 def parse_verb(source: str) -> Verb:
