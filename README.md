@@ -130,7 +130,7 @@ The parser currently recognizes:
 - explicit `for_name.` iteration over zero-based `i. y` sequences;
 - pure recursive scalar integer explicit verbs;
 - call-site inference of integer-vector dummy ranks for explicit verbs;
-- dyadic reflex, integer-noun bond, and monadic `@:` composition tacit verbs;
+- dyadic reflex, integer-noun bond, monadic `@:` composition, and monadic forks;
 - mixed Boolean expressions and integer literal `0`/`1` branches, inferred as
   logical results and emitted with `.false.`/`.true.` literals;
 - rank-0 application of a translated scalar verb to an integer vector;

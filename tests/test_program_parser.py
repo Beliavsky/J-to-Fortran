@@ -215,6 +215,21 @@ ok =: result -: expected
     assert f"j_result = {expected_expression}" in generated
 
 
+def test_tacit_mean_fork_applies_both_branches_to_the_argument() -> None:
+    source = """mean =: +/ % #
+result =: mean 2 4 6 8
+expected =: 5
+ok =: result -: expected
+"""
+    program = xj2f.parse_j_source(Path("mean.ijs"), source)
+    generated = xj2f.emit_fortran(program)
+
+    assert isinstance(program.items[0], xj2f.TacitVerbDefinition)
+    assert "pure function mean(y) result(j_result)" in generated
+    assert "real(kind=real64) :: j_result" in generated
+    assert "j_result = real(sum(y, dim=1), kind=real64) / size(y, 1)" in generated
+
+
 def test_dyadic_explicit_verb_has_x_and_y_arguments() -> None:
     source = "lincomb =: 4 : 0\n  x + 2 * y\n)\n"
     program = xj2f.parse_j_source(Path("lincomb.ijs"), source)

@@ -1364,6 +1364,20 @@ def render_fortran_expression(
         raise LoweringError(
             "amendment currently requires a top-level assignment context"
         )
+    divided = dyad(expression, "%")
+    if divided is not None and names is not None:
+        left_type = infer_type(
+            divided[0], names, name_transform, named_verbs=named_verbs
+        )
+        left = render_fortran_expression(
+            divided[0], name_transform, names=names, named_verbs=named_verbs
+        )
+        right = render_fortran_expression(
+            divided[1], name_transform, names=names, named_verbs=named_verbs
+        )
+        if left_type.atom_type is AtomType.INTEGER:
+            left = f"real({left}, kind=real64)"
+        return f"{left} / {right}"
     bare_expression = ungroup(expression)
     if (
         isinstance(bare_expression, MonadicApply)

@@ -11,6 +11,7 @@ from .ast import (
     BondVerb,
     DyadicApply,
     Expression,
+    ForkVerb,
     Group,
     MonadicApply,
     Name,
@@ -101,6 +102,13 @@ class ExpressionParser:
             self._take()
             inner = self._verb()
             verb = AtopVerb(verb, inner, _cover(verb.span, inner.span))
+        if self.index < len(self.tokens):
+            center = self._verb()
+            if self.index >= len(self.tokens):
+                token = self.tokens[-1]
+                raise ExpressionParseError("tacit fork requires a right verb", token)
+            right = self._verb()
+            verb = ForkVerb(verb, center, right, _cover(verb.span, right.span))
         if self.index != len(self.tokens):
             token = self.tokens[self.index]
             raise ExpressionParseError(f"unexpected token {token.value!r}", token)
@@ -270,6 +278,11 @@ class ExpressionParser:
                 ExpressionParser._verb_name(verb.outer)
                 + "@:"
                 + ExpressionParser._verb_name(verb.inner)
+            )
+        if isinstance(verb, ForkVerb):
+            return " ".join(
+                ExpressionParser._verb_name(item)
+                for item in (verb.left, verb.center, verb.right)
             )
         return ExpressionParser._verb_name(verb.operand) + '"' + verb.rank.text
 

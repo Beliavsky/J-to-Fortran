@@ -57,6 +57,20 @@ def test_monadic_increment_and_decrement(source: str, expected: str) -> None:
     assert render_fortran_expression(expression, names=names) == expected
 
 
+def test_j_division_converts_integer_numerator_to_real() -> None:
+    expression = parse_expression("total % count")
+    names = {
+        "total": TypeInfo(AtomType.INTEGER),
+        "count": TypeInfo(AtomType.INTEGER),
+    }
+
+    assert infer_type(expression, names) == TypeInfo(AtomType.REAL)
+    assert (
+        render_fortran_expression(expression, names=names)
+        == "real(total, kind=real64) / count"
+    )
+
+
 def test_prime_expression_primitives_lower_generically() -> None:
     names = {
         "limit": TypeInfo(AtomType.INTEGER),

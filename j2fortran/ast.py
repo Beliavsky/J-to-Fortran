@@ -92,6 +92,14 @@ class AtopVerb:
     span: SourceSpan
 
 
+@dataclass(frozen=True, slots=True)
+class ForkVerb:
+    left: Verb
+    center: Verb
+    right: Verb
+    span: SourceSpan
+
+
 Verb: TypeAlias = (
     AmendVerb
     | NamedVerb
@@ -100,6 +108,7 @@ Verb: TypeAlias = (
     | RankApplication
     | BondVerb
     | AtopVerb
+    | ForkVerb
 )
 
 

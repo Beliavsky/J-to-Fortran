@@ -8,6 +8,7 @@ from j2fortran.ast import (
     AtopVerb,
     BondVerb,
     DyadicApply,
+    ForkVerb,
     Group,
     MonadicApply,
     Name,
@@ -54,6 +55,15 @@ def test_parse_atop_verb_phrase(source: str, outer: str, inner: str) -> None:
     assert isinstance(verb, AtopVerb)
     assert primitive(verb.outer) == outer
     assert primitive(verb.inner) == inner
+
+
+def test_parse_tacit_fork_verb_phrase() -> None:
+    verb = parse_verb("+/ % #")
+
+    assert isinstance(verb, ForkVerb)
+    assert primitive(verb.left) == "+"
+    assert primitive(verb.center) == "%"
+    assert primitive(verb.right) == "#"
 
 
 def test_ranked_named_verb_application() -> None:

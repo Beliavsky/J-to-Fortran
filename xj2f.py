@@ -28,6 +28,7 @@ from j2fortran.ast import (
     BondVerb,
     DyadicApply,
     Group,
+    ForkVerb,
     MonadicApply,
     Name,
     NamedVerb,
@@ -296,7 +297,17 @@ class Parser:
                     tacit_verb = parse_verb(assignment.group(3))
                 except (LexerError, ExpressionParseError, ValueError):
                     tacit_verb = None
-                if isinstance(tacit_verb, (AdverbApplication, AtopVerb, BondVerb)):
+                primitive_fork = isinstance(tacit_verb, ForkVerb) and all(
+                    _simple_verb_source(component) is not None
+                    for component in (
+                        tacit_verb.left,
+                        tacit_verb.center,
+                        tacit_verb.right,
+                    )
+                )
+                if isinstance(
+                    tacit_verb, (AdverbApplication, AtopVerb, BondVerb)
+                ) or primitive_fork:
                     items.append(
                         TacitVerbDefinition(line, assignment.group(1), tacit_verb)
                     )
@@ -1661,6 +1672,24 @@ def _explicit_definitions(program: Program) -> list[VerbDefinition]:
                         item.name,
                         ("y",),
                         (ExpressionStatement(item.line, f"{outer} ({inner} y)"),),
+                    )
+                )
+                continue
+        if isinstance(item.verb, ForkVerb):
+            left = _simple_verb_source(item.verb.left)
+            center = _simple_verb_source(item.verb.center)
+            right = _simple_verb_source(item.verb.right)
+            if left is not None and center is not None and right is not None:
+                definitions.append(
+                    VerbDefinition(
+                        item.line,
+                        item.name,
+                        ("y",),
+                        (
+                            ExpressionStatement(
+                                item.line, f"({left} y) {center} ({right} y)"
+                            ),
+                        ),
                     )
                 )
                 continue
