@@ -1905,9 +1905,99 @@ def _explicit_definitions(program: Program) -> list[VerbDefinition]:
     return definitions
 
 
+def _boxed_tuple_items(expression) -> list | None:
+    """Flatten a semicolon-linked tuple, or report that it is not boxed."""
+
+    expression = ungroup(expression)
+    if not (
+        isinstance(expression, DyadicApply)
+        and isinstance(expression.verb, PrimitiveVerb)
+        and expression.verb.spelling == ";"
+    ):
+        return None
+    left_items = _boxed_tuple_items(expression.left)
+    right_items = _boxed_tuple_items(expression.right)
+    return [
+        *(left_items if left_items is not None else [expression.left]),
+        *(right_items if right_items is not None else [expression.right]),
+    ]
+
+
+def _expand_top_level_boxed_match(program: Program) -> Program:
+    """Decompose a final boxed result match into independently typed matches."""
+
+    assignments = {
+        item.name: item for item in program.items if isinstance(item, Assign)
+    }
+    result = assignments.get("result")
+    expected = assignments.get("expected")
+    ok = assignments.get("ok")
+    if result is None or expected is None or ok is None:
+        return program
+    if _normalized_expression(ok.expression) != "result -: expected":
+        return program
+    try:
+        result_items = _boxed_tuple_items(parse_expression(result.expression))
+        expected_items = _boxed_tuple_items(parse_expression(expected.expression))
+    except (LexerError, ExpressionParseError, ValueError):
+        return program
+    if (
+        result_items is None
+        or expected_items is None
+        or len(result_items) != len(expected_items)
+    ):
+        return program
+
+    replacements: dict[str, list[Assign]] = {"result": [], "expected": []}
+    comparisons: list[str] = []
+    for index, (result_item, expected_item) in enumerate(
+        zip(result_items, expected_items, strict=True), 1
+    ):
+        result_name = f"j_box_result_{index}"
+        expected_name = f"j_box_expected_{index}"
+        replacements["result"].append(
+            Assign(result.line, result_name, result.copula, _source_text(result.expression, result_item))
+        )
+        replacements["expected"].append(
+            Assign(
+                expected.line,
+                expected_name,
+                expected.copula,
+                _source_text(expected.expression, expected_item),
+            )
+        )
+        match_name = f"j_box_match_{index}"
+        replacements["expected"].append(
+            Assign(
+                ok.line,
+                match_name,
+                ok.copula,
+                f"{result_name} -: {expected_name}",
+            )
+        )
+        comparisons.append(match_name)
+
+    expanded: list[TopLevel] = []
+    for item in program.items:
+        if isinstance(item, Assign) and item.name in replacements:
+            expanded.extend(replacements[item.name])
+        elif item is ok:
+            expanded.append(
+                Assign(ok.line, ok.name, ok.copula, " *. ".join(comparisons))
+            )
+        else:
+            expanded.append(item)
+    return Program(program.source_path, tuple(expanded))
+
+
+def _source_text(source: str, expression) -> str:
+    return source[expression.span.start : expression.span.end]
+
+
 def emit_fortran(program: Program, *, runtime: str = "embedded") -> str:
     if runtime not in {"embedded", "external"}:
         raise J2FError(f"unknown runtime mode {runtime!r}")
+    program = _expand_top_level_boxed_match(program)
     definitions = _explicit_definitions(program)
     if not definitions and not any(isinstance(item, Assign) for item in program.items):
         raise UnsupportedJError("no translatable definitions or assignments were found")

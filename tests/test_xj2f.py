@@ -116,6 +116,25 @@ def test_complex_literals_emit_real64_complex_values() -> None:
     assert "cmplx(3.0_real64, 4.0_real64, kind=real64)" in generated
 
 
+def test_top_level_heterogeneous_boxed_match_is_decomposed() -> None:
+    source = """m =: 3.5
+ss =: 17.5
+rowsums =: 6 15
+result =: m ; ss ; rowsums
+expected =: 3.5 ; 17.5 ; 6 15
+ok =: result -: expected
+"""
+    generated = xj2f.emit_fortran(
+        xj2f.parse_j_source(Path("boxed_result.ijs"), source)
+    )
+
+    assert "j_box_result_1 = m" in generated
+    assert "j_box_result_3 = rowsums" in generated
+    assert "j_box_expected_3 = [6, 15]" in generated
+    assert "j_box_match_1 = j_match_real(j_box_result_1, j_box_expected_1)" in generated
+    assert "j_box_match_3 = all(j_box_result_3 == j_box_expected_3)" in generated
+
+
 def test_float_match_emits_j_tolerance_helper() -> None:
     program = xj2f.parse_j_source(Path("float_match.ijs"), FLOAT_MATCH_TEST_PROGRAM)
     generated = xj2f.emit_fortran(program)

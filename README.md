@@ -145,6 +145,7 @@ The parser currently recognizes:
 - rational literals represented as `real64` numerator/denominator quotients;
 - integer base decode and mixed-radix encode;
 - integer polynomial evaluation through Horner's method;
+- heterogeneous top-level boxed test matches decomposed element by element;
 - mixed Boolean expressions and integer literal `0`/`1` branches, inferred as
   logical results and emitted with `.false.`/`.true.` literals;
 - rank-0 application of a translated scalar verb to an integer vector;
