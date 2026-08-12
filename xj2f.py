@@ -1606,8 +1606,9 @@ def _definition_argument_types(
     """Infer initial explicit-verb dummy ranks from translatable top-level calls."""
 
     inferred: dict[tuple[str, int], tuple[TypeInfo, ...]] = {}
+    top_types: dict[str, TypeInfo] = {}
 
-    def visit(expression) -> None:
+    def visit(expression, names: dict[str, TypeInfo]) -> None:
         expression = ungroup(expression)
         call_name: str | None = None
         arguments = ()
@@ -1623,7 +1624,9 @@ def _definition_argument_types(
             arguments = (expression.left, expression.right)
         if call_name is not None:
             try:
-                argument_types = tuple(infer_type(argument, {}) for argument in arguments)
+                argument_types = tuple(
+                    infer_type(argument, names, _fortran_name) for argument in arguments
+                )
             except LoweringError:
                 argument_types = ()
             if argument_types and all(
@@ -1639,18 +1642,25 @@ def _definition_argument_types(
                     )
                 inferred[key] = argument_types
         if isinstance(expression, Group):
-            visit(expression.expression)
+            visit(expression.expression, names)
         elif isinstance(expression, MonadicApply):
-            visit(expression.operand)
+            visit(expression.operand, names)
         elif isinstance(expression, DyadicApply):
-            visit(expression.left)
-            visit(expression.right)
+            visit(expression.left, names)
+            visit(expression.right, names)
 
     for assignment in (item for item in program.items if isinstance(item, Assign)):
         try:
-            visit(parse_expression(assignment.expression))
+            expression = parse_expression(assignment.expression)
         except (LexerError, ExpressionParseError):
             continue
+        visit(expression, top_types)
+        try:
+            top_types[_fortran_name(assignment.name)] = infer_type(
+                expression, top_types, _fortran_name
+            )
+        except LoweringError:
+            pass
     return inferred
 
 

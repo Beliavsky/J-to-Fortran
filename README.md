@@ -129,7 +129,7 @@ The parser currently recognizes:
 - scalar `while.` loops with loop-carried local assignments;
 - explicit `for_name.` iteration over zero-based `i. y` sequences;
 - pure recursive scalar integer explicit verbs;
-- call-site inference of integer-vector dummy ranks for explicit verbs;
+- call-site inference of integer-vector dummy ranks from literals and preceding nouns;
 - dyadic reflex, integer-noun bond, monadic `@:` composition, and monadic forks;
 - sum-product inner products lowered to `dot_product` and `matmul`;
 - direct determinants of statically known 2 by 2 matrices;
