@@ -53,6 +53,50 @@ executable on `PATH`.  An explicit command can be supplied when needed:
 python xj2f.py pythag.ijs --run-j --jconsole C:\Programs\J9.7\bin\jconsole.exe
 ```
 
+## Translation example
+
+This complete J program defines a function that sums the squares of an integer
+vector, calls it with `3 4`, and prints `25`:
+
+```j
+NB. Sum the squares of y.
+sumsq =: 3 : 0
+  NB. *: squares each item and +/ sums the result.
+  +/ *: y
+)
+
+values =: 3 4
+result =: sumsq values
+echo result
+exit 0
+```
+
+In `3 : 0`, `3` defines a monadic explicit verb whose argument is named `y`,
+while `0` means that its body follows on subsequent lines and ends at `)`.
+The relevant generated Fortran is:
+
+```fortran
+! Sum the squares of y.
+! J: sumsq =: 3 : 0
+pure function sumsq(y) result(j_result)
+  integer, intent(in) :: y(:)
+  integer :: j_result
+
+  ! *: squares each item and +/ sums the result.
+  ! J: +/ *: y
+  j_result = sum(y**2, dim=1)
+end function sumsq
+
+program sumsq_j
+  use sumsq_j_mod, only: sumsq
+  implicit none
+  integer, allocatable :: values(:)
+
+  values = [3, 4]
+  write (*,"(i0)") sumsq(values)
+end program sumsq_j
+```
+
 ## Command-line modes
 
 - `--compile`: compile the generated source.
