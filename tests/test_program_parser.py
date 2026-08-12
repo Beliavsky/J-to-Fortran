@@ -398,6 +398,19 @@ exit 0
     assert 'write (*,"(2(g0, 1x))") transpose(j_ranked_echo_1)' in generated
 
 
+def test_rank_one_cube_reduction_emits_a_matrix_result() -> None:
+    source = """cube =: 2 3 4 $ i. 24
+smoutput +/"1 cube
+exit 0
+"""
+
+    generated = xj2f.emit_fortran(
+        xj2f.parse_j_source(Path("cube_sum.ijs"), source)
+    )
+
+    assert 'write (*,"(3(i0, 1x))") transpose(sum(cube, dim=3))' in generated
+
+
 def test_catenate_promotes_boolean_valued_integers_to_integer() -> None:
     source = """values =: 1 1 1 , 2 3 4
 smoutput values

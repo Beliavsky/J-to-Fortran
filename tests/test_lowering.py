@@ -662,6 +662,28 @@ def test_rank_one_sum_counts_true_values_in_each_matrix_row() -> None:
 
 
 @pytest.mark.parametrize(
+    ("source", "atom_type", "expected_fortran"),
+    [
+        ('+/"1 cube', AtomType.INTEGER, "sum(cube, dim=3)"),
+        ('*/"1 cube', AtomType.INTEGER, "product(cube, dim=3)"),
+        ('>./"1 cube', AtomType.INTEGER, "maxval(cube, dim=3)"),
+        ('+./"1 flags', AtomType.LOGICAL, "any(flags, dim=3)"),
+    ],
+)
+def test_rank_one_reduction_operates_on_rank_three_vector_cells(
+    source: str, atom_type: AtomType, expected_fortran: str
+) -> None:
+    expression = parse_expression(source)
+    name = "flags" if atom_type is AtomType.LOGICAL else "cube"
+    names = {name: TypeInfo(atom_type, Shape((2, 3, 4)))}
+
+    assert infer_type(expression, names) == TypeInfo(
+        atom_type, Shape.matrix(2, 3)
+    )
+    assert render_fortran_expression(expression, names=names) == expected_fortran
+
+
+@pytest.mark.parametrize(
     ("source", "atom_type", "operator"),
     [
         ("a +/ b", AtomType.INTEGER, "+"),

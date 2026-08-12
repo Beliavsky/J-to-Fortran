@@ -533,8 +533,10 @@ def infer_type(
             return TypeInfo(AtomType.INTEGER, Shape.matrix(extent, extent))
         ranked_reduction = ranked_reduction_spelling(expression.verb)
         if ranked_reduction in {"+", "*", "<.", ">.", "+.", "*."}:
-            if operand_type.rank != 2:
-                raise LoweringError("rank-1 reduction currently requires a matrix")
+            if operand_type.rank < 2:
+                raise LoweringError(
+                    "rank-1 reduction currently requires rank 2 or greater"
+                )
             if ranked_reduction in {"+.", "*."}:
                 if operand_type.atom_type is not AtomType.LOGICAL:
                     raise LoweringError(
@@ -554,7 +556,7 @@ def infer_type(
                 atom_type = operand_type.atom_type
             return TypeInfo(
                 atom_type,
-                Shape.vector(operand_type.shape.extents[0]),
+                Shape(operand_type.shape.extents[:-1]),
             )
         ranked_application = match_ranked_named_application(expression)
         if ranked_application is not None:
@@ -1806,7 +1808,7 @@ def render_fortran_expression(
                 "+.": "any",
                 "*.": "all",
             }[ranked_reduction]
-            return f"{intrinsic}({operand}, dim=2)"
+            return f"{intrinsic}({operand}, dim={operand_type.rank})"
     if isinstance(bare_expression, DyadicApply) and names is not None:
         table = table_spelling(bare_expression.verb)
         if table in {"+", "=", "<"}:
