@@ -68,10 +68,14 @@ RUNTIME_PROCEDURES = {
     "iota": "j_iota",
     "factorial": "j_factorial",
     "grade_up_int": "j_grade_up_int",
+    "infix_subtract_int": "j_infix_subtract_int",
+    "infix_sum_int": "j_infix_sum_int",
     "index_of_int": "j_index_of_int",
     "match_real": "j_match_real",
     "membership_int": "j_membership_int",
     "nub_int": "j_nub_int",
+    "prefix_product_int": "j_prefix_product_int",
+    "prefix_sum_int": "j_prefix_sum_int",
     "reverse_int_vector": "j_reverse_int_vector",
     "signum_int": "j_signum_int",
     "sort_int_vector": "j_sort_int_vector",
@@ -754,6 +758,78 @@ class FunctionEmitter:
 
 def _runtime_helpers(helpers: set[str]) -> list[str]:
     result: list[str] = []
+    if "prefix_sum_int" in helpers:
+        result.extend(
+            [
+                "pure function j_prefix_sum_int(values) result(prefixes)",
+                "  integer, intent(in) :: values(:)",
+                "  integer, allocatable :: prefixes(:)",
+                "  integer :: value_index",
+                "",
+                "  allocate(prefixes(size(values)))",
+                "  if (size(values) > 0) prefixes(1) = values(1)",
+                "  do value_index = 2, size(values)",
+                "    prefixes(value_index) = prefixes(value_index - 1) + values(value_index)",
+                "  end do",
+                "end function j_prefix_sum_int",
+                "",
+            ]
+        )
+    if "prefix_product_int" in helpers:
+        result.extend(
+            [
+                "pure function j_prefix_product_int(values) result(prefixes)",
+                "  integer, intent(in) :: values(:)",
+                "  integer, allocatable :: prefixes(:)",
+                "  integer :: value_index",
+                "",
+                "  allocate(prefixes(size(values)))",
+                "  if (size(values) > 0) prefixes(1) = values(1)",
+                "  do value_index = 2, size(values)",
+                "    prefixes(value_index) = prefixes(value_index - 1) * values(value_index)",
+                "  end do",
+                "end function j_prefix_product_int",
+                "",
+            ]
+        )
+    if "infix_sum_int" in helpers:
+        result.extend(
+            [
+                "pure function j_infix_sum_int(values, width) result(sums)",
+                "  integer, intent(in) :: values(:), width",
+                "  integer, allocatable :: sums(:)",
+                "  integer :: window_start",
+                "",
+                '  if (width <= 0 .or. width > size(values)) error stop "invalid infix width"',
+                "  allocate(sums(size(values) - width + 1))",
+                "  do window_start = 1, size(sums)",
+                "    sums(window_start) = sum(values(window_start:window_start + width - 1))",
+                "  end do",
+                "end function j_infix_sum_int",
+                "",
+            ]
+        )
+    if "infix_subtract_int" in helpers:
+        result.extend(
+            [
+                "pure function j_infix_subtract_int(values, width) result(differences)",
+                "  integer, intent(in) :: values(:), width",
+                "  integer, allocatable :: differences(:)",
+                "  integer :: offset, reduced_value, window_start",
+                "",
+                '  if (width <= 0 .or. width > size(values)) error stop "invalid infix width"',
+                "  allocate(differences(size(values) - width + 1))",
+                "  do window_start = 1, size(differences)",
+                "    reduced_value = values(window_start + width - 1)",
+                "    do offset = width - 2, 0, -1",
+                "      reduced_value = values(window_start + offset) - reduced_value",
+                "    end do",
+                "    differences(window_start) = reduced_value",
+                "  end do",
+                "end function j_infix_subtract_int",
+                "",
+            ]
+        )
     if "nub_int" in helpers:
         result.extend(
             [

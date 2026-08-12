@@ -4,10 +4,63 @@ module j2f_runtime
   private
   public :: j_append_int_row, j_binomial, j_cartesian_square, j_compress_hcat
   public :: j_copy_int_vector, j_factorial, j_grade_up_int, j_index_of_int
-  public :: j_iota, j_match_real, j_membership_int, j_nub_int
+  public :: j_infix_subtract_int, j_infix_sum_int, j_iota, j_match_real
+  public :: j_membership_int, j_nub_int, j_prefix_product_int, j_prefix_sum_int
   public :: j_reverse_int_vector, j_signum_int, j_sort_int_vector
 
 contains
+
+pure function j_prefix_sum_int(values) result(prefixes)
+  integer, intent(in) :: values(:)
+  integer, allocatable :: prefixes(:)
+  integer :: value_index
+
+  allocate(prefixes(size(values)))
+  if (size(values) > 0) prefixes(1) = values(1)
+  do value_index = 2, size(values)
+    prefixes(value_index) = prefixes(value_index - 1) + values(value_index)
+  end do
+end function j_prefix_sum_int
+
+pure function j_prefix_product_int(values) result(prefixes)
+  integer, intent(in) :: values(:)
+  integer, allocatable :: prefixes(:)
+  integer :: value_index
+
+  allocate(prefixes(size(values)))
+  if (size(values) > 0) prefixes(1) = values(1)
+  do value_index = 2, size(values)
+    prefixes(value_index) = prefixes(value_index - 1) * values(value_index)
+  end do
+end function j_prefix_product_int
+
+pure function j_infix_sum_int(values, width) result(sums)
+  integer, intent(in) :: values(:), width
+  integer, allocatable :: sums(:)
+  integer :: window_start
+
+  if (width <= 0 .or. width > size(values)) error stop "invalid infix width"
+  allocate(sums(size(values) - width + 1))
+  do window_start = 1, size(sums)
+    sums(window_start) = sum(values(window_start:window_start + width - 1))
+  end do
+end function j_infix_sum_int
+
+pure function j_infix_subtract_int(values, width) result(differences)
+  integer, intent(in) :: values(:), width
+  integer, allocatable :: differences(:)
+  integer :: offset, reduced_value, window_start
+
+  if (width <= 0 .or. width > size(values)) error stop "invalid infix width"
+  allocate(differences(size(values) - width + 1))
+  do window_start = 1, size(differences)
+    reduced_value = values(window_start + width - 1)
+    do offset = width - 2, 0, -1
+      reduced_value = values(window_start + offset) - reduced_value
+    end do
+    differences(window_start) = reduced_value
+  end do
+end function j_infix_subtract_int
 
 pure function j_nub_int(values) result(unique_values)
   integer, intent(in) :: values(:)

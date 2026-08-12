@@ -211,6 +211,28 @@ def test_vector_reductions_use_fortran_intrinsics(
     assert render_fortran_expression(expression, names=names) == expected_fortran
 
 
+@pytest.mark.parametrize(
+    ("source", "expected_fortran", "helper"),
+    [
+        ("+/\\ a", "j_prefix_sum_int(a)", "prefix_sum_int"),
+        ("*/\\ a", "j_prefix_product_int(a)", "prefix_product_int"),
+        ("3 +/\\ a", "j_infix_sum_int(a, 3)", "infix_sum_int"),
+        ("2 -/\\ a", "j_infix_subtract_int(a, 2)", "infix_subtract_int"),
+    ],
+)
+def test_integer_scans_use_regular_loop_helpers(
+    source: str, expected_fortran: str, helper: str
+) -> None:
+    expression = parse_expression(source)
+    names = {"a": TypeInfo(AtomType.INTEGER, Shape.vector(5))}
+
+    result_type = infer_type(expression, names)
+    assert result_type.atom_type is AtomType.INTEGER
+    assert result_type.rank == 1
+    assert render_fortran_expression(expression, names=names) == expected_fortran
+    assert required_runtime_helpers(expression, names) == {helper}
+
+
 def test_real_literals_use_the_declared_fortran_kind() -> None:
     assert render_fortran_expression(parse_expression("1.5 2e_3")) == (
         "[1.5_real64, 2e-3_real64]"

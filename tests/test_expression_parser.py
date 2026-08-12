@@ -114,6 +114,16 @@ def test_reflex_derives_a_sort_verb(source: str) -> None:
     assert primitive(expression.verb) in {"/:", "\\:"}
 
 
+def test_insert_then_scan_builds_nested_adverbs() -> None:
+    expression = parse_expression("+/\\ 1 2 3")
+
+    assert isinstance(expression, MonadicApply)
+    assert isinstance(expression.verb, AdverbApplication)
+    assert expression.verb.adverb == "\\"
+    assert isinstance(expression.verb.operand, AdverbApplication)
+    assert expression.verb.operand.adverb == "/"
+
+
 def test_compression_and_laminate_follow_right_to_left_order() -> None:
     expression = parse_expression("keep # ab ,. c")
 

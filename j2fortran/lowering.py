@@ -63,6 +63,15 @@ def primitive_spelling(verb: Verb) -> str | None:
     return verb.spelling if isinstance(verb, PrimitiveVerb) else None
 
 
+def insert_scan_spelling(verb: Verb) -> str | None:
+    if not isinstance(verb, AdverbApplication) or verb.adverb != "\\":
+        return None
+    inserted = verb.operand
+    if not isinstance(inserted, AdverbApplication) or inserted.adverb != "/":
+        return None
+    return primitive_spelling(inserted.operand)
+
+
 def monad(expression: Expression, spelling: str) -> Expression | None:
     expression = ungroup(expression)
     if isinstance(expression, MonadicApply) and primitive_spelling(expression.verb) == spelling:
@@ -421,6 +430,16 @@ def infer_type(
             operand_type = infer_type(
                 expression.operand, names, name_transform, named_verbs=named_verbs
             )
+            scan = insert_scan_spelling(expression.verb)
+            if scan in {"+", "*"}:
+                if (
+                    operand_type.atom_type is not AtomType.INTEGER
+                    or operand_type.rank != 1
+                ):
+                    raise LoweringError(
+                        "prefix scan currently requires an integer vector"
+                    )
+                return operand_type
             reduction = primitive_spelling(expression.verb.operand)
             if expression.verb.adverb == "~" and reduction in {"/:", "\\:"}:
                 if (
@@ -574,6 +593,34 @@ def infer_type(
                     "amendment replacement shape does not match selected shape"
                 )
             return source_type
+        scan = insert_scan_spelling(expression.verb)
+        if scan in {"+", "-"}:
+            left_type = infer_type(
+                expression.left, names, name_transform, named_verbs=named_verbs
+            )
+            right_type = infer_type(
+                expression.right, names, name_transform, named_verbs=named_verbs
+            )
+            width = integer_value(expression.left)
+            if left_type != TypeInfo(AtomType.INTEGER) or width is None or width <= 0:
+                raise LoweringError(
+                    "infix scan currently requires a positive constant integer width"
+                )
+            if (
+                right_type.atom_type is not AtomType.INTEGER
+                or right_type.rank != 1
+            ):
+                raise LoweringError("infix scan currently requires an integer vector")
+            source_extent = right_type.shape.extents[0]
+            if isinstance(source_extent, int):
+                if width > source_extent:
+                    raise LoweringError(
+                        "infix width greater than the vector length is not supported"
+                    )
+                result_extent: int | None = source_extent - width + 1
+            else:
+                result_extent = None
+            return TypeInfo(AtomType.INTEGER, Shape.vector(result_extent))
         spelling = primitive_spelling(expression.verb)
         if spelling is None:
             raise LoweringError("modified verbs require a dedicated lowering rule")
@@ -876,6 +923,13 @@ def _render_fortran_expression(
                 "call",
             )
         if isinstance(expression.verb, AdverbApplication):
+            scan = insert_scan_spelling(expression.verb)
+            if scan in {"+", "*"}:
+                operand, _, _ = _render_fortran_expression(
+                    expression.operand, name_transform
+                )
+                helper = "j_prefix_sum_int" if scan == "+" else "j_prefix_product_int"
+                return f"{helper}({operand})", _ATOM_PRECEDENCE, "call"
             reduction = primitive_spelling(expression.verb.operand)
             if expression.verb.adverb == "~" and reduction in {"/:", "\\:"}:
                 operand, _, _ = _render_fortran_expression(
@@ -974,6 +1028,18 @@ def _render_fortran_expression(
             return f"j_nub_int({operand})", _ATOM_PRECEDENCE, "call"
         raise LoweringError(f"monadic verb {spelling!r} needs a dedicated lowering rule")
     if isinstance(expression, DyadicApply):
+        scan = insert_scan_spelling(expression.verb)
+        if scan in {"+", "-"}:
+            width = integer_value(expression.left)
+            if width is None or width <= 0:
+                raise LoweringError(
+                    "infix scan currently requires a positive constant integer width"
+                )
+            values, _, _ = _render_fortran_expression(
+                expression.right, name_transform
+            )
+            helper = "j_infix_sum_int" if scan == "+" else "j_infix_subtract_int"
+            return f"{helper}({values}, {width})", _ATOM_PRECEDENCE, "call"
         spelling = primitive_spelling(expression.verb)
         if spelling == ",":
             left, _, _ = _render_fortran_expression(expression.left, name_transform)
@@ -1273,6 +1339,11 @@ def required_runtime_helpers(
     helpers: set[str] = set()
     if isinstance(expression, MonadicApply):
         spelling = primitive_spelling(expression.verb)
+        scan = insert_scan_spelling(expression.verb)
+        if scan == "+":
+            helpers.add("prefix_sum_int")
+        if scan == "*":
+            helpers.add("prefix_product_int")
         if isinstance(expression.verb, AdverbApplication):
             operand_spelling = primitive_spelling(expression.verb.operand)
             if expression.verb.adverb == "~" and operand_spelling in {"/:", "\\:"}:
@@ -1298,6 +1369,11 @@ def required_runtime_helpers(
             )
         )
     elif isinstance(expression, DyadicApply):
+        scan = insert_scan_spelling(expression.verb)
+        if scan == "+":
+            helpers.add("infix_sum_int")
+        if scan == "-":
+            helpers.add("infix_subtract_int")
         if primitive_spelling(expression.verb) == "e.":
             helpers.add("membership_int")
         if primitive_spelling(expression.verb) == "i.":
