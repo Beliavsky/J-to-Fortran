@@ -702,6 +702,21 @@ def test_frequency_table_expression_counts_outer_matches() -> None:
     )
 
 
+def test_stitch_forms_a_two_column_matrix() -> None:
+    expression = parse_expression("u ,. counts")
+    names = {
+        "u": TypeInfo(AtomType.INTEGER, Shape.vector(3)),
+        "counts": TypeInfo(AtomType.INTEGER, Shape.vector(3)),
+    }
+
+    assert infer_type(expression, names) == TypeInfo(
+        AtomType.INTEGER, Shape.matrix(3, 2)
+    )
+    assert render_fortran_expression(expression, names=names) == (
+        "reshape([u, counts], [size(u), 2])"
+    )
+
+
 @pytest.mark.parametrize(
     ("source", "expected_type", "expected_fortran", "helper"),
     [

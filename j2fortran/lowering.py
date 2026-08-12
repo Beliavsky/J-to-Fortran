@@ -989,6 +989,18 @@ def infer_type(
             return TypeInfo(
                 left_type.atom_type, Shape.matrix(2, vector_shape.extents[0])
             )
+        if spelling == ",.":
+            if left_type.rank != 1 or right_type.rank != 1:
+                raise LoweringError("stitch currently requires two vectors")
+            if left_type.atom_type is not right_type.atom_type:
+                raise LoweringError("stitch currently requires matching atom types")
+            try:
+                vector_shape = agree_shapes(left_type.shape, right_type.shape)
+            except ShapeMismatchError as exc:
+                raise LoweringError(f"length error: stitch {exc}") from exc
+            return TypeInfo(
+                left_type.atom_type, Shape.matrix(vector_shape.extents[0], 2)
+            )
         if spelling in {"{.", "}."}:
             count = integer_value(expression.left)
             if left_type != TypeInfo(AtomType.INTEGER) or count is None:
@@ -1531,6 +1543,14 @@ def _render_fortran_expression(
             right, _, _ = _render_fortran_expression(expression.right, name_transform)
             return (
                 f"reshape([{left}, {right}], [2, size({left})], order=[2, 1])",
+                _ATOM_PRECEDENCE,
+                "call",
+            )
+        if spelling == ",.":
+            left, _, _ = _render_fortran_expression(expression.left, name_transform)
+            right, _, _ = _render_fortran_expression(expression.right, name_transform)
+            return (
+                f"reshape([{left}, {right}], [size({left}), 2])",
                 _ATOM_PRECEDENCE,
                 "call",
             )

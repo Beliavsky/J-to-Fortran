@@ -446,6 +446,24 @@ exit 0
     assert "j_echo_1 = matmul_j(a_uppercase_1, b_uppercase_1)" in generated
 
 
+def test_direct_stitch_output_uses_known_two_column_format() -> None:
+    source = """values =: 1 2 3
+counts =: 4 5 6
+smoutput values ,. counts
+exit 0
+"""
+
+    generated = xj2f.emit_fortran(
+        xj2f.parse_j_source(Path("stitch.ijs"), source)
+    )
+
+    assert (
+        'write (*,"(2(i0, 1x))") transpose('
+        "reshape([values, counts], [size(values), 2]))"
+        in generated
+    )
+
+
 def test_tacit_call_infers_rank_from_a_preceding_top_level_noun() -> None:
     source = """mean =: +/ % #
 x =: 2 4 6 8
