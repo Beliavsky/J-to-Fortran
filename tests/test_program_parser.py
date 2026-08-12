@@ -411,6 +411,22 @@ exit 0
     assert 'write (*,"(3(i0, 1x))") transpose(sum(cube, dim=3))' in generated
 
 
+def test_multidimensional_iota_prints_a_known_shape_matrix() -> None:
+    source = """smoutput i. 4 5
+exit 0
+"""
+
+    generated = xj2f.emit_fortran(
+        xj2f.parse_j_source(Path("iota_matrix.ijs"), source)
+    )
+
+    assert (
+        'write (*,"(5(i0, 1x))") transpose('
+        "reshape(j_iota(20), [4, 5], order=[2, 1]))"
+        in generated
+    )
+
+
 def test_catenate_promotes_boolean_valued_integers_to_integer() -> None:
     source = """values =: 1 1 1 , 2 3 4
 smoutput values

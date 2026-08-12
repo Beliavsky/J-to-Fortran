@@ -1083,6 +1083,31 @@ def test_constant_reshape_preserves_j_axis_order_and_cyclic_fill() -> None:
     )
 
 
+@pytest.mark.parametrize(
+    ("source", "expected_type", "expected_fortran"),
+    [
+        (
+            "i. 4 5",
+            TypeInfo(AtomType.INTEGER, Shape.matrix(4, 5)),
+            "reshape(j_iota(20), [4, 5], order=[2, 1])",
+        ),
+        (
+            "i. 2 3 4",
+            TypeInfo(AtomType.INTEGER, Shape((2, 3, 4))),
+            "reshape(j_iota(24), [2, 3, 4], order=[3, 2, 1])",
+        ),
+    ],
+)
+def test_multidimensional_iota_uses_a_constant_shape(
+    source: str, expected_type: TypeInfo, expected_fortran: str
+) -> None:
+    expression = parse_expression(source)
+
+    assert infer_type(expression, {}) == expected_type
+    assert render_fortran_expression(expression, names={}) == expected_fortran
+    assert required_runtime_helpers(expression, {}) == {"iota"}
+
+
 def test_monadic_shape_includes_scalar_and_matrix_rank() -> None:
     scalar_shape = parse_expression("$ 42")
     matrix_shape = parse_expression("$ matrix")

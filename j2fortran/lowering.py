@@ -740,8 +740,26 @@ def infer_type(
                 raise LoweringError("factorial currently requires integer arguments")
             return operand_type
         if spelling == "i.":
-            if operand_type != TypeInfo(AtomType.INTEGER):
-                raise LoweringError("integer iota requires an integer scalar bound")
+            if operand_type.atom_type is not AtomType.INTEGER or operand_type.rank not in {
+                0,
+                1,
+            }:
+                raise LoweringError(
+                    "integer iota requires an integer scalar or shape vector"
+                )
+            if operand_type.rank == 1:
+                extents = _integer_values(expression.operand)
+                if extents is None:
+                    raise LoweringError(
+                        "multidimensional iota currently requires a constant shape"
+                    )
+                if not extents or len(extents) > 3:
+                    raise LoweringError(
+                        "multidimensional iota currently supports ranks 1 through 3"
+                    )
+                if any(extent < 0 for extent in extents):
+                    raise LoweringError("negative iota shape is not supported")
+                return TypeInfo(AtomType.INTEGER, Shape(tuple(extents)))
             length = integer_value(expression.operand)
             if length is not None and length < 0:
                 raise LoweringError("negative constant iota bounds are not supported")
@@ -1783,6 +1801,25 @@ def render_fortran_expression(
             polynomial[1], name_transform, names=names, named_verbs=named_verbs
         )
         return f"j_polynomial_int({coefficients}, {argument})"
+    if (
+        isinstance(bare_expression, MonadicApply)
+        and primitive_spelling(bare_expression.verb) == "i."
+        and names is not None
+    ):
+        result_type = infer_type(
+            bare_expression,
+            names,
+            name_transform,
+            named_verbs=named_verbs,
+        )
+        if result_type.rank > 1:
+            extents = result_type.shape.extents
+            shape = ", ".join(str(extent) for extent in extents)
+            order = ", ".join(str(axis) for axis in range(len(extents), 0, -1))
+            return (
+                f"reshape(j_iota({_shape_size(result_type.shape)}), [{shape}], "
+                f"order=[{order}])"
+            )
     if isinstance(bare_expression, MonadicApply) and names is not None:
         ranked_reduction = ranked_reduction_spelling(bare_expression.verb)
         if ranked_reduction in {"+", "*", "<.", ">.", "+.", "*."}:

@@ -166,7 +166,8 @@ The parser currently recognizes:
 - structured `if.`/`elseif.`/`else.` branches;
 - integer arithmetic, comparisons, Boolean `*.` and `-.`, integer residue `|`,
   and rank-1 Boolean OR reduction `+./` in the demonstrated forms;
-- integer iota `i.` with a scalar bound, lowered through a pure helper;
+- integer iota `i.` with a scalar bound or constant shape vector through rank 3,
+  lowered through a pure helper;
 - monadic shape and constant-shape reshape through rank 3, including cyclic fill;
 - tally, rank-2 ravel, vector catenate, and equal-length vector laminate;
 - constant in-bounds vector take/drop, plus head, tail, behead, and curtail;
