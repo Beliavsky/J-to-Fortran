@@ -206,6 +206,24 @@ echo value
     assert "! J:" not in no_comments
 
 
+def test_smoutput_emits_character_literals_and_blank_lines() -> None:
+    source = """smoutput 'HEADING'
+smoutput ''
+smoutput 'J isn''t verbose'
+exit 0
+"""
+
+    generated = xj2f.emit_fortran(
+        xj2f.parse_j_source(Path("smoutput.ijs"), source),
+        source_comments="all",
+    )
+
+    assert "! J: smoutput 'HEADING'" in generated
+    assert 'write (*,"(a)") \'HEADING\'' in generated
+    assert 'write (*,"(a)") \'\'' in generated
+    assert 'write (*,"(a)") \'J isn\'\'t verbose\'' in generated
+
+
 def test_top_level_only_test_program_emits_an_executable_assertion() -> None:
     program = xj2f.parse_j_source(Path("integer_vector.ijs"), TOP_LEVEL_TEST_PROGRAM)
     generated = xj2f.emit_fortran(program)

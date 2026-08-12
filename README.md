@@ -220,7 +220,8 @@ The parser currently recognizes:
 - exact integer and logical Match plus J-tolerant real and mixed numeric Match
   using dyadic `-:`, including Matches nested in Boolean expressions;
 - a final noun as an array-valued verb result;
-- top-level `echo` of translated verb calls and assigned nouns, plus `exit 0`.
+- top-level `echo` and `smoutput`, including character literals, translated verb
+  calls, and assigned nouns, plus `exit 0`.
 
 J uses zero-based indexing and row-major array order; the lowering adjusts
 indices and constructs cartesian-product rows so the generated Fortran retains

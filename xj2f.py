@@ -34,6 +34,7 @@ from j2fortran.ast import (
     NamedVerb,
     NumberLiteral,
     PrimitiveVerb,
+    StringLiteral,
     Verb,
     ast_to_dict,
 )
@@ -353,12 +354,13 @@ class Parser:
                 )
                 self.index += 1
                 continue
-            if text.startswith("echo "):
-                items.append(EchoStatement(line, text[5:].strip()))
+            output = re.fullmatch(r"(?:echo|smoutput)\s+(.+)", text)
+            if output:
+                items.append(EchoStatement(line, output.group(1)))
                 self.index += 1
                 continue
-            if text == "echo":
-                raise _error_at(ParseError, line, "echo requires an expression")
+            if text in {"echo", "smoutput"}:
+                raise _error_at(ParseError, line, f"{text} requires an expression")
             if text.startswith("exit "):
                 items.append(ExitStatement(line, text[5:].strip()))
                 self.index += 1
@@ -2109,7 +2111,9 @@ def emit_fortran(
                 )
 
     definitions = _explicit_definitions(program)
-    if not definitions and not any(isinstance(item, Assign) for item in program.items):
+    if not definitions and not any(
+        isinstance(item, (Assign, EchoStatement)) for item in program.items
+    ):
         raise UnsupportedJError("no translatable definitions or assignments were found")
     module_name = _fortran_name(program.source_path.stem) + "_j_mod"
     lines = [
@@ -2211,6 +2215,19 @@ def emit_fortran(
     echo_calls: list[tuple[str, TypeInfo, tuple[int, ...]]] = []
     for echo in echos:
         normalized_echo = _normalized_expression(echo.expression)
+        try:
+            echo_ast = parse_expression(normalized_echo)
+        except (ExpressionParseError, LexerError):
+            echo_ast = None
+        if isinstance(echo_ast, StringLiteral):
+            echo_calls.append(
+                (
+                    render_fortran_expression(echo_ast),
+                    infer_type(echo_ast, {}),
+                    (echo.line.number,),
+                )
+            )
+            continue
         noun_match = re.fullmatch(r"[A-Za-z][A-Za-z0-9_]*", normalized_echo)
         noun_name = _fortran_name(normalized_echo) if noun_match else ""
         noun_assignment = assignment_by_name.get(noun_name)
@@ -2262,6 +2279,9 @@ def emit_fortran(
     ):
         for target_line in comment_targets:
             append_comments(lines, target_line, indent="  ")
+        if result_type.atom_type is AtomType.CHARACTER:
+            lines.append(f'  write (*,"(a)") {expression}')
+            continue
         if result_type.rank == 0:
             if result_type.atom_type is AtomType.LOGICAL:
                 lines.append(
