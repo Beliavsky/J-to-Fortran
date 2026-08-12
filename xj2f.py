@@ -335,21 +335,35 @@ class Parser:
                     tacit_verb = parse_verb(assignment.group(3))
                 except (LexerError, ExpressionParseError, ValueError):
                     tacit_verb = None
+                known_verbs = {
+                    item.name
+                    for item in items
+                    if isinstance(
+                        item, (VerbDefinition, TacitVerbDefinition)
+                    )
+                }
                 supported_fork = (
                     isinstance(tacit_verb, ForkVerb)
                     and _monadic_tacit_source(tacit_verb.left, "y") is not None
                     and _simple_verb_source(tacit_verb.center) is not None
                     and _monadic_tacit_source(tacit_verb.right, "y") is not None
+                    and _named_verbs_in(tacit_verb) <= known_verbs
                 )
                 if isinstance(
                     tacit_verb,
                     (AdverbApplication, AtopVerb, BondVerb, InnerProductVerb),
                 ) or supported_fork:
+                    self._remove_immediately_shadowed_definition(
+                        items, assignment.group(1)
+                    )
                     items.append(
                         TacitVerbDefinition(line, assignment.group(1), tacit_verb)
                     )
                     self.index += 1
                     continue
+                self._remove_immediately_shadowed_definition(
+                    items, assignment.group(1)
+                )
                 items.append(
                     Assign(line, assignment.group(1), assignment.group(2), assignment.group(3))
                 )
@@ -368,6 +382,20 @@ class Parser:
                 continue
             raise _error_at(UnsupportedJError, line, "unsupported top-level J sentence")
         return Program(self.source_path, tuple(items))
+
+    @staticmethod
+    def _remove_immediately_shadowed_definition(
+        items: list[TopLevel], name: str
+    ) -> None:
+        for index in range(len(items) - 1, -1, -1):
+            item = items[index]
+            if isinstance(item, CommentStatement):
+                continue
+            if isinstance(
+                item, (Assign, VerbDefinition, TacitVerbDefinition)
+            ) and item.name == name:
+                del items[index]
+            return
 
     def _parse_statements(self, terminators: set[str]) -> list[Statement]:
         statements: list[Statement] = []
@@ -489,6 +517,7 @@ class FunctionEmitter:
         definition: VerbDefinition,
         argument_types: tuple[TypeInfo, ...] | None = None,
         *,
+        named_verbs: dict[str, TypeInfo] | None = None,
         source_comments: str = "commented",
     ):
         self.definition = definition
@@ -508,9 +537,10 @@ class FunctionEmitter:
         self.result_type: TypeInfo | None = None
         self.integer_results_boolean_compatible = True
         callable_name = definition.generic_name or definition.name
-        self.named_verbs = {
-            _fortran_name(callable_name): TypeInfo(AtomType.INTEGER)
-        }
+        self.named_verbs = dict(named_verbs or {})
+        self.named_verbs.setdefault(
+            _fortran_name(callable_name), TypeInfo(AtomType.INTEGER)
+        )
         self.is_recursive = self._references_verb(
             definition.body, callable_name
         )
@@ -1931,11 +1961,33 @@ def _definition_argument_types(
 def _simple_verb_source(verb: Verb) -> str | None:
     if isinstance(verb, PrimitiveVerb):
         return verb.spelling
+    if isinstance(verb, NamedVerb):
+        return verb.identifier
     if isinstance(verb, AdverbApplication):
         operand = _simple_verb_source(verb.operand)
         if operand is not None:
             return operand + verb.adverb
     return None
+
+
+def _named_verbs_in(verb: Verb) -> set[str]:
+    if isinstance(verb, NamedVerb):
+        return {verb.identifier}
+    if isinstance(verb, (AdverbApplication, RankApplication)):
+        return _named_verbs_in(verb.operand)
+    if isinstance(verb, BondVerb):
+        return _named_verbs_in(verb.operand)
+    if isinstance(verb, AtopVerb):
+        return _named_verbs_in(verb.outer) | _named_verbs_in(verb.inner)
+    if isinstance(verb, ForkVerb):
+        return (
+            _named_verbs_in(verb.left)
+            | _named_verbs_in(verb.center)
+            | _named_verbs_in(verb.right)
+        )
+    if isinstance(verb, InnerProductVerb):
+        return _named_verbs_in(verb.reduction) | _named_verbs_in(verb.product)
+    return set()
 
 
 def _monadic_tacit_source(verb: Verb, operand: str) -> str | None:
@@ -2249,6 +2301,7 @@ def emit_fortran(
         emitted, required, result_type = FunctionEmitter(
             definition,
             signature,
+            named_verbs=function_types,
             source_comments=source_comments,
         ).emit()
         append_comments(lines, definition.line.number)

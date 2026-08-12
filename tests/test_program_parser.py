@@ -302,6 +302,42 @@ exit 0
     )
 
 
+def test_tacit_fork_can_call_a_previously_defined_verb() -> None:
+    source = """mean =: +/ % #
+values =: 2 4 6
+smoutput mean values
+demean =: ] - mean
+smoutput demean values
+exit 0
+"""
+
+    generated = xj2f.emit_fortran(
+        xj2f.parse_j_source(Path("demean.ijs"), source)
+    )
+
+    assert "pure function demean(y) result(j_result)" in generated
+    assert "j_result = y - mean(y)" in generated
+
+
+def test_immediately_redefined_top_level_verb_replaces_unused_definition() -> None:
+    source = """sortunique =: /:~ @ ~
+NB. Correct the definition before it is used.
+sortunique =: /:~ @ ~.
+values =: 3 1 3 2
+smoutput sortunique values
+exit 0
+"""
+
+    program = xj2f.parse_j_source(Path("redefined.ijs"), source)
+    definitions = [
+        item for item in program.items if isinstance(item, xj2f.TacitVerbDefinition)
+    ]
+
+    assert len(definitions) == 1
+    assert definitions[0].line.number == 3
+    assert "j_sort_int_vector(j_nub_int(y), .false.)" in xj2f.emit_fortran(program)
+
+
 def test_nested_atop_composition_computes_vector_length() -> None:
     source = """length =: %: @: (+/) @: *:
 values =: 1 2 2
