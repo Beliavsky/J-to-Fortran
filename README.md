@@ -105,6 +105,7 @@ The parser currently recognizes:
   and rank-1 Boolean OR reduction `+./` in the demonstrated forms;
 - integer iota `i.` with a scalar bound, lowered through a pure helper;
 - monadic shape and constant-shape reshape through rank 3, including cyclic fill;
+- tally, rank-2 ravel, vector catenate, and equal-length vector laminate;
 - constant multidimensional `{` selection through rank 3: scalar coordinates,
   leading-axis rows, independent vector selectors, negative indices, and slices;
 - top-level noun-derived `}` amendment with scalar or conforming array values;

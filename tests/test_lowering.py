@@ -218,6 +218,73 @@ def test_boolean_strands_use_fortran_logical_literals() -> None:
     )
 
 
+def test_tally_returns_a_scalar_integer() -> None:
+    expression = parse_expression("# a")
+    names = {"a": TypeInfo(AtomType.INTEGER, Shape.vector(4))}
+
+    assert infer_type(expression, names) == TypeInfo(AtomType.INTEGER)
+    assert render_fortran_expression(expression, names=names) == "size(a, 1)"
+
+
+def test_rank_two_ravel_preserves_j_row_major_order() -> None:
+    expression = parse_expression(", a")
+    names = {"a": TypeInfo(AtomType.INTEGER, Shape.matrix(2, 3))}
+
+    assert infer_type(expression, names) == TypeInfo(
+        AtomType.INTEGER, Shape.vector(6)
+    )
+    assert render_fortran_expression(expression, names=names) == (
+        "reshape(transpose(a), [size(a)])"
+    )
+
+
+def test_vector_catenate_combines_extents() -> None:
+    expression = parse_expression("a , b")
+    names = {
+        "a": TypeInfo(AtomType.INTEGER, Shape.vector(3)),
+        "b": TypeInfo(AtomType.INTEGER, Shape.vector(2)),
+    }
+
+    assert infer_type(expression, names) == TypeInfo(
+        AtomType.INTEGER, Shape.vector(5)
+    )
+    assert render_fortran_expression(expression, names=names) == "[a, b]"
+
+
+def test_vector_laminate_creates_a_row_major_matrix() -> None:
+    expression = parse_expression("a ,: b")
+    names = {
+        "a": TypeInfo(AtomType.INTEGER, Shape.vector(3)),
+        "b": TypeInfo(AtomType.INTEGER, Shape.vector(3)),
+    }
+
+    assert infer_type(expression, names) == TypeInfo(
+        AtomType.INTEGER, Shape.matrix(2, 3)
+    )
+    assert render_fortran_expression(expression, names=names) == (
+        "reshape([a, b], [2, size(a)], order=[2, 1])"
+    )
+
+
+def test_ravel_rejects_ranks_not_yet_supported() -> None:
+    expression = parse_expression(", a")
+    names = {"a": TypeInfo(AtomType.INTEGER, Shape.vector(3))}
+
+    with pytest.raises(LoweringError, match="rank-2"):
+        infer_type(expression, names)
+
+
+def test_laminate_rejects_unequal_known_lengths() -> None:
+    expression = parse_expression("a ,: b")
+    names = {
+        "a": TypeInfo(AtomType.INTEGER, Shape.vector(2)),
+        "b": TypeInfo(AtomType.INTEGER, Shape.vector(3)),
+    }
+
+    with pytest.raises(LoweringError, match="laminate incompatible extent"):
+        infer_type(expression, names)
+
+
 def test_constant_reshape_preserves_j_axis_order_and_cyclic_fill() -> None:
     matrix = parse_expression("2 3 $ i. 6")
     cyclic = parse_expression("2 3 $ 1 2")

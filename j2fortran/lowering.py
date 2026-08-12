@@ -116,6 +116,22 @@ def _is_boolean_strand(expression: Expression) -> bool:
     )
 
 
+def _shape_size(shape: Shape) -> int | str | None:
+    if any(extent is None for extent in shape.extents):
+        return None
+    if all(isinstance(extent, int) for extent in shape.extents):
+        return math.prod(shape.extents)
+    return " * ".join(f"({extent})" for extent in shape.extents)
+
+
+def _sum_extents(left: int | str | None, right: int | str | None) -> int | str | None:
+    if left is None or right is None:
+        return None
+    if isinstance(left, int) and isinstance(right, int):
+        return left + right
+    return f"({left}) + ({right})"
+
+
 def constant_shape_extents(expression: Expression) -> tuple[int, ...] | None:
     expression = ungroup(expression)
     if isinstance(expression, NumberLiteral):
@@ -410,6 +426,16 @@ def infer_type(
         )
         if spelling == "$":
             return TypeInfo(AtomType.INTEGER, Shape.vector(operand_type.rank))
+        if spelling == "#":
+            if operand_type.rank < 1:
+                raise LoweringError("tally currently requires an array operand")
+            return TypeInfo(AtomType.INTEGER)
+        if spelling == ",":
+            if operand_type.rank != 2:
+                raise LoweringError("ravel currently requires a rank-2 operand")
+            return TypeInfo(
+                operand_type.atom_type, Shape.vector(_shape_size(operand_type.shape))
+            )
         if spelling in {"+", "-", "*:"}:
             return operand_type
         if spelling == "|":
@@ -503,6 +529,27 @@ def infer_type(
         right_type = infer_type(
             expression.right, names, name_transform, named_verbs=named_verbs
         )
+        if spelling == ",":
+            if left_type.rank != 1 or right_type.rank != 1:
+                raise LoweringError("catenate currently requires two vectors")
+            if left_type.atom_type is not right_type.atom_type:
+                raise LoweringError("catenate currently requires matching atom types")
+            extent = _sum_extents(
+                left_type.shape.extents[0], right_type.shape.extents[0]
+            )
+            return TypeInfo(left_type.atom_type, Shape.vector(extent))
+        if spelling == ",:":
+            if left_type.rank != 1 or right_type.rank != 1:
+                raise LoweringError("laminate currently requires two vectors")
+            if left_type.atom_type is not right_type.atom_type:
+                raise LoweringError("laminate currently requires matching atom types")
+            try:
+                vector_shape = agree_shapes(left_type.shape, right_type.shape)
+            except ShapeMismatchError as exc:
+                raise LoweringError(f"laminate {exc}") from exc
+            return TypeInfo(
+                left_type.atom_type, Shape.matrix(2, vector_shape.extents[0])
+            )
         if spelling == "-:":
             numeric_types = {AtomType.INTEGER, AtomType.REAL}
             both_numeric = (
@@ -732,9 +779,29 @@ def _render_fortran_expression(
             return f".not. {operand}", _NOT_PRECEDENCE, ".not."
         if spelling == "$":
             return f"shape({operand})", _ATOM_PRECEDENCE, "call"
+        if spelling == "#":
+            return f"size({operand}, 1)", _ATOM_PRECEDENCE, "call"
+        if spelling == ",":
+            return (
+                f"reshape(transpose({operand}), [size({operand})])",
+                _ATOM_PRECEDENCE,
+                "call",
+            )
         raise LoweringError(f"monadic verb {spelling!r} needs a dedicated lowering rule")
     if isinstance(expression, DyadicApply):
         spelling = primitive_spelling(expression.verb)
+        if spelling == ",":
+            left, _, _ = _render_fortran_expression(expression.left, name_transform)
+            right, _, _ = _render_fortran_expression(expression.right, name_transform)
+            return f"[{left}, {right}]", _ATOM_PRECEDENCE, "constructor"
+        if spelling == ",:":
+            left, _, _ = _render_fortran_expression(expression.left, name_transform)
+            right, _, _ = _render_fortran_expression(expression.right, name_transform)
+            return (
+                f"reshape([{left}, {right}], [2, size({left})], order=[2, 1])",
+                _ATOM_PRECEDENCE,
+                "call",
+            )
         if spelling == "^":
             left, left_precedence, _ = _render_fortran_expression(
                 expression.left, name_transform
