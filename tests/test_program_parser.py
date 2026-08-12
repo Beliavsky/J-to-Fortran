@@ -140,6 +140,22 @@ def test_recursive_explicit_verb_is_pure_recursive() -> None:
     assert "elemental function fact" not in generated
 
 
+def test_vector_call_infers_an_assumed_shape_dummy() -> None:
+    source = """countpos =: 3 : 0
+  +/ y > 0
+)
+result =: countpos _3 5 0 2 _1 8
+expected =: 3
+ok =: result -: expected
+"""
+    program = xj2f.parse_j_source(Path("countpos.ijs"), source)
+    generated = xj2f.emit_fortran(program)
+
+    assert "pure function countpos(y) result(j_result)" in generated
+    assert "integer, intent(in) :: y(:)" in generated
+    assert "j_result = sum(merge(1, 0, y > 0), dim=1)" in generated
+
+
 def test_dyadic_explicit_verb_has_x_and_y_arguments() -> None:
     source = "lincomb =: 4 : 0\n  x + 2 * y\n)\n"
     program = xj2f.parse_j_source(Path("lincomb.ijs"), source)

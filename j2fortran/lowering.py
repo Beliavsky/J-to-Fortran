@@ -437,9 +437,12 @@ def infer_type(
                 raise LoweringError(
                     f"type of verb {expression.verb.identifier!r} is unknown"
                 )
-            if operand_type != TypeInfo(AtomType.INTEGER):
+            if (
+                operand_type.atom_type is not AtomType.INTEGER
+                or operand_type.rank not in {0, 1}
+            ):
                 raise LoweringError(
-                    "direct named-verb application currently requires an integer scalar"
+                    "direct named-verb application currently requires an integer scalar or vector"
                 )
             try:
                 return named_verbs[name_transform(expression.verb.identifier)]
@@ -523,6 +526,13 @@ def infer_type(
                             "Boolean reduction requires a logical operand"
                         )
                     return TypeInfo(AtomType.LOGICAL)
+                if reduction == "+" and operand_type.atom_type is AtomType.LOGICAL:
+                    result_shape = (
+                        Shape.scalar()
+                        if operand_type.rank == 1
+                        else Shape.vector(operand_type.shape.extents[1])
+                    )
+                    return TypeInfo(AtomType.INTEGER, result_shape)
                 if operand_type.atom_type not in {
                     AtomType.INTEGER,
                     AtomType.REAL,
@@ -1346,6 +1356,28 @@ def render_fortran_expression(
         raise LoweringError(
             "amendment currently requires a top-level assignment context"
         )
+    bare_expression = ungroup(expression)
+    if (
+        isinstance(bare_expression, MonadicApply)
+        and isinstance(bare_expression.verb, AdverbApplication)
+        and bare_expression.verb.adverb == "/"
+        and primitive_spelling(bare_expression.verb.operand) == "+"
+        and names is not None
+    ):
+        operand_type = infer_type(
+            bare_expression.operand,
+            names,
+            name_transform,
+            named_verbs=named_verbs,
+        )
+        if operand_type.atom_type is AtomType.LOGICAL:
+            operand = render_fortran_expression(
+                bare_expression.operand,
+                name_transform,
+                names=names,
+                named_verbs=named_verbs,
+            )
+            return f"sum(merge(1, 0, {operand}), dim=1)"
     selection = match_index_selection(expression)
     if selection is not None and names is not None:
         source_type = infer_type(

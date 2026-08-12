@@ -22,7 +22,15 @@ import time
 from pathlib import Path
 from typing import Sequence
 
-from j2fortran.ast import MonadicApply, Name, PrimitiveVerb, ast_to_dict
+from j2fortran.ast import (
+    DyadicApply,
+    Group,
+    MonadicApply,
+    Name,
+    NamedVerb,
+    PrimitiveVerb,
+    ast_to_dict,
+)
 from j2fortran.expression_parser import ExpressionParseError, parse_expression
 from j2fortran.fortran_style import (
     combine_adjacent_row_extension_assignments,
@@ -397,8 +405,15 @@ def _normalized_expression(expression: str) -> str:
 
 
 class FunctionEmitter:
-    def __init__(self, definition: VerbDefinition):
+    def __init__(
+        self,
+        definition: VerbDefinition,
+        argument_types: tuple[TypeInfo, ...] | None = None,
+    ):
         self.definition = definition
+        self.argument_types = argument_types or tuple(
+            TypeInfo(AtomType.INTEGER) for _ in definition.arguments
+        )
         self.declarations: dict[str, str] = {}
         self.types: dict[str, TypeInfo] = {}
         self.body: list[str] = []
@@ -461,8 +476,13 @@ class FunctionEmitter:
         return False
 
     def emit(self) -> tuple[list[str], set[str], TypeInfo]:
-        for argument in self.definition.arguments:
-            self._declare(argument, "integer, intent(in)")
+        for argument, argument_type in zip(
+            self.definition.arguments, self.argument_types, strict=True
+        ):
+            declaration = "integer, intent(in)"
+            if argument_type.rank == 1:
+                declaration += "-vector"
+            self._declare(argument, declaration)
         for statement in self.definition.body:
             self._emit_statement(statement)
         if self.result_type is None:
@@ -563,7 +583,7 @@ class FunctionEmitter:
 
     @staticmethod
     def _shape_suffix(declaration: str) -> str:
-        if declaration.endswith("allocatable-vector"):
+        if declaration.endswith("-vector"):
             return "(:)"
         if declaration.endswith("allocatable-matrix"):
             return "(:,:)"
@@ -583,6 +603,9 @@ class FunctionEmitter:
         self.declarations[name] = declaration
         type_info = {
             "integer, intent(in)": TypeInfo(AtomType.INTEGER),
+            "integer, intent(in)-vector": TypeInfo(
+                AtomType.INTEGER, Shape.vector()
+            ),
             "integer": TypeInfo(AtomType.INTEGER),
             "integer, allocatable-vector": TypeInfo(AtomType.INTEGER, Shape.vector()),
             "integer, allocatable-matrix": TypeInfo(AtomType.INTEGER, Shape.matrix()),
@@ -1493,6 +1516,60 @@ def _main_entity_declaration(assignment: LoweredTopAssignment) -> tuple[str, str
     return intrinsic, assignment.name
 
 
+def _definition_argument_types(
+    program: Program,
+) -> dict[tuple[str, int], tuple[TypeInfo, ...]]:
+    """Infer initial explicit-verb dummy ranks from translatable top-level calls."""
+
+    inferred: dict[tuple[str, int], tuple[TypeInfo, ...]] = {}
+
+    def visit(expression) -> None:
+        expression = ungroup(expression)
+        call_name: str | None = None
+        arguments = ()
+        if isinstance(expression, MonadicApply) and isinstance(
+            expression.verb, NamedVerb
+        ):
+            call_name = _fortran_name(expression.verb.identifier)
+            arguments = (expression.operand,)
+        elif isinstance(expression, DyadicApply) and isinstance(
+            expression.verb, NamedVerb
+        ):
+            call_name = _fortran_name(expression.verb.identifier)
+            arguments = (expression.left, expression.right)
+        if call_name is not None:
+            try:
+                argument_types = tuple(infer_type(argument, {}) for argument in arguments)
+            except LoweringError:
+                argument_types = ()
+            if argument_types and all(
+                argument_type.atom_type is AtomType.INTEGER
+                and argument_type.rank in {0, 1}
+                for argument_type in argument_types
+            ):
+                key = (call_name, len(argument_types))
+                previous = inferred.get(key)
+                if previous is not None and previous != argument_types:
+                    raise J2FError(
+                        f"calls to {call_name!r} use inconsistent argument ranks"
+                    )
+                inferred[key] = argument_types
+        if isinstance(expression, Group):
+            visit(expression.expression)
+        elif isinstance(expression, MonadicApply):
+            visit(expression.operand)
+        elif isinstance(expression, DyadicApply):
+            visit(expression.left)
+            visit(expression.right)
+
+    for assignment in (item for item in program.items if isinstance(item, Assign)):
+        try:
+            visit(parse_expression(assignment.expression))
+        except (LexerError, ExpressionParseError):
+            continue
+    return inferred
+
+
 def emit_fortran(program: Program, *, runtime: str = "embedded") -> str:
     if runtime not in {"embedded", "external"}:
         raise J2FError(f"unknown runtime mode {runtime!r}")
@@ -1533,12 +1610,18 @@ def emit_fortran(program: Program, *, runtime: str = "embedded") -> str:
     helpers: set[str] = set()
     function_names: set[str] = set()
     function_types: dict[str, TypeInfo] = {}
+    argument_types = _definition_argument_types(program)
     for definition in definitions:
-        emitted, required, result_type = FunctionEmitter(definition).emit()
+        exported_name = _fortran_name(definition.generic_name or definition.name)
+        signature = argument_types.get(
+            (exported_name, len(definition.arguments))
+        )
+        emitted, required, result_type = FunctionEmitter(
+            definition, signature
+        ).emit()
         lines.extend(emitted)
         lines.append("")
         helpers.update(required)
-        exported_name = _fortran_name(definition.generic_name or definition.name)
         function_names.add(exported_name)
         previous_type = function_types.get(exported_name)
         if previous_type is not None and previous_type != result_type:
