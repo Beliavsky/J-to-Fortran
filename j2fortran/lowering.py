@@ -512,17 +512,28 @@ def infer_type(
             extent = operand_type.shape.extents[0]
             return TypeInfo(AtomType.INTEGER, Shape.matrix(extent, extent))
         ranked_reduction = ranked_reduction_spelling(expression.verb)
-        if ranked_reduction in {"+", "*"}:
-            if (
-                operand_type.atom_type
-                not in {AtomType.INTEGER, AtomType.REAL, AtomType.COMPLEX}
-                or operand_type.rank != 2
-            ):
-                raise LoweringError(
-                    "rank-1 reduction currently requires a numeric matrix"
-                )
+        if ranked_reduction in {"+", "*", "<.", ">.", "+.", "*."}:
+            if operand_type.rank != 2:
+                raise LoweringError("rank-1 reduction currently requires a matrix")
+            if ranked_reduction in {"+.", "*."}:
+                if operand_type.atom_type is not AtomType.LOGICAL:
+                    raise LoweringError(
+                        "Boolean rank-1 reduction requires a logical matrix"
+                    )
+                atom_type = AtomType.LOGICAL
+            elif ranked_reduction == "+" and operand_type.atom_type is AtomType.LOGICAL:
+                atom_type = AtomType.INTEGER
+            else:
+                numeric_types = {AtomType.INTEGER, AtomType.REAL}
+                if ranked_reduction in {"+", "*"}:
+                    numeric_types.add(AtomType.COMPLEX)
+                if operand_type.atom_type not in numeric_types:
+                    raise LoweringError(
+                        "numeric rank-1 reduction requires a numeric matrix"
+                    )
+                atom_type = operand_type.atom_type
             return TypeInfo(
-                operand_type.atom_type,
+                atom_type,
                 Shape.vector(operand_type.shape.extents[0]),
             )
         ranked_application = match_ranked_named_application(expression)
@@ -848,7 +859,7 @@ def infer_type(
                 result_extent = None
             return TypeInfo(AtomType.INTEGER, Shape.vector(result_extent))
         table = table_spelling(expression.verb)
-        if table in {"*", "^"}:
+        if table in {"+", "*", "^", "=", "<"}:
             left_type = infer_type(
                 expression.left, names, name_transform, named_verbs=named_verbs
             )
@@ -869,7 +880,7 @@ def infer_type(
                         "power table currently requires constant nonnegative exponents"
                     )
             return TypeInfo(
-                AtomType.INTEGER,
+                AtomType.LOGICAL if table in {"=", "<"} else AtomType.INTEGER,
                 Shape.matrix(
                     left_type.shape.extents[0], right_type.shape.extents[0]
                 ),
@@ -1331,11 +1342,18 @@ def _render_fortran_expression(
             )
             return f"j_addition_table_int({operand})", _ATOM_PRECEDENCE, "call"
         ranked_reduction = ranked_reduction_spelling(expression.verb)
-        if ranked_reduction in {"+", "*"}:
+        if ranked_reduction in {"+", "*", "<.", ">.", "+.", "*."}:
             operand, _, _ = _render_fortran_expression(
                 expression.operand, name_transform
             )
-            intrinsic = "sum" if ranked_reduction == "+" else "product"
+            intrinsic = {
+                "+": "sum",
+                "*": "product",
+                "<.": "minval",
+                ">.": "maxval",
+                "+.": "any",
+                "*.": "all",
+            }[ranked_reduction]
             return f"{intrinsic}({operand}, dim=2)", _ATOM_PRECEDENCE, "call"
         ranked_application = match_ranked_named_application(expression)
         if ranked_application is not None:
@@ -1680,6 +1698,58 @@ def render_fortran_expression(
             polynomial[1], name_transform, names=names, named_verbs=named_verbs
         )
         return f"j_polynomial_int({coefficients}, {argument})"
+    if isinstance(bare_expression, MonadicApply) and names is not None:
+        ranked_reduction = ranked_reduction_spelling(bare_expression.verb)
+        if ranked_reduction in {"+", "*", "<.", ">.", "+.", "*."}:
+            operand_type = infer_type(
+                bare_expression.operand,
+                names,
+                name_transform,
+                named_verbs=named_verbs,
+            )
+            operand = render_fortran_expression(
+                bare_expression.operand,
+                name_transform,
+                names=names,
+                named_verbs=named_verbs,
+            )
+            if ranked_reduction == "+" and operand_type.atom_type is AtomType.LOGICAL:
+                operand = f"merge(1, 0, {operand})"
+            intrinsic = {
+                "+": "sum",
+                "*": "product",
+                "<.": "minval",
+                ">.": "maxval",
+                "+.": "any",
+                "*.": "all",
+            }[ranked_reduction]
+            return f"{intrinsic}({operand}, dim=2)"
+    if isinstance(bare_expression, DyadicApply) and names is not None:
+        table = table_spelling(bare_expression.verb)
+        if table in {"+", "=", "<"}:
+            infer_type(
+                bare_expression,
+                names,
+                name_transform,
+                named_verbs=named_verbs,
+            )
+            left = render_fortran_expression(
+                bare_expression.left,
+                name_transform,
+                names=names,
+                named_verbs=named_verbs,
+            )
+            right = render_fortran_expression(
+                bare_expression.right,
+                name_transform,
+                names=names,
+                named_verbs=named_verbs,
+            )
+            operator = {"+": "+", "=": "==", "<": "<"}[table]
+            return (
+                f"spread({left}, dim=2, ncopies=size({right})) {operator} "
+                f"spread({right}, dim=1, ncopies=size({left}))"
+            )
     if isinstance(bare_expression, MonadicApply) and names is not None:
         operand_type = infer_type(
             bare_expression.operand,

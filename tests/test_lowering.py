@@ -646,6 +646,61 @@ def test_rank_one_complex_reduction_preserves_complex_type() -> None:
     assert render_fortran_expression(expression, names=names) == "sum(a, dim=2)"
 
 
+def test_rank_one_sum_counts_true_values_in_each_matrix_row() -> None:
+    expression = parse_expression('+/"1 a')
+    names = {"a": TypeInfo(AtomType.LOGICAL, Shape.matrix(2, 3))}
+
+    assert infer_type(expression, names) == TypeInfo(
+        AtomType.INTEGER, Shape.vector(2)
+    )
+    assert (
+        render_fortran_expression(expression, names=names)
+        == "sum(merge(1, 0, a), dim=2)"
+    )
+
+
+@pytest.mark.parametrize(
+    ("source", "atom_type", "operator"),
+    [
+        ("a +/ b", AtomType.INTEGER, "+"),
+        ("a =/ b", AtomType.LOGICAL, "=="),
+        ("a </ b", AtomType.LOGICAL, "<"),
+    ],
+)
+def test_integer_outer_tables_use_spread(
+    source: str, atom_type: AtomType, operator: str
+) -> None:
+    expression = parse_expression(source)
+    names = {
+        "a": TypeInfo(AtomType.INTEGER, Shape.vector(2)),
+        "b": TypeInfo(AtomType.INTEGER, Shape.vector(3)),
+    }
+
+    assert infer_type(expression, names) == TypeInfo(
+        atom_type, Shape.matrix(2, 3)
+    )
+    assert render_fortran_expression(expression, names=names) == (
+        f"spread(a, dim=2, ncopies=size(b)) {operator} "
+        "spread(b, dim=1, ncopies=size(a))"
+    )
+
+
+def test_frequency_table_expression_counts_outer_matches() -> None:
+    expression = parse_expression('+/"1 u =/ v')
+    names = {
+        "u": TypeInfo(AtomType.INTEGER, Shape.vector(3)),
+        "v": TypeInfo(AtomType.INTEGER, Shape.vector(4)),
+    }
+
+    assert infer_type(expression, names) == TypeInfo(
+        AtomType.INTEGER, Shape.vector(3)
+    )
+    assert render_fortran_expression(expression, names=names) == (
+        "sum(merge(1, 0, spread(u, dim=2, ncopies=size(v)) == "
+        "spread(v, dim=1, ncopies=size(u))), dim=2)"
+    )
+
+
 @pytest.mark.parametrize(
     ("source", "expected_type", "expected_fortran", "helper"),
     [
