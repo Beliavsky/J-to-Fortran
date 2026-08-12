@@ -97,6 +97,7 @@ RUNTIME_PROCEDURES = {
     "prefix_product_int": "j_prefix_product_int",
     "prefix_sum_int": "j_prefix_sum_int",
     "power_table_int": "j_power_table_int",
+    "reverse_character": "j_reverse_character",
     "reverse_int_vector": "j_reverse_int_vector",
     "signum_int": "j_signum_int",
     "solve_2x2_matrix_int": "j_solve_2x2_matrix_int",
@@ -1289,6 +1290,23 @@ def _runtime_helpers(helpers: set[str]) -> list[str]:
                 "    reversed_values(value_index) = values(size(values) - value_index + 1)",
                 "  end do",
                 "end function j_reverse_int_vector",
+                "",
+            ]
+        )
+    if "reverse_character" in helpers:
+        result.extend(
+            [
+                "pure function j_reverse_character(values) result(reversed)",
+                "  character(len=*), intent(in) :: values",
+                "  character(len=:), allocatable :: reversed",
+                "  integer :: character_index",
+                "",
+                "  allocate(character(len=len(values)) :: reversed)",
+                "  do character_index = 1, len(values)",
+                "    reversed(character_index:character_index) = &",
+                "      values(len(values) - character_index + 1:len(values) - character_index + 1)",
+                "  end do",
+                "end function j_reverse_character",
                 "",
             ]
         )

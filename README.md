@@ -136,6 +136,7 @@ The parser currently recognizes:
 - direct determinants of statically known 2 by 2 matrices;
 - vector and matrix division by integer 2 by 2 matrices;
 - character literals and character-array matching;
+- character tally, catenate, and reverse;
 - mixed Boolean expressions and integer literal `0`/`1` branches, inferred as
   logical results and emitted with `.false.`/`.true.` literals;
 - rank-0 application of a translated scalar verb to an integer vector;

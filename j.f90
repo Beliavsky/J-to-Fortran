@@ -9,6 +9,7 @@ module j2f_runtime
   public :: j_membership_int, j_multiplication_table_int, j_nub_int
   public :: j_power_table_int, j_prefix_product_int, j_prefix_sum_int
   public :: j_reverse_int_vector, j_signum_int, j_sort_int_vector
+  public :: j_reverse_character
   public :: j_solve_2x2_matrix_int, j_solve_2x2_vector_int
 
 contains
@@ -189,6 +190,18 @@ pure function j_sort_int_vector(values, descending) result(sorted_values)
     sorted_values(scan_position + 1) = current_value
   end do
 end function j_sort_int_vector
+
+pure function j_reverse_character(values) result(reversed)
+  character(len=*), intent(in) :: values
+  character(len=:), allocatable :: reversed
+  integer :: character_index
+
+  allocate(character(len=len(values)) :: reversed)
+  do character_index = 1, len(values)
+    reversed(character_index:character_index) = &
+      values(len(values) - character_index + 1:len(values) - character_index + 1)
+  end do
+end function j_reverse_character
 
 pure function j_reverse_int_vector(values) result(reversed_values)
   integer, intent(in) :: values(:)

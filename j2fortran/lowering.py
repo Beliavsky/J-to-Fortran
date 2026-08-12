@@ -615,8 +615,8 @@ def infer_type(
         if spelling == "|.":
             if operand_type.rank != 1:
                 raise LoweringError("reverse currently requires a vector")
-            if operand_type.atom_type is not AtomType.INTEGER:
-                raise LoweringError("reverse currently requires an integer vector")
+            if operand_type.atom_type not in {AtomType.INTEGER, AtomType.CHARACTER}:
+                raise LoweringError("reverse currently requires an integer or character vector")
             return operand_type
         if spelling == "|:":
             if operand_type.rank != 2:
@@ -1467,6 +1467,35 @@ def render_fortran_expression(
             "amendment currently requires a top-level assignment context"
         )
     bare_expression = ungroup(expression)
+    if isinstance(bare_expression, MonadicApply) and names is not None:
+        operand_type = infer_type(
+            bare_expression.operand,
+            names,
+            name_transform,
+            named_verbs=named_verbs,
+        )
+        spelling = primitive_spelling(bare_expression.verb)
+        if operand_type.atom_type is AtomType.CHARACTER and spelling in {"#", "|."}:
+            operand = render_fortran_expression(
+                bare_expression.operand,
+                name_transform,
+                names=names,
+                named_verbs=named_verbs,
+            )
+            return f"len({operand})" if spelling == "#" else f"j_reverse_character({operand})"
+    catenated = dyad(bare_expression, ",")
+    if catenated is not None and names is not None:
+        left_type = infer_type(
+            catenated[0], names, name_transform, named_verbs=named_verbs
+        )
+        if left_type.atom_type is AtomType.CHARACTER:
+            left = render_fortran_expression(
+                catenated[0], name_transform, names=names, named_verbs=named_verbs
+            )
+            right = render_fortran_expression(
+                catenated[1], name_transform, names=names, named_verbs=named_verbs
+            )
+            return f"{left} // {right}"
     matrix_division = dyad(bare_expression, "%.")
     if matrix_division is not None and names is not None:
         result_type = infer_type(
@@ -1751,7 +1780,22 @@ def required_runtime_helpers(
         if spelling == "*":
             helpers.add("signum_int")
         if spelling == "|.":
-            helpers.add("reverse_int_vector")
+            operand_type = (
+                infer_type(
+                    expression.operand,
+                    names,
+                    name_transform,
+                    named_verbs=named_verbs,
+                )
+                if names is not None
+                else None
+            )
+            helpers.add(
+                "reverse_character"
+                if operand_type is not None
+                and operand_type.atom_type is AtomType.CHARACTER
+                else "reverse_int_vector"
+            )
         if spelling == "/:":
             helpers.add("grade_up_int")
         if spelling == "~.":

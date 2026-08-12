@@ -84,6 +84,37 @@ def test_character_literal_and_match_lowering() -> None:
 
 
 @pytest.mark.parametrize(
+    ("source", "expected_type", "expected_fortran"),
+    [
+        ("# 'abcdef'", TypeInfo(AtomType.INTEGER), "len('abcdef')"),
+        (
+            "'abc' , 'def'",
+            TypeInfo(AtomType.CHARACTER, Shape.vector(6)),
+            "'abc' // 'def'",
+        ),
+        (
+            "|. 'abcdef'",
+            TypeInfo(AtomType.CHARACTER, Shape.vector(6)),
+            "j_reverse_character('abcdef')",
+        ),
+    ],
+)
+def test_character_operations_lower_to_string_intrinsics(
+    source: str, expected_type: TypeInfo, expected_fortran: str
+) -> None:
+    expression = parse_expression(source)
+
+    assert infer_type(expression, {}) == expected_type
+    assert render_fortran_expression(expression, names={}) == expected_fortran
+
+
+def test_character_reverse_requires_its_runtime_helper() -> None:
+    expression = parse_expression("|. 'abcdef'")
+
+    assert required_runtime_helpers(expression, {}) == {"reverse_character"}
+
+
+@pytest.mark.parametrize(
     ("left", "right", "expected_type", "expected_fortran"),
     [
         (
