@@ -12,6 +12,7 @@ Extent = int | str | None
 class AtomType(Enum):
     INTEGER = auto()
     REAL = auto()
+    COMPLEX = auto()
     LOGICAL = auto()
     CHARACTER = auto()
 

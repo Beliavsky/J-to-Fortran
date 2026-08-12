@@ -436,7 +436,12 @@ def infer_type(
 ) -> TypeInfo:
     expression = ungroup(expression)
     if isinstance(expression, NumberLiteral):
-        atom_type = AtomType.REAL if any(c in expression.text for c in ".eE") else AtomType.INTEGER
+        if "j" in expression.text:
+            atom_type = AtomType.COMPLEX
+        elif any(c in expression.text for c in ".eE"):
+            atom_type = AtomType.REAL
+        else:
+            atom_type = AtomType.INTEGER
         return TypeInfo(atom_type)
     if isinstance(expression, Strand):
         if _is_boolean_strand(expression):
@@ -974,7 +979,7 @@ def infer_type(
                 )
             return TypeInfo(AtomType.INTEGER, right_type.shape)
         if spelling == "-:":
-            numeric_types = {AtomType.INTEGER, AtomType.REAL}
+            numeric_types = {AtomType.INTEGER, AtomType.REAL, AtomType.COMPLEX}
             both_numeric = (
                 left_type.atom_type in numeric_types
                 and right_type.atom_type in numeric_types
@@ -1071,10 +1076,25 @@ def infer_type(
                 raise LoweringError("binomial currently requires integer arguments")
             return TypeInfo(AtomType.INTEGER, shape)
         if spelling in {"+", "-", "*", "%", "|"}:
+            if left_type.atom_type not in {
+                AtomType.INTEGER,
+                AtomType.REAL,
+                AtomType.COMPLEX,
+            } or right_type.atom_type not in {
+                AtomType.INTEGER,
+                AtomType.REAL,
+                AtomType.COMPLEX,
+            }:
+                raise LoweringError("arithmetic requires numeric arguments")
             atom_type = (
-                AtomType.REAL
-                if spelling == "%" or AtomType.REAL in {left_type.atom_type, right_type.atom_type}
-                else AtomType.INTEGER
+                AtomType.COMPLEX
+                if AtomType.COMPLEX in {left_type.atom_type, right_type.atom_type}
+                else (
+                    AtomType.REAL
+                    if spelling == "%"
+                    or AtomType.REAL in {left_type.atom_type, right_type.atom_type}
+                    else AtomType.INTEGER
+                )
             )
             return TypeInfo(atom_type, shape)
         raise LoweringError(f"cannot infer the result type of dyadic {spelling!r}")
@@ -1119,6 +1139,20 @@ _NOT_PRECEDENCE = 25
 def _fortran_number(spelling: str) -> str:
     if spelling in {"_", "_."}:
         raise LoweringError(f"special J number {spelling!r} is not supported")
+    if "j" in spelling:
+        real_part, imaginary_part = spelling.split("j", 1)
+
+        def component(value: str) -> str:
+            rendered_value = value.replace("e_", "e-").replace("E_", "E-")
+            rendered_value = rendered_value.replace("_", "-")
+            if not any(character in value for character in ".eE"):
+                rendered_value += ".0"
+            return rendered_value + "_real64"
+
+        return (
+            f"cmplx({component(real_part)}, {component(imaginary_part)}, "
+            "kind=real64)"
+        )
     rendered = spelling.replace("e_", "e-").replace("E_", "E-").replace("_", "-")
     if any(character in spelling for character in ".eE"):
         rendered += "_real64"

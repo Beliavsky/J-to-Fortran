@@ -48,6 +48,7 @@ class LexerError(ValueError):
 _NUMBER_RE = re.compile(
     r"(?:"
     r"_?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE]_?\d+)?"
+    r"(?:j_?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE]_?\d+)?)?"
     r"|_\."
     r"|_"
     r")"

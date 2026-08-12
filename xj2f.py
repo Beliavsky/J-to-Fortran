@@ -1641,6 +1641,7 @@ def _lower_top_assignments(
         if type_info.atom_type not in {
             AtomType.INTEGER,
             AtomType.REAL,
+            AtomType.COMPLEX,
             AtomType.LOGICAL,
             AtomType.CHARACTER,
         } or type_info.rank not in {0, 1, 2, 3}:
@@ -1675,6 +1676,7 @@ def _main_entity_declaration(assignment: LoweredTopAssignment) -> tuple[str, str
     intrinsic = {
         AtomType.INTEGER: "integer",
         AtomType.REAL: "real(kind=real64)",
+        AtomType.COMPLEX: "complex(kind=real64)",
         AtomType.LOGICAL: "logical",
         AtomType.CHARACTER: "character(len=:)",
     }[assignment.type_info.atom_type]
@@ -1937,7 +1939,7 @@ def emit_fortran(program: Program, *, runtime: str = "embedded") -> str:
     if main_imports:
         lines.append(f"  use {module_name}, only: {', '.join(main_imports)}")
     if any(
-        assignment.type_info.atom_type is AtomType.REAL
+        assignment.type_info.atom_type in {AtomType.REAL, AtomType.COMPLEX}
         or "real64" in assignment.expression
         for assignment in top_assignments
     ):

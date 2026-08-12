@@ -161,6 +161,23 @@ def test_boxed_character_list_index_and_raze() -> None:
     assert required_runtime_helpers(razed, names) == {"raze_character"}
 
 
+def test_complex_literals_arithmetic_and_match() -> None:
+    literal = parse_expression("3j4")
+    addition = parse_expression("3j4 + 1j2")
+    matched = parse_expression("result -: expected")
+    complex_scalar = TypeInfo(AtomType.COMPLEX)
+    names = {"result": complex_scalar, "expected": complex_scalar}
+
+    assert infer_type(literal, {}) == complex_scalar
+    assert (
+        render_fortran_expression(literal, names={})
+        == "cmplx(3.0_real64, 4.0_real64, kind=real64)"
+    )
+    assert infer_type(addition, {}) == complex_scalar
+    assert infer_type(matched, names) == TypeInfo(AtomType.LOGICAL)
+    assert render_fortran_expression(matched, names=names) == "result == expected"
+
+
 @pytest.mark.parametrize(
     ("left", "right", "expected_type", "expected_fortran"),
     [

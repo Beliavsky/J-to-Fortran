@@ -105,6 +105,17 @@ ok =: result -: expected
     assert "result_j = b" in generated
 
 
+def test_complex_literals_emit_real64_complex_values() -> None:
+    source = "result =: 3j4 + 1j2\nexpected =: 4j6\nok =: result -: expected\n"
+    generated = xj2f.emit_fortran(
+        xj2f.parse_j_source(Path("complex_add.ijs"), source)
+    )
+
+    assert "use, intrinsic :: iso_fortran_env, only: real64" in generated
+    assert "complex(kind=real64) :: result_j, expected" in generated
+    assert "cmplx(3.0_real64, 4.0_real64, kind=real64)" in generated
+
+
 def test_float_match_emits_j_tolerance_helper() -> None:
     program = xj2f.parse_j_source(Path("float_match.ijs"), FLOAT_MATCH_TEST_PROGRAM)
     generated = xj2f.emit_fortran(program)
