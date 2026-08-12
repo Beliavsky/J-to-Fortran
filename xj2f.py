@@ -23,15 +23,21 @@ from pathlib import Path
 from typing import Sequence
 
 from j2fortran.ast import (
+    AdverbApplication,
     DyadicApply,
     Group,
     MonadicApply,
     Name,
     NamedVerb,
     PrimitiveVerb,
+    Verb,
     ast_to_dict,
 )
-from j2fortran.expression_parser import ExpressionParseError, parse_expression
+from j2fortran.expression_parser import (
+    ExpressionParseError,
+    parse_expression,
+    parse_verb,
+)
 from j2fortran.fortran_style import (
     combine_adjacent_row_extension_assignments,
     combine_declarations,
@@ -169,6 +175,13 @@ class VerbDefinition:
 
 
 @dataclasses.dataclass(frozen=True)
+class TacitVerbDefinition:
+    line: SourceLine
+    name: str
+    verb: Verb
+
+
+@dataclasses.dataclass(frozen=True)
 class EchoStatement:
     line: SourceLine
     expression: str
@@ -180,7 +193,7 @@ class ExitStatement:
     expression: str
 
 
-TopLevel = VerbDefinition | Assign | EchoStatement | ExitStatement
+TopLevel = VerbDefinition | TacitVerbDefinition | Assign | EchoStatement | ExitStatement
 
 
 @dataclasses.dataclass(frozen=True)
@@ -276,6 +289,16 @@ class Parser:
                 continue
             assignment = self._assignment.fullmatch(text)
             if assignment:
+                try:
+                    tacit_verb = parse_verb(assignment.group(3))
+                except (LexerError, ExpressionParseError, ValueError):
+                    tacit_verb = None
+                if isinstance(tacit_verb, AdverbApplication):
+                    items.append(
+                        TacitVerbDefinition(line, assignment.group(1), tacit_verb)
+                    )
+                    self.index += 1
+                    continue
                 items.append(
                     Assign(line, assignment.group(1), assignment.group(2), assignment.group(3))
                 )
@@ -869,14 +892,17 @@ class FunctionEmitter:
                 named_verbs=self.named_verbs,
             )
         )
-        if result_type.rank == 0 and result_type.atom_type in {
+        if result_type.atom_type in {
             AtomType.INTEGER,
             AtomType.REAL,
             AtomType.LOGICAL,
         }:
-            rendered = self._coerce_scalar_result(
-                result_type, rendered, statement.line, expression
-            )
+            if result_type.rank == 0:
+                rendered = self._coerce_scalar_result(
+                    result_type, rendered, statement.line, expression
+                )
+            else:
+                self._record_result_type(result_type, statement.line)
             self._write(f"j_result = {rendered}")
             self.returned = True
             return
@@ -1570,10 +1596,43 @@ def _definition_argument_types(
     return inferred
 
 
+def _explicit_definitions(program: Program) -> list[VerbDefinition]:
+    """Expand supported tacit definitions into the explicit internal form."""
+
+    definitions: list[VerbDefinition] = []
+    for item in program.items:
+        if isinstance(item, VerbDefinition):
+            definitions.append(item)
+            continue
+        if not isinstance(item, TacitVerbDefinition):
+            continue
+        if (
+            isinstance(item.verb, AdverbApplication)
+            and item.verb.adverb == "~"
+            and isinstance(item.verb.operand, PrimitiveVerb)
+        ):
+            spelling = item.verb.operand.spelling
+            definitions.append(
+                VerbDefinition(
+                    item.line,
+                    item.name,
+                    ("x", "y"),
+                    (ExpressionStatement(item.line, f"y {spelling} x"),),
+                )
+            )
+            continue
+        raise _error_at(
+            UnsupportedJError,
+            item.line,
+            f"tacit verb {item.name!r} is not supported yet",
+        )
+    return definitions
+
+
 def emit_fortran(program: Program, *, runtime: str = "embedded") -> str:
     if runtime not in {"embedded", "external"}:
         raise J2FError(f"unknown runtime mode {runtime!r}")
-    definitions = [item for item in program.items if isinstance(item, VerbDefinition)]
+    definitions = _explicit_definitions(program)
     if not definitions and not any(isinstance(item, Assign) for item in program.items):
         raise UnsupportedJError("no translatable definitions or assignments were found")
     module_name = _fortran_name(program.source_path.stem) + "_j_mod"
@@ -1820,11 +1879,19 @@ def expression_ast_report(program: Program) -> dict[str, object]:
     for item in program.items:
         if isinstance(item, VerbDefinition):
             verbs.append(
-                    {
-                        "name": item.name,
-                        "arguments": list(item.arguments),
-                        "line": item.line.number,
+                {
+                    "name": item.name,
+                    "arguments": list(item.arguments),
+                    "line": item.line.number,
                     "body": [statement_report(statement) for statement in item.body],
+                }
+            )
+        elif isinstance(item, TacitVerbDefinition):
+            verbs.append(
+                {
+                    "name": item.name,
+                    "line": item.line.number,
+                    "tacit": ast_to_dict(item.verb),
                 }
             )
     return {

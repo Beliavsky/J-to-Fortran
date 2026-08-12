@@ -72,6 +72,17 @@ class ExpressionParser:
             raise ExpressionParseError(f"unexpected token {token.value!r}", token)
         return expression
 
+    def parse_verb(self) -> Verb:
+        """Parse a complete verb phrase consisting of one possibly derived verb."""
+
+        if not self.tokens:
+            raise ValueError("cannot parse an empty J verb")
+        verb = self._verb()
+        if self.index != len(self.tokens):
+            token = self.tokens[self.index]
+            raise ExpressionParseError(f"unexpected token {token.value!r}", token)
+        return verb
+
     def _expression(self) -> Expression:
         if self._starts_verb():
             verb = self._verb()
@@ -234,3 +245,7 @@ class ExpressionParser:
 
 def parse_expression(source: str) -> Expression:
     return ExpressionParser(tokenize(source)).parse()
+
+
+def parse_verb(source: str) -> Verb:
+    return ExpressionParser(tokenize(source)).parse_verb()

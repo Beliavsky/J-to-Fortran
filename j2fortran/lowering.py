@@ -671,12 +671,13 @@ def infer_type(
             right_type = infer_type(
                 expression.right, names, name_transform, named_verbs=named_verbs
             )
-            if (
-                left_type != TypeInfo(AtomType.INTEGER)
-                or right_type != TypeInfo(AtomType.INTEGER)
+            if any(
+                type_info.atom_type is not AtomType.INTEGER
+                or type_info.rank not in {0, 1}
+                for type_info in (left_type, right_type)
             ):
                 raise LoweringError(
-                    "direct dyadic named-verb application currently requires integer scalars"
+                    "direct dyadic named-verb application currently requires integer scalar or vector arguments"
                 )
             if named_verbs is None:
                 raise LoweringError(

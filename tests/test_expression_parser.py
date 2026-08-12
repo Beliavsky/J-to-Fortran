@@ -16,13 +16,21 @@ from j2fortran.ast import (
     Strand,
     ast_to_dict,
 )
-from j2fortran.expression_parser import ExpressionParseError, parse_expression
+from j2fortran.expression_parser import ExpressionParseError, parse_expression, parse_verb
 
 
 def primitive(node: PrimitiveVerb | AdverbApplication | RankApplication) -> str:
     if isinstance(node, PrimitiveVerb):
         return node.spelling
     return primitive(node.operand)
+
+
+def test_parse_complete_reflex_verb_phrase() -> None:
+    verb = parse_verb("-~")
+
+    assert isinstance(verb, AdverbApplication)
+    assert verb.adverb == "~"
+    assert primitive(verb.operand) == "-"
 
 
 def test_ranked_named_verb_application() -> None:

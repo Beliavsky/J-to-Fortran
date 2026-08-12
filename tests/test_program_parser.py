@@ -156,6 +156,23 @@ ok =: result -: expected
     assert "j_result = sum(merge(1, 0, y > 0), dim=1)" in generated
 
 
+def test_tacit_reflex_verb_swaps_dyadic_arguments() -> None:
+    source = """from =: -~
+result =: 10 from 17 18 19
+expected =: 7 8 9
+ok =: result -: expected
+"""
+    program = xj2f.parse_j_source(Path("reflex.ijs"), source)
+    generated = xj2f.emit_fortran(program)
+    report = xj2f.expression_ast_report(program)
+
+    assert isinstance(program.items[0], xj2f.TacitVerbDefinition)
+    assert report["verbs"][0]["tacit"]["kind"] == "AdverbApplication"
+    assert "pure function from(x, y) result(j_result)" in generated
+    assert "integer, intent(in) :: x, y(:)" in generated
+    assert "j_result = y - x" in generated
+
+
 def test_dyadic_explicit_verb_has_x_and_y_arguments() -> None:
     source = "lincomb =: 4 : 0\n  x + 2 * y\n)\n"
     program = xj2f.parse_j_source(Path("lincomb.ijs"), source)
