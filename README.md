@@ -140,7 +140,7 @@ The parser currently recognizes:
 - zero-based character indexing;
 - transparent single homogeneous box/open pairs;
 - homogeneous boxed character lists, scalar indexing, and raze;
-- complex literals and arithmetic;
+- complex literals, arithmetic, negation, and square;
 - complex conjugate with monadic `+`, lowered to Fortran `conjg`;
 - complex magnitude lowered to the real-valued `abs` intrinsic;
 - complex sum and product reductions, including rank-1 matrix reductions;

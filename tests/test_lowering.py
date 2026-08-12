@@ -205,6 +205,20 @@ def test_monadic_plus_conjugates_complex_arrays() -> None:
     )
 
 
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    [("- values", "-values"), ("*: values", "values**2")],
+)
+def test_complex_negation_and_square_are_elemental(
+    source: str, expected: str
+) -> None:
+    expression = parse_expression(source)
+    values_type = TypeInfo(AtomType.COMPLEX, Shape.vector(2))
+
+    assert infer_type(expression, {"values": values_type}) == values_type
+    assert render_fortran_expression(expression, names={"values": values_type}) == expected
+
+
 def test_complex_magnitude_lowers_to_real_abs() -> None:
     expression = parse_expression("| 3j4")
 

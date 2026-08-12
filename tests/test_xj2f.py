@@ -28,9 +28,11 @@ COMPLEX_VECTOR_TEST_PROGRAM = """result =: 1j2 3j4 + 2j_1 4j_2
 expected =: 3j1 7j2
 conjugated =: + result
 conjugated_expected =: 3j_1 7j_2
+negated =: - result
+squared =: *: result
 total =: +/ conjugated
 combined =: */ conjugated
-ok =: (conjugated -: conjugated_expected) *. (total -: 10j_3) *. combined -: 19j_13
+ok =: (conjugated -: conjugated_expected) *. (negated -: _3j_1 _7j_2) *. (squared -: 8j6 45j28) *. (total -: 10j_3) *. combined -: 19j_13
 """
 
 
@@ -133,6 +135,8 @@ def test_complex_vector_arithmetic_emits_complex_arrays() -> None:
 
     assert "complex(kind=real64), allocatable :: result_j(:), expected(:)" in generated
     assert "conjugated = conjg(result_j)" in generated
+    assert "negated = -result_j" in generated
+    assert "squared = result_j**2" in generated
     assert "total = sum(conjugated, dim=1)" in generated
     assert "combined = product(conjugated, dim=1)" in generated
     assert "ok = all(conjugated == conjugated_expected) .and. " in generated

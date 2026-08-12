@@ -666,7 +666,15 @@ def infer_type(
             }:
                 raise LoweringError("conjugate requires a numeric operand")
             return operand_type
-        if spelling in {"-", "*:", "<:", ">:"}:
+        if spelling in {"-", "*:"}:
+            if operand_type.atom_type not in {
+                AtomType.INTEGER,
+                AtomType.REAL,
+                AtomType.COMPLEX,
+            }:
+                raise LoweringError(f"monadic {spelling!r} requires a numeric operand")
+            return operand_type
+        if spelling in {"<:", ">:"}:
             if operand_type.atom_type not in {AtomType.INTEGER, AtomType.REAL}:
                 raise LoweringError(f"monadic {spelling!r} requires a numeric operand")
             return operand_type
