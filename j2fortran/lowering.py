@@ -409,6 +409,13 @@ def infer_type(
                 expression.operand, names, name_transform, named_verbs=named_verbs
             )
             reduction = primitive_spelling(expression.verb.operand)
+            if expression.verb.adverb == "~" and reduction in {"/:", "\\:"}:
+                if (
+                    operand_type.atom_type is not AtomType.INTEGER
+                    or operand_type.rank != 1
+                ):
+                    raise LoweringError("sort currently requires an integer vector")
+                return operand_type
             if expression.verb.adverb == "/" and reduction == "+.":
                 if operand_type.atom_type is not AtomType.LOGICAL:
                     raise LoweringError("Boolean OR reduction requires a logical operand")
@@ -465,6 +472,13 @@ def infer_type(
             except ShapeMismatchError as exc:
                 raise LoweringError(str(exc)) from exc
             return TypeInfo(operand_type.atom_type, transposed_shape)
+        if spelling == "/:":
+            if (
+                operand_type.atom_type is not AtomType.INTEGER
+                or operand_type.rank != 1
+            ):
+                raise LoweringError("grade up currently requires an integer vector")
+            return TypeInfo(AtomType.INTEGER, operand_type.shape)
         if spelling in {"+", "-", "*:"}:
             return operand_type
         if spelling == "|":
@@ -799,6 +813,16 @@ def _render_fortran_expression(
             )
         if isinstance(expression.verb, AdverbApplication):
             reduction = primitive_spelling(expression.verb.operand)
+            if expression.verb.adverb == "~" and reduction in {"/:", "\\:"}:
+                operand, _, _ = _render_fortran_expression(
+                    expression.operand, name_transform
+                )
+                descending = ".true." if reduction == "\\:" else ".false."
+                return (
+                    f"j_sort_int_vector({operand}, {descending})",
+                    _ATOM_PRECEDENCE,
+                    "call",
+                )
             if expression.verb.adverb == "/" and reduction == "+.":
                 operand, _, _ = _render_fortran_expression(
                     expression.operand, name_transform
@@ -865,6 +889,8 @@ def _render_fortran_expression(
             return f"j_reverse_int_vector({operand})", _ATOM_PRECEDENCE, "call"
         if spelling == "|:":
             return f"transpose({operand})", _ATOM_PRECEDENCE, "call"
+        if spelling == "/:":
+            return f"j_grade_up_int({operand})", _ATOM_PRECEDENCE, "call"
         raise LoweringError(f"monadic verb {spelling!r} needs a dedicated lowering rule")
     if isinstance(expression, DyadicApply):
         spelling = primitive_spelling(expression.verb)
@@ -1137,6 +1163,10 @@ def required_runtime_helpers(
     helpers: set[str] = set()
     if isinstance(expression, MonadicApply):
         spelling = primitive_spelling(expression.verb)
+        if isinstance(expression.verb, AdverbApplication):
+            operand_spelling = primitive_spelling(expression.verb.operand)
+            if expression.verb.adverb == "~" and operand_spelling in {"/:", "\\:"}:
+                helpers.add("sort_int_vector")
         if spelling == "i.":
             helpers.add("iota")
         if spelling == "!":
@@ -1145,6 +1175,8 @@ def required_runtime_helpers(
             helpers.add("signum_int")
         if spelling == "|.":
             helpers.add("reverse_int_vector")
+        if spelling == "/:":
+            helpers.add("grade_up_int")
         helpers.update(
             required_runtime_helpers(
                 expression.operand,

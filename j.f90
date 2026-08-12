@@ -3,10 +3,55 @@ module j2f_runtime
   implicit none
   private
   public :: j_append_int_row, j_binomial, j_cartesian_square, j_compress_hcat
-  public :: j_copy_int_vector, j_factorial, j_iota, j_match_real
-  public :: j_reverse_int_vector, j_signum_int
+  public :: j_copy_int_vector, j_factorial, j_grade_up_int, j_iota, j_match_real
+  public :: j_reverse_int_vector, j_signum_int, j_sort_int_vector
 
 contains
+
+pure function j_grade_up_int(values) result(indices)
+  integer, intent(in) :: values(:)
+  integer, allocatable :: indices(:)
+  integer :: current_index, position, scan_position
+
+  allocate(indices(size(values)))
+  do position = 1, size(values)
+    indices(position) = position - 1
+  end do
+  do position = 2, size(values)
+    current_index = indices(position)
+    scan_position = position - 1
+    do while (scan_position >= 1)
+      if (values(indices(scan_position) + 1) <= &
+          values(current_index + 1)) exit
+      indices(scan_position + 1) = indices(scan_position)
+      scan_position = scan_position - 1
+    end do
+    indices(scan_position + 1) = current_index
+  end do
+end function j_grade_up_int
+
+pure function j_sort_int_vector(values, descending) result(sorted_values)
+  integer, intent(in) :: values(:)
+  logical, intent(in) :: descending
+  integer, allocatable :: sorted_values(:)
+  integer :: current_value, position, scan_position
+
+  sorted_values = values
+  do position = 2, size(sorted_values)
+    current_value = sorted_values(position)
+    scan_position = position - 1
+    do while (scan_position >= 1)
+      if (descending) then
+        if (sorted_values(scan_position) >= current_value) exit
+      else
+        if (sorted_values(scan_position) <= current_value) exit
+      end if
+      sorted_values(scan_position + 1) = sorted_values(scan_position)
+      scan_position = scan_position - 1
+    end do
+    sorted_values(scan_position + 1) = current_value
+  end do
+end function j_sort_int_vector
 
 pure function j_reverse_int_vector(values) result(reversed_values)
   integer, intent(in) :: values(:)

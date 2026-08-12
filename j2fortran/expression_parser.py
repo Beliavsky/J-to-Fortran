@@ -31,7 +31,7 @@ class ExpressionParseError(ValueError):
         self.token = token
 
 
-_ADVERBS = {"/", "/.", "\\", "\\."}
+_ADVERBS = {"/", "/.", "\\", "\\.", "~"}
 
 
 def _token_span(token: Token) -> SourceSpan:

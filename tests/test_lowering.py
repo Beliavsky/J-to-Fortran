@@ -361,6 +361,30 @@ def test_transpose_rejects_an_unsupported_rank() -> None:
         infer_type(expression, names)
 
 
+def test_integer_grade_up_returns_zero_based_indices() -> None:
+    expression = parse_expression("/: a")
+    names = {"a": TypeInfo(AtomType.INTEGER, Shape.vector(3))}
+
+    assert infer_type(expression, names) == names["a"]
+    assert render_fortran_expression(expression, names=names) == "j_grade_up_int(a)"
+    assert required_runtime_helpers(expression, names) == {"grade_up_int"}
+
+
+@pytest.mark.parametrize(
+    ("source", "descending"),
+    [("/:~ a", ".false."), ("\\:~ a", ".true.")],
+)
+def test_integer_sort_uses_direction_flag(source: str, descending: str) -> None:
+    expression = parse_expression(source)
+    names = {"a": TypeInfo(AtomType.INTEGER, Shape.vector(4))}
+
+    assert infer_type(expression, names) == names["a"]
+    assert render_fortran_expression(expression, names=names) == (
+        f"j_sort_int_vector(a, {descending})"
+    )
+    assert required_runtime_helpers(expression, names) == {"sort_int_vector"}
+
+
 def test_constant_reshape_preserves_j_axis_order_and_cyclic_fill() -> None:
     matrix = parse_expression("2 3 $ i. 6")
     cyclic = parse_expression("2 3 $ 1 2")

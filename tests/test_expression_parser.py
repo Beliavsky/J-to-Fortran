@@ -104,6 +104,16 @@ def test_insert_adverb_can_then_receive_rank() -> None:
     assert primitive(expression.verb) == "+"
 
 
+@pytest.mark.parametrize("source", ["/:~ 3 1 2", "\\:~ 3 1 2"])
+def test_reflex_derives_a_sort_verb(source: str) -> None:
+    expression = parse_expression(source)
+
+    assert isinstance(expression, MonadicApply)
+    assert isinstance(expression.verb, AdverbApplication)
+    assert expression.verb.adverb == "~"
+    assert primitive(expression.verb) in {"/:", "\\:"}
+
+
 def test_compression_and_laminate_follow_right_to_left_order() -> None:
     expression = parse_expression("keep # ab ,. c")
 

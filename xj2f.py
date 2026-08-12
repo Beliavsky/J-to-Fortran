@@ -67,9 +67,11 @@ RUNTIME_PROCEDURES = {
     "copy_int_vector": "j_copy_int_vector",
     "iota": "j_iota",
     "factorial": "j_factorial",
+    "grade_up_int": "j_grade_up_int",
     "match_real": "j_match_real",
     "reverse_int_vector": "j_reverse_int_vector",
     "signum_int": "j_signum_int",
+    "sort_int_vector": "j_sort_int_vector",
 }
 
 
@@ -749,6 +751,61 @@ class FunctionEmitter:
 
 def _runtime_helpers(helpers: set[str]) -> list[str]:
     result: list[str] = []
+    if "grade_up_int" in helpers:
+        result.extend(
+            [
+                "pure function j_grade_up_int(values) result(indices)",
+                "  integer, intent(in) :: values(:)",
+                "  integer, allocatable :: indices(:)",
+                "  integer :: current_index, position, scan_position",
+                "",
+                "  allocate(indices(size(values)))",
+                "  do position = 1, size(values)",
+                "    indices(position) = position - 1",
+                "  end do",
+                "  do position = 2, size(values)",
+                "    current_index = indices(position)",
+                "    scan_position = position - 1",
+                "    do while (scan_position >= 1)",
+                "      if (values(indices(scan_position) + 1) <= &",
+                "          values(current_index + 1)) exit",
+                "      indices(scan_position + 1) = indices(scan_position)",
+                "      scan_position = scan_position - 1",
+                "    end do",
+                "    indices(scan_position + 1) = current_index",
+                "  end do",
+                "end function j_grade_up_int",
+                "",
+            ]
+        )
+    if "sort_int_vector" in helpers:
+        result.extend(
+            [
+                "pure function j_sort_int_vector(values, descending) result(sorted_values)",
+                "  integer, intent(in) :: values(:)",
+                "  logical, intent(in) :: descending",
+                "  integer, allocatable :: sorted_values(:)",
+                "  integer :: current_value, position, scan_position",
+                "",
+                "  sorted_values = values",
+                "  do position = 2, size(sorted_values)",
+                "    current_value = sorted_values(position)",
+                "    scan_position = position - 1",
+                "    do while (scan_position >= 1)",
+                "      if (descending) then",
+                "        if (sorted_values(scan_position) >= current_value) exit",
+                "      else",
+                "        if (sorted_values(scan_position) <= current_value) exit",
+                "      end if",
+                "      sorted_values(scan_position + 1) = sorted_values(scan_position)",
+                "      scan_position = scan_position - 1",
+                "    end do",
+                "    sorted_values(scan_position + 1) = current_value",
+                "  end do",
+                "end function j_sort_int_vector",
+                "",
+            ]
+        )
     if "reverse_int_vector" in helpers:
         result.extend(
             [
