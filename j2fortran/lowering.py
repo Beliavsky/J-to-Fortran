@@ -438,6 +438,8 @@ def infer_type(
     if isinstance(expression, NumberLiteral):
         if "j" in expression.text:
             atom_type = AtomType.COMPLEX
+        elif "r" in expression.text:
+            atom_type = AtomType.REAL
         elif any(c in expression.text for c in ".eE"):
             atom_type = AtomType.REAL
         else:
@@ -1145,6 +1147,13 @@ _NOT_PRECEDENCE = 25
 def _fortran_number(spelling: str) -> str:
     if spelling in {"_", "_."}:
         raise LoweringError(f"special J number {spelling!r} is not supported")
+    if "r" in spelling:
+        numerator, denominator = spelling.split("r", 1)
+        numerator = numerator.replace("_", "-")
+        denominator = denominator.replace("_", "-")
+        if denominator in {"0", "-0"}:
+            raise LoweringError("rational literal denominator must not be zero")
+        return f"real({numerator}, kind=real64) / {denominator}"
     if "j" in spelling:
         real_part, imaginary_part = spelling.split("j", 1)
 

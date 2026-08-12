@@ -188,6 +188,23 @@ def test_complex_magnitude_lowers_to_real_abs() -> None:
     )
 
 
+def test_rational_literals_lower_to_real64_quotients() -> None:
+    expression = parse_expression("1r3 + 1r6")
+
+    assert infer_type(expression, {}) == TypeInfo(AtomType.REAL)
+    assert (
+        render_fortran_expression(expression, names={})
+        == "real(1, kind=real64) / 3 + real(1, kind=real64) / 6"
+    )
+
+
+def test_zero_rational_denominator_is_rejected() -> None:
+    expression = parse_expression("1r0")
+
+    with pytest.raises(LoweringError, match="denominator must not be zero"):
+        render_fortran_expression(expression, names={})
+
+
 @pytest.mark.parametrize(
     ("left", "right", "expected_type", "expected_fortran"),
     [

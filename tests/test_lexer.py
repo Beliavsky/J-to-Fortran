@@ -61,7 +61,21 @@ def test_comments_end_at_newline_and_strings_can_contain_nb() -> None:
 
 @pytest.mark.parametrize(
     "literal",
-    ["0", "42", "_3", "2.5", ".25", "1e3", "1e_3", "3j4", "_2j_5", "_", "_."],
+    [
+        "0",
+        "42",
+        "_3",
+        "2.5",
+        ".25",
+        "1e3",
+        "1e_3",
+        "3j4",
+        "_2j_5",
+        "1r3",
+        "_2r5",
+        "_",
+        "_.",
+    ],
 )
 def test_numeric_atoms(literal: str) -> None:
     token = tokenize(literal)[0]
