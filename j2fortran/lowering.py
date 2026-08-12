@@ -432,6 +432,21 @@ def infer_type(
         operand_type = infer_type(
             expression.operand, names, name_transform, named_verbs=named_verbs
         )
+        if isinstance(expression.verb, NamedVerb):
+            if named_verbs is None:
+                raise LoweringError(
+                    f"type of verb {expression.verb.identifier!r} is unknown"
+                )
+            if operand_type != TypeInfo(AtomType.INTEGER):
+                raise LoweringError(
+                    "direct named-verb application currently requires an integer scalar"
+                )
+            try:
+                return named_verbs[name_transform(expression.verb.identifier)]
+            except KeyError as exc:
+                raise LoweringError(
+                    f"type of verb {expression.verb.identifier!r} is unknown"
+                ) from exc
         reflex_table = reflex_table_spelling(expression.verb)
         if reflex_table == "+":
             if (
@@ -986,6 +1001,15 @@ def _render_fortran_expression(
         escaped = expression.value.replace("'", "''")
         return f"'{escaped}'", _ATOM_PRECEDENCE, None
     if isinstance(expression, MonadicApply):
+        if isinstance(expression.verb, NamedVerb):
+            operand, _, _ = _render_fortran_expression(
+                expression.operand, name_transform
+            )
+            return (
+                f"{name_transform(expression.verb.identifier)}({operand})",
+                _ATOM_PRECEDENCE,
+                "call",
+            )
         reflex_table = reflex_table_spelling(expression.verb)
         if reflex_table == "+":
             operand, _, _ = _render_fortran_expression(

@@ -37,6 +37,23 @@ def test_ranked_named_verb_application() -> None:
     assert application.verb.operand.identifier == "isprime"
 
 
+def test_direct_named_monadic_verb_application() -> None:
+    expression = parse_expression("square 7")
+
+    assert isinstance(expression, MonadicApply)
+    assert isinstance(expression.verb, NamedVerb)
+    assert expression.verb.identifier == "square"
+    assert isinstance(expression.operand, NumberLiteral)
+
+
+def test_amendment_replacement_name_remains_a_noun() -> None:
+    expression = parse_expression("new ((<1 2 ; 0 3)}) a")
+
+    assert isinstance(expression, DyadicApply)
+    assert isinstance(expression.left, Name)
+    assert isinstance(expression.verb, AmendVerb)
+
+
 def test_noun_derived_amend_verb_preserves_its_selector() -> None:
     expression = parse_expression("99 ((<1 2 ; 0 3)}) a")
 

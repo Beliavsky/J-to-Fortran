@@ -85,6 +85,18 @@ def test_rank_zero_named_verb_and_integer_copy_lowering() -> None:
     ) == set()
 
 
+def test_direct_named_monadic_verb_lowers_to_a_function_call() -> None:
+    expression = parse_expression("square 7")
+    verbs = {"square": TypeInfo(AtomType.INTEGER)}
+
+    assert infer_type(expression, {}, named_verbs=verbs) == TypeInfo(
+        AtomType.INTEGER
+    )
+    assert render_fortran_expression(
+        expression, names={}, named_verbs=verbs
+    ) == "square(7)"
+
+
 def test_general_integer_copy_keeps_runtime_helper() -> None:
     expression = parse_expression("counts # nums")
     names = {

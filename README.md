@@ -122,6 +122,7 @@ The parser currently recognizes:
   rank-1 column selection, square root, floor, laminate, and compression;
 - scalar integer, real, and logical verb results, including results selected by
   total `if.`/`elseif.`/`else.` control flow;
+- direct calls to scalar monadic explicit verbs and scalar local assignments;
 - mixed Boolean expressions and integer literal `0`/`1` branches, inferred as
   logical results and emitted with `.false.`/`.true.` literals;
 - rank-0 application of a translated scalar verb to an integer vector;

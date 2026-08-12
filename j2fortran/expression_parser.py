@@ -175,12 +175,22 @@ class ExpressionParser:
             return True
         if token.kind is TokenKind.PRIMITIVE:
             return token.value not in _ADVERBS | {'"'}
-        return (
-            token.kind is TokenKind.NAME
-            and self.index + 1 < len(self.tokens)
-            and self.tokens[self.index + 1].kind is TokenKind.PRIMITIVE
-            and self.tokens[self.index + 1].value == '"'
-        )
+        if token.kind is not TokenKind.NAME or self.index + 1 >= len(self.tokens):
+            return False
+        following = self.tokens[self.index + 1]
+        if following.kind is TokenKind.PRIMITIVE and following.value == '"':
+            return True
+        if (
+            following.kind is TokenKind.LPAREN
+            and self._amend_verb_end(self.index + 1) is not None
+        ):
+            return False
+        return following.kind in {
+            TokenKind.NAME,
+            TokenKind.NUMBER,
+            TokenKind.STRING,
+            TokenKind.LPAREN,
+        }
 
     def _amend_verb_end(self, start: int) -> tuple[int, int] | None:
         if start >= len(self.tokens) or self.tokens[start].kind is not TokenKind.LPAREN:
