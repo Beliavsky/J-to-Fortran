@@ -78,7 +78,21 @@ class RankApplication:
     span: SourceSpan
 
 
-Verb: TypeAlias = AmendVerb | NamedVerb | PrimitiveVerb | AdverbApplication | RankApplication
+@dataclass(frozen=True, slots=True)
+class BondVerb:
+    noun: Expression
+    operand: Verb
+    span: SourceSpan
+
+
+Verb: TypeAlias = (
+    AmendVerb
+    | NamedVerb
+    | PrimitiveVerb
+    | AdverbApplication
+    | RankApplication
+    | BondVerb
+)
 
 
 @dataclass(frozen=True, slots=True)

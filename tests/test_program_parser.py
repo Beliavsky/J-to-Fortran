@@ -173,6 +173,26 @@ ok =: result -: expected
     assert "j_result = y - x" in generated
 
 
+@pytest.mark.parametrize(
+    ("definition", "expected_expression"),
+    [("double =: 2 & *", "2 * y"), ("add10 =: 10 & +", "10 + y")],
+)
+def test_tacit_noun_bond_becomes_a_monadic_verb(
+    definition: str, expected_expression: str
+) -> None:
+    source = f"""{definition}
+result =: {definition.split()[0]} 1 2 3 4
+expected =: 1 2 3 4
+ok =: result -: expected
+"""
+    program = xj2f.parse_j_source(Path("bond.ijs"), source)
+    generated = xj2f.emit_fortran(program)
+
+    assert isinstance(program.items[0], xj2f.TacitVerbDefinition)
+    assert "integer, intent(in) :: y(:)" in generated
+    assert f"j_result = {expected_expression}" in generated
+
+
 def test_dyadic_explicit_verb_has_x_and_y_arguments() -> None:
     source = "lincomb =: 4 : 0\n  x + 2 * y\n)\n"
     program = xj2f.parse_j_source(Path("lincomb.ijs"), source)

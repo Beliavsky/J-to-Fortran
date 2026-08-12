@@ -24,11 +24,13 @@ from typing import Sequence
 
 from j2fortran.ast import (
     AdverbApplication,
+    BondVerb,
     DyadicApply,
     Group,
     MonadicApply,
     Name,
     NamedVerb,
+    NumberLiteral,
     PrimitiveVerb,
     Verb,
     ast_to_dict,
@@ -293,7 +295,7 @@ class Parser:
                     tacit_verb = parse_verb(assignment.group(3))
                 except (LexerError, ExpressionParseError, ValueError):
                     tacit_verb = None
-                if isinstance(tacit_verb, AdverbApplication):
+                if isinstance(tacit_verb, (AdverbApplication, BondVerb)):
                     items.append(
                         TacitVerbDefinition(line, assignment.group(1), tacit_verb)
                     )
@@ -1618,6 +1620,23 @@ def _explicit_definitions(program: Program) -> list[VerbDefinition]:
                     item.name,
                     ("x", "y"),
                     (ExpressionStatement(item.line, f"y {spelling} x"),),
+                )
+            )
+            continue
+        if (
+            isinstance(item.verb, BondVerb)
+            and isinstance(item.verb.noun, NumberLiteral)
+            and integer_value(item.verb.noun) is not None
+            and isinstance(item.verb.operand, PrimitiveVerb)
+        ):
+            noun = item.verb.noun.text
+            spelling = item.verb.operand.spelling
+            definitions.append(
+                VerbDefinition(
+                    item.line,
+                    item.name,
+                    ("y",),
+                    (ExpressionStatement(item.line, f"{noun} {spelling} y"),),
                 )
             )
             continue

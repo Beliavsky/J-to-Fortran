@@ -7,6 +7,7 @@ from collections.abc import Sequence
 from .ast import (
     AdverbApplication,
     AmendVerb,
+    BondVerb,
     DyadicApply,
     Expression,
     Group,
@@ -77,7 +78,20 @@ class ExpressionParser:
 
         if not self.tokens:
             raise ValueError("cannot parse an empty J verb")
-        verb = self._verb()
+        if self._peek().kind is TokenKind.NUMBER:
+            noun = self._noun()
+            if (
+                self.index >= len(self.tokens)
+                or self._peek().kind is not TokenKind.PRIMITIVE
+                or self._peek().value != "&"
+            ):
+                token = self.tokens[min(self.index, len(self.tokens) - 1)]
+                raise ExpressionParseError("expected bond conjunction '&'", token)
+            self._take()
+            operand = self._verb()
+            verb: Verb = BondVerb(noun, operand, _cover(noun.span, operand.span))
+        else:
+            verb = self._verb()
         if self.index != len(self.tokens):
             token = self.tokens[self.index]
             raise ExpressionParseError(f"unexpected token {token.value!r}", token)
@@ -240,6 +254,8 @@ class ExpressionParser:
             return "}"
         if isinstance(verb, AdverbApplication):
             return ExpressionParser._verb_name(verb.operand) + verb.adverb
+        if isinstance(verb, BondVerb):
+            return "&" + ExpressionParser._verb_name(verb.operand)
         return ExpressionParser._verb_name(verb.operand) + '"' + verb.rank.text
 
 

@@ -5,6 +5,7 @@ import pytest
 from j2fortran.ast import (
     AdverbApplication,
     AmendVerb,
+    BondVerb,
     DyadicApply,
     Group,
     MonadicApply,
@@ -31,6 +32,15 @@ def test_parse_complete_reflex_verb_phrase() -> None:
     assert isinstance(verb, AdverbApplication)
     assert verb.adverb == "~"
     assert primitive(verb.operand) == "-"
+
+
+def test_parse_noun_bond_verb_phrase() -> None:
+    verb = parse_verb("10 & +")
+
+    assert isinstance(verb, BondVerb)
+    assert isinstance(verb.noun, NumberLiteral)
+    assert verb.noun.text == "10"
+    assert primitive(verb.operand) == "+"
 
 
 def test_ranked_named_verb_application() -> None:
