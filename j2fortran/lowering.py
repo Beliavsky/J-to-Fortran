@@ -1048,6 +1048,16 @@ def infer_type(
                     "base encode currently requires an integer base vector and integer scalar value"
                 )
             return TypeInfo(AtomType.INTEGER, left_type.shape)
+        if spelling == "p.":
+            if (
+                left_type.atom_type is not AtomType.INTEGER
+                or left_type.rank != 1
+                or right_type != TypeInfo(AtomType.INTEGER)
+            ):
+                raise LoweringError(
+                    "polynomial evaluation currently requires integer coefficients and an integer scalar argument"
+                )
+            return TypeInfo(AtomType.INTEGER)
         try:
             shape = agree_shapes(left_type.shape, right_type.shape)
         except ShapeMismatchError as exc:
@@ -1598,6 +1608,16 @@ def render_fortran_expression(
             encoded[1], name_transform, names=names, named_verbs=named_verbs
         )
         return f"j_encode_int({bases}, {value})"
+    polynomial = dyad(bare_expression, "p.")
+    if polynomial is not None and names is not None:
+        infer_type(bare_expression, names, name_transform, named_verbs=named_verbs)
+        coefficients = render_fortran_expression(
+            polynomial[0], name_transform, names=names, named_verbs=named_verbs
+        )
+        argument = render_fortran_expression(
+            polynomial[1], name_transform, names=names, named_verbs=named_verbs
+        )
+        return f"j_polynomial_int({coefficients}, {argument})"
     if isinstance(bare_expression, MonadicApply) and names is not None:
         operand_type = infer_type(
             bare_expression.operand,
@@ -2030,6 +2050,8 @@ def required_runtime_helpers(
             helpers.add("decode_int")
         if primitive_spelling(expression.verb) == "#:":
             helpers.add("encode_int")
+        if primitive_spelling(expression.verb) == "p.":
+            helpers.add("polynomial_int")
         if primitive_spelling(expression.verb) == "%." and names is not None:
             left_type = infer_type(
                 expression.left,

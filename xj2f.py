@@ -99,6 +99,7 @@ RUNTIME_PROCEDURES = {
     "prefix_product_int": "j_prefix_product_int",
     "prefix_sum_int": "j_prefix_sum_int",
     "power_table_int": "j_power_table_int",
+    "polynomial_int": "j_polynomial_int",
     "raze_character": "j_raze_character",
     "reverse_character": "j_reverse_character",
     "reverse_int_vector": "j_reverse_int_vector",
@@ -1079,6 +1080,22 @@ def _runtime_helpers(helpers: set[str]) -> list[str]:
                 "    remaining = remaining / bases(base_index)",
                 "  end do",
                 "end function j_encode_int",
+                "",
+            ]
+        )
+    if "polynomial_int" in helpers:
+        result.extend(
+            [
+                "pure function j_polynomial_int(coefficients, argument) result(value)",
+                "  integer, intent(in) :: coefficients(:), argument",
+                "  integer :: value",
+                "  integer :: coefficient_index",
+                "",
+                "  value = 0",
+                "  do coefficient_index = size(coefficients), 1, -1",
+                "    value = coefficients(coefficient_index) + argument * value",
+                "  end do",
+                "end function j_polynomial_int",
                 "",
             ]
         )

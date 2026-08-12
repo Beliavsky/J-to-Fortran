@@ -232,6 +232,17 @@ def test_base_decode_and_encode_use_integer_helpers(
     assert required_runtime_helpers(expression, {}) == {helper}
 
 
+def test_integer_polynomial_primitive_uses_horner_helper() -> None:
+    expression = parse_expression("5 4 _3 2 p. 3")
+
+    assert infer_type(expression, {}) == TypeInfo(AtomType.INTEGER)
+    assert (
+        render_fortran_expression(expression, names={})
+        == "j_polynomial_int([5, 4, -3, 2], 3)"
+    )
+    assert required_runtime_helpers(expression, {}) == {"polynomial_int"}
+
+
 @pytest.mark.parametrize(
     ("left", "right", "expected_type", "expected_fortran"),
     [

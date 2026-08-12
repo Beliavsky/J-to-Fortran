@@ -9,6 +9,7 @@ module j2f_runtime
   public :: j_infix_subtract_int, j_infix_sum_int, j_iota, j_match_real
   public :: j_membership_int, j_multiplication_table_int, j_nub_int
   public :: j_power_table_int, j_prefix_product_int, j_prefix_sum_int
+  public :: j_polynomial_int
   public :: j_reverse_int_vector, j_signum_int, j_sort_int_vector
   public :: j_reverse_character
   public :: j_raze_character
@@ -44,6 +45,17 @@ pure function j_encode_int(bases, value) result(digits)
     remaining = remaining / bases(base_index)
   end do
 end function j_encode_int
+
+pure function j_polynomial_int(coefficients, argument) result(value)
+  integer, intent(in) :: coefficients(:), argument
+  integer :: value
+  integer :: coefficient_index
+
+  value = 0
+  do coefficient_index = size(coefficients), 1, -1
+    value = coefficients(coefficient_index) + argument * value
+  end do
+end function j_polynomial_int
 
 pure function j_addition_table_int(values) result(table_values)
   integer, intent(in) :: values(:)
