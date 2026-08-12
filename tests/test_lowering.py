@@ -129,6 +129,35 @@ def test_two_by_two_determinant_lowers_to_direct_expression() -> None:
     )
 
 
+@pytest.mark.parametrize(
+    ("dividend", "expected_type", "helper"),
+    [
+        (
+            TypeInfo(AtomType.INTEGER, Shape.vector(2)),
+            TypeInfo(AtomType.REAL, Shape.vector(2)),
+            "j_solve_2x2_vector_int",
+        ),
+        (
+            TypeInfo(AtomType.INTEGER, Shape.matrix(2, 2)),
+            TypeInfo(AtomType.REAL, Shape.matrix(2, 2)),
+            "j_solve_2x2_matrix_int",
+        ),
+    ],
+)
+def test_two_by_two_matrix_division_uses_runtime_solver(
+    dividend: TypeInfo, expected_type: TypeInfo, helper: str
+) -> None:
+    expression = parse_expression("b %. a")
+    names = {
+        "a": TypeInfo(AtomType.INTEGER, Shape.matrix(2, 2)),
+        "b": dividend,
+    }
+
+    assert infer_type(expression, names) == expected_type
+    assert render_fortran_expression(expression, names=names) == f"{helper}(b, a)"
+    assert required_runtime_helpers(expression, names) == {helper.removeprefix("j_")}
+
+
 def test_prime_expression_primitives_lower_generically() -> None:
     names = {
         "limit": TypeInfo(AtomType.INTEGER),

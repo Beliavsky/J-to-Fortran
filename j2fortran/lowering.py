@@ -956,6 +956,26 @@ def infer_type(
                     "match requires compatible numeric or logical arrays"
                 )
             return TypeInfo(AtomType.LOGICAL)
+        if spelling == "%.":
+            if (
+                left_type.atom_type is not AtomType.INTEGER
+                or right_type.atom_type is not AtomType.INTEGER
+            ):
+                raise LoweringError(
+                    "2 by 2 matrix division currently requires integer arguments"
+                )
+            if right_type.shape != Shape.matrix(2, 2):
+                raise LoweringError(
+                    "matrix division currently requires a statically known 2 by 2 divisor"
+                )
+            valid_left = left_type.shape == Shape.vector(2) or (
+                left_type.rank == 2 and left_type.shape.extents[0] == 2
+            )
+            if not valid_left:
+                raise LoweringError(
+                    "2 by 2 matrix division requires a length-2 vector or two-row matrix dividend"
+                )
+            return TypeInfo(AtomType.REAL, left_type.shape)
         try:
             shape = agree_shapes(left_type.shape, right_type.shape)
         except ShapeMismatchError as exc:
@@ -1443,6 +1463,32 @@ def render_fortran_expression(
             "amendment currently requires a top-level assignment context"
         )
     bare_expression = ungroup(expression)
+    matrix_division = dyad(bare_expression, "%.")
+    if matrix_division is not None and names is not None:
+        result_type = infer_type(
+            bare_expression,
+            names,
+            name_transform,
+            named_verbs=named_verbs,
+        )
+        dividend = render_fortran_expression(
+            matrix_division[0],
+            name_transform,
+            names=names,
+            named_verbs=named_verbs,
+        )
+        divisor = render_fortran_expression(
+            matrix_division[1],
+            name_transform,
+            names=names,
+            named_verbs=named_verbs,
+        )
+        helper = (
+            "j_solve_2x2_vector_int"
+            if result_type.rank == 1
+            else "j_solve_2x2_matrix_int"
+        )
+        return f"{helper}({dividend}, {divisor})"
     if (
         isinstance(bare_expression, MonadicApply)
         and is_determinant(bare_expression.verb)
@@ -1729,6 +1775,15 @@ def required_runtime_helpers(
             helpers.add("index_of_int")
         if primitive_spelling(expression.verb) == "!":
             helpers.add("binomial")
+        if primitive_spelling(expression.verb) == "%." and names is not None:
+            left_type = infer_type(
+                expression.left,
+                names,
+                name_transform,
+                named_verbs=named_verbs,
+            )
+            helper = "solve_2x2_vector_int" if left_type.rank == 1 else "solve_2x2_matrix_int"
+            helpers.add(helper)
         if primitive_spelling(expression.verb) == "-:" and names is not None:
             left_type = infer_type(
                 expression.left,

@@ -99,6 +99,8 @@ RUNTIME_PROCEDURES = {
     "power_table_int": "j_power_table_int",
     "reverse_int_vector": "j_reverse_int_vector",
     "signum_int": "j_signum_int",
+    "solve_2x2_matrix_int": "j_solve_2x2_matrix_int",
+    "solve_2x2_vector_int": "j_solve_2x2_vector_int",
     "sort_int_vector": "j_sort_int_vector",
 }
 
@@ -1323,6 +1325,48 @@ def _runtime_helpers(helpers: set[str]) -> list[str]:
                 "    value = 0",
                 "  end if",
                 "end function j_signum_int",
+                "",
+            ]
+        )
+    if "solve_2x2_vector_int" in helpers:
+        result.extend(
+            [
+                "pure function j_solve_2x2_vector_int(rhs, coefficients) result(solution)",
+                "  integer, intent(in) :: rhs(2), coefficients(2,2)",
+                "  real(kind=real64) :: solution(2)",
+                "  real(kind=real64) :: determinant",
+                "",
+                "  determinant = real(coefficients(1, 1), kind=real64) * &",
+                "    coefficients(2, 2) - real(coefficients(1, 2), kind=real64) * &",
+                "    coefficients(2, 1)",
+                '  if (determinant == 0.0_real64) error stop "singular 2 by 2 matrix"',
+                "  solution(1) = (real(coefficients(2, 2), kind=real64) * rhs(1) - &",
+                "    real(coefficients(1, 2), kind=real64) * rhs(2)) / determinant",
+                "  solution(2) = (real(coefficients(1, 1), kind=real64) * rhs(2) - &",
+                "    real(coefficients(2, 1), kind=real64) * rhs(1)) / determinant",
+                "end function j_solve_2x2_vector_int",
+                "",
+            ]
+        )
+    if "solve_2x2_matrix_int" in helpers:
+        result.extend(
+            [
+                "pure function j_solve_2x2_matrix_int(rhs, coefficients) result(solution)",
+                "  integer, intent(in) :: rhs(:,:), coefficients(2,2)",
+                "  real(kind=real64), allocatable :: solution(:,:)",
+                "  real(kind=real64) :: determinant",
+                "",
+                '  if (size(rhs, 1) /= 2) error stop "2 by 2 solve shape mismatch"',
+                "  determinant = real(coefficients(1, 1), kind=real64) * &",
+                "    coefficients(2, 2) - real(coefficients(1, 2), kind=real64) * &",
+                "    coefficients(2, 1)",
+                '  if (determinant == 0.0_real64) error stop "singular 2 by 2 matrix"',
+                "  allocate(solution(2, size(rhs, 2)))",
+                "  solution(1, :) = (real(coefficients(2, 2), kind=real64) * rhs(1, :) - &",
+                "    real(coefficients(1, 2), kind=real64) * rhs(2, :)) / determinant",
+                "  solution(2, :) = (real(coefficients(1, 1), kind=real64) * rhs(2, :) - &",
+                "    real(coefficients(2, 1), kind=real64) * rhs(1, :)) / determinant",
+                "end function j_solve_2x2_matrix_int",
                 "",
             ]
         )
