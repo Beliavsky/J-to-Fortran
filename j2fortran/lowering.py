@@ -430,7 +430,7 @@ def match_compress_hcat(expression: Expression) -> tuple[str, str, str] | None:
 
 def match_ranked_named_application(
     expression: Expression,
-) -> tuple[str, Expression] | None:
+) -> tuple[str, Expression, int] | None:
     expression = ungroup(expression)
     if not isinstance(expression, MonadicApply) or not isinstance(
         expression.verb, RankApplication
@@ -439,9 +439,10 @@ def match_ranked_named_application(
     ranked_verb = expression.verb
     if not isinstance(ranked_verb.operand, NamedVerb):
         return None
-    if integer_value(ranked_verb.rank) != 0:
+    rank = integer_value(ranked_verb.rank)
+    if rank not in {0, 1}:
         return None
-    return ranked_verb.operand.identifier, expression.operand
+    return ranked_verb.operand.identifier, expression.operand, rank
 
 
 def infer_type(
@@ -538,7 +539,7 @@ def infer_type(
             )
         ranked_application = match_ranked_named_application(expression)
         if ranked_application is not None:
-            verb_name, operand = ranked_application
+            verb_name, operand, rank = ranked_application
             if named_verbs is None:
                 raise LoweringError(f"type of verb {verb_name!r} is unknown")
             try:
@@ -546,11 +547,14 @@ def infer_type(
             except KeyError as exc:
                 raise LoweringError(f"type of verb {verb_name!r} is unknown") from exc
             if not result_type.is_scalar:
-                raise LoweringError("rank-0 application requires a scalar verb result")
+                raise LoweringError("ranked application requires a scalar verb result")
             operand_type = infer_type(
                 operand, names, name_transform, named_verbs=named_verbs
             )
-            return TypeInfo(result_type.atom_type, operand_type.shape)
+            if operand_type.rank < rank:
+                raise LoweringError("rank exceeds the argument rank")
+            result_shape = Shape(operand_type.shape.extents[: operand_type.rank - rank])
+            return TypeInfo(result_type.atom_type, result_shape)
         if isinstance(expression.verb, AdverbApplication):
             scan = insert_scan_spelling(expression.verb)
             if scan in {"+", "*", ">."}:
@@ -1357,7 +1361,7 @@ def _render_fortran_expression(
             return f"{intrinsic}({operand}, dim=2)", _ATOM_PRECEDENCE, "call"
         ranked_application = match_ranked_named_application(expression)
         if ranked_application is not None:
-            verb_name, argument = ranked_application
+            verb_name, argument, _ = ranked_application
             rendered, _, _ = _render_fortran_expression(argument, name_transform)
             return (
                 f"{name_transform(verb_name)}({rendered})",

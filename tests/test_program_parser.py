@@ -367,6 +367,35 @@ exit 0
             xj2f.TypeInfo(xj2f.AtomType.INTEGER, xj2f.Shape.vector(3)),
         )
     }
+    generated = xj2f.emit_fortran(program)
+
+    assert "real(kind=real64), allocatable :: j_ranked_echo_1(:)" in generated
+    assert "integer :: j_cell_1" in generated
+    assert "j_cell_2" not in generated
+    assert "do j_cell_1 = 1, size(points, 1)" in generated
+    assert (
+        "j_ranked_echo_1(j_cell_1) = length(points(j_cell_1, :))"
+        in generated
+    )
+
+
+def test_ranked_tacit_call_maps_over_rank_three_array_cells() -> None:
+    source = """mean =: +/ % #
+cube =: 2 2 3 $ i. 12
+smoutput mean"1 cube
+exit 0
+"""
+
+    generated = xj2f.emit_fortran(
+        xj2f.parse_j_source(Path("cube_mean.ijs"), source)
+    )
+
+    assert "real(kind=real64), allocatable :: j_ranked_echo_1(:,:)" in generated
+    assert "integer :: j_cell_1, j_cell_2" in generated
+    assert "do j_cell_1 = 1, size(cube, 1)" in generated
+    assert "do j_cell_2 = 1, size(cube, 2)" in generated
+    assert "mean(cube(j_cell_1, j_cell_2, :))" in generated
+    assert 'write (*,"(2(g0, 1x))") transpose(j_ranked_echo_1)' in generated
 
 
 def test_catenate_promotes_boolean_valued_integers_to_integer() -> None:

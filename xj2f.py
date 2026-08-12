@@ -63,6 +63,7 @@ from j2fortran.lowering import (
     match_column_selection,
     match_compress_hcat,
     match_iota_sequence,
+    match_ranked_named_application,
     match_zero_integer_matrix,
     required_runtime_helpers,
     render_fortran_amendment,
@@ -2368,6 +2369,9 @@ def emit_fortran(
         assignment.type_info.atom_type in {AtomType.REAL, AtomType.COMPLEX}
         or "real64" in assignment.expression
         for assignment in top_assignments
+    ) or any(
+        result_type.atom_type in {AtomType.REAL, AtomType.COMPLEX}
+        for result_type in function_types.values()
     ):
         lines.append("  use, intrinsic :: iso_fortran_env, only: real64")
     lines.append("  implicit none")
@@ -2380,7 +2384,14 @@ def emit_fortran(
     top_noun_names = {
         item.name for item in program.items if isinstance(item, Assign)
     }
-    echo_calls: list[tuple[str, TypeInfo, tuple[int, ...]]] = []
+    echo_calls: list[
+        tuple[
+            str,
+            TypeInfo,
+            tuple[int, ...],
+            tuple[str, str, int] | None,
+        ]
+    ] = []
     for echo in echos:
         normalized_echo = _normalized_expression(echo.expression)
         try:
@@ -2395,6 +2406,7 @@ def emit_fortran(
                     render_fortran_expression(echo_ast),
                     infer_type(echo_ast, {}),
                     (echo.line.number,),
+                    None,
                 )
             )
             continue
@@ -2411,10 +2423,11 @@ def emit_fortran(
                 else (echo.line.number,)
             )
             echo_calls.append(
-                (expression, noun_assignment.type_info, comment_targets)
+                (expression, noun_assignment.type_info, comment_targets, None)
             )
             continue
         if echo_ast is not None:
+            ranked_application = match_ranked_named_application(echo_ast)
             try:
                 result_type = infer_type(
                     echo_ast,
@@ -2422,17 +2435,42 @@ def emit_fortran(
                     _fortran_name,
                     named_verbs=function_types,
                 )
-                expression = render_fortran_expression(
-                    echo_ast,
-                    _fortran_name,
-                    names=top_types,
-                    named_verbs=function_types,
-                )
+                ranked_echo = None
+                if ranked_application is not None and ranked_application[2] == 1:
+                    verb_name, argument, _ = ranked_application
+                    argument_type = infer_type(
+                        argument,
+                        top_types,
+                        _fortran_name,
+                        named_verbs=function_types,
+                    )
+                    argument_text = render_fortran_expression(
+                        argument,
+                        _fortran_name,
+                        names=top_types,
+                        named_verbs=function_types,
+                    )
+                    if argument_type.rank > 1:
+                        expression = f"j_ranked_echo_{len(echo_calls) + 1}"
+                        ranked_echo = (
+                            _fortran_name(verb_name),
+                            argument_text,
+                            argument_type.rank,
+                        )
+                    else:
+                        expression = f"{_fortran_name(verb_name)}({argument_text})"
+                else:
+                    expression = render_fortran_expression(
+                        echo_ast,
+                        _fortran_name,
+                        names=top_types,
+                        named_verbs=function_types,
+                    )
             except LoweringError:
                 pass
             else:
                 echo_calls.append(
-                    (expression, result_type, (echo.line.number,))
+                    (expression, result_type, (echo.line.number,), ranked_echo)
                 )
                 continue
         match = re.fullmatch(
@@ -2448,28 +2486,75 @@ def emit_fortran(
         function = _fortran_name(match.group(1))
         result_type = function_types[function]
         echo_calls.append(
-            (f"{function}({match.group(2)})", result_type, (echo.line.number,))
+            (
+                f"{function}({match.group(2)})",
+                result_type,
+                (echo.line.number,),
+                None,
+            )
         )
     unknown_echoes = [
         index
-        for index, (_, result_type, _) in enumerate(echo_calls, 1)
+        for index, (_, result_type, _, ranked_echo) in enumerate(echo_calls, 1)
         if result_type.rank == 2
         and not isinstance(result_type.shape.extents[1], int)
+        and ranked_echo is None
     ]
     for index in unknown_echoes:
         lines.append(f"  integer, allocatable :: j_echo_{index}(:,:)")
     if unknown_echoes:
         lines.append("  integer :: j_row")
+    ranked_echoes = [
+        (index, result_type, ranked_echo)
+        for index, (_, result_type, _, ranked_echo) in enumerate(echo_calls, 1)
+        if ranked_echo is not None
+    ]
+    for index, result_type, _ in ranked_echoes:
+        intrinsic = {
+            AtomType.INTEGER: "integer",
+            AtomType.REAL: "real(kind=real64)",
+            AtomType.LOGICAL: "logical",
+        }[result_type.atom_type]
+        dimensions = ",".join(":" for _ in range(result_type.rank))
+        lines.append(
+            f"  {intrinsic}, allocatable :: j_ranked_echo_{index}({dimensions})"
+        )
+    if ranked_echoes:
+        indices = "j_cell_1, j_cell_2" if any(
+            ranked_echo[2] == 3 for _, _, ranked_echo in ranked_echoes
+        ) else "j_cell_1"
+        lines.append(f"  integer :: {indices}")
     lines.append("")
     for assignment in active_assignments:
         append_comments(lines, assignment.line.number, indent="  ")
         lines.append(f"  {assignment.name} = {assignment.expression}")
         lines.extend(f"  {update}" for update in assignment.updates)
-    for index, (expression, result_type, comment_targets) in enumerate(
+    for index, (expression, result_type, comment_targets, ranked_echo) in enumerate(
         echo_calls, 1
     ):
         for target_line in comment_targets:
             append_comments(lines, target_line, indent="  ")
+        if ranked_echo is not None:
+            function, argument, argument_rank = ranked_echo
+            extents = ", ".join(
+                f"size({argument}, {axis})" for axis in range(1, argument_rank)
+            )
+            lines.append(f"  allocate({expression}({extents}))")
+            lines.append(f"  do j_cell_1 = 1, size({argument}, 1)")
+            if argument_rank == 2:
+                lines.append(
+                    f"    {expression}(j_cell_1) = {function}({argument}(j_cell_1, :))"
+                )
+            else:
+                lines.append(f"    do j_cell_2 = 1, size({argument}, 2)")
+                lines.append(
+                    f"      {expression}(j_cell_1, j_cell_2) = &"
+                )
+                lines.append(
+                    f"        {function}({argument}(j_cell_1, j_cell_2, :))"
+                )
+                lines.append("    end do")
+            lines.append("  end do")
         if result_type.atom_type is AtomType.CHARACTER:
             lines.append(f'  write (*,"(a)") {expression}')
             continue
@@ -2490,8 +2575,9 @@ def emit_fortran(
             continue
         columns = result_type.shape.extents[1]
         if isinstance(columns, int):
+            descriptor = "g0" if result_type.atom_type is AtomType.REAL else "i0"
             lines.append(
-                f'  write (*,"({columns}(i0, 1x))") transpose({expression})'
+                f'  write (*,"({columns}({descriptor}, 1x))") transpose({expression})'
             )
             continue
         lines.append(f"  j_echo_{index} = {expression}")
