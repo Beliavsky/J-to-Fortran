@@ -84,6 +84,7 @@ patterns, and nested `@list` files. Its default mode is the read-only `--check`:
 ```powershell
 python xj2f_batch.py test_suite indexing_tests --jobs 4
 python xj2f_batch.py "examples\*.ijs" --recursive --compile
+python xj2f_batch.py examples --run-both
 python xj2f_batch.py @programs.txt --run-diff --jconsole C:\J\bin\jconsole.exe
 ```
 

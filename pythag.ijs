@@ -16,6 +16,6 @@ triples =: 3 : 0
   result
 )
 
-echo triples 100
+echo triples 30
 
 exit 0

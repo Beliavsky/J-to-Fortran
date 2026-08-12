@@ -142,7 +142,7 @@ def _classify_failure(output: str) -> str:
 
 
 def _mode_flag(args: argparse.Namespace) -> str:
-    for flag in ("run_diff", "run", "compile"):
+    for flag in ("run_diff", "run_both", "run", "compile"):
         if getattr(args, flag):
             return "--" + flag.replace("_", "-")
     return "--check"
@@ -168,7 +168,11 @@ def _run_case(
 ) -> CaseResult:
     index, source = indexed_source
     command = _case_command(source, args)
-    process_count = 3 if args.run_diff else 2 if args.run or args.compile else 1
+    process_count = (
+        3
+        if args.run_diff or args.run_both
+        else 2 if args.run or args.compile else 1
+    )
     case_timeout = args.timeout * process_count + 10
     try:
         completed = subprocess.run(
@@ -215,6 +219,11 @@ def build_argument_parser() -> argparse.ArgumentParser:
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--compile", action="store_true", help="transpile and compile")
     mode.add_argument("--run", action="store_true", help="transpile, compile, and run")
+    mode.add_argument(
+        "--run-both",
+        action="store_true",
+        help="run J and Fortran and display both outputs",
+    )
     mode.add_argument("--run-diff", action="store_true", help="compare J and Fortran output")
     parser.add_argument("--jobs", type=int, default=1, help="parallel jobs (default: 1)")
     parser.add_argument("--limit", type=int, default=0, help="maximum files (0 = all)")
@@ -285,11 +294,19 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
 
     total = len(results)
+    shown_cases = 0
     for result in results:
-        if not args.terse or not result.ok:
+        show_header = not args.terse or not result.ok
+        show_output = (args.verbose or not result.ok) and bool(result.output)
+        if not show_header and not show_output:
+            continue
+        if shown_cases:
+            print()
+        shown_cases += 1
+        if show_header:
             status = "PASS" if result.ok else "FAIL"
             print(f"[{result.index}/{len(sources)}] {status} {result.outcome} {result.source}")
-        if (args.verbose or not result.ok) and result.output:
+        if show_output:
             print(result.output)
     outcomes = Counter(result.outcome for result in results)
     passed = outcomes["pass"]

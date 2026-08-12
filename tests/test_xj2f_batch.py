@@ -87,3 +87,39 @@ def test_batch_limit_and_max_fail_stop_sequential_work(
 )
 def test_failure_classification(message: str, outcome: str) -> None:
     assert xj2f_batch._classify_failure(message) == outcome
+
+
+def test_run_both_is_forwarded_to_xj2f(tmp_path: Path) -> None:
+    source = tmp_path / "valid.ijs"
+    source.write_text("result =: 1\n", encoding="utf-8")
+    args = xj2f_batch.build_argument_parser().parse_args(
+        [str(source), "--run-both", "--jconsole", "custom-j"]
+    )
+
+    command = xj2f_batch._case_command(source, args)
+
+    assert "--run-both" in command
+    assert "--run-diff" not in command
+    assert command[-2:] == ["--jconsole", "custom-j"]
+
+
+def test_batch_separates_script_results_with_a_blank_line(
+    tmp_path: Path, capsys, monkeypatch
+) -> None:
+    sources = [tmp_path / "first.ijs", tmp_path / "second.ijs"]
+    for source in sources:
+        source.write_text("result =: 1\n", encoding="utf-8")
+
+    def successful_case(indexed_source, _args):
+        index, source = indexed_source
+        return xj2f_batch.CaseResult(
+            index, source, 0, "pass", "--- J output ---\n1\n--- Fortran output ---\n1"
+        )
+
+    monkeypatch.setattr(xj2f_batch, "_run_case", successful_case)
+
+    assert xj2f_batch.main([str(tmp_path), "--verbose"]) == 0
+    output = capsys.readouterr().out
+
+    second_header = f"[2/2] PASS pass {sources[1]}"
+    assert f"--- Fortran output ---\n1\n\n{second_header}" in output

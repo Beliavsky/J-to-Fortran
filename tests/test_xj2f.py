@@ -77,7 +77,7 @@ def test_examples_transpile_to_standalone_fortran(filename: str) -> None:
     assert "module " in generated
     assert "function triples(y) result(j_result)" in generated
     assert "program " in generated
-    assert 'write (*,"(3(i0, 1x))") transpose(triples(100))' in generated
+    assert 'write (*,"(3(i0, 1x))") transpose(triples(30))' in generated
 
 
 def test_top_level_only_test_program_emits_an_executable_assertion() -> None:
@@ -344,7 +344,7 @@ def test_known_matrix_columns_simplify_echo_to_one_write(filename: str) -> None:
     generated = xj2f.transpile_path(ROOT / filename)
     main = generated.split("program ", 1)[1]
 
-    assert 'write (*,"(3(i0, 1x))") transpose(triples(100))' in main
+    assert 'write (*,"(3(i0, 1x))") transpose(triples(30))' in main
     assert "j_echo_" not in main
     assert "do j_row" not in main
 
@@ -418,15 +418,19 @@ def test_check_mode_does_not_write_fortran(tmp_path: Path, capsys: pytest.Captur
 
 
 @pytest.mark.parametrize(
-    ("filename", "first_row", "last_row"),
+    ("filename", "row_count", "first_row", "last_row"),
     [
-        ("pythag.ijs", "3 4 5", "28 96 100"),
-        ("pythag_array.ijs", "3 4 5", "65 72 97"),
+        ("pythag.ijs", 11, "3 4 5", "18 24 30"),
+        ("pythag_array.ijs", 11, "3 4 5", "20 21 29"),
     ],
 )
 @pytest.mark.requires_gfortran
 def test_generated_examples_compile_and_run(
-    tmp_path: Path, filename: str, first_row: str, last_row: str
+    tmp_path: Path,
+    filename: str,
+    row_count: int,
+    first_row: str,
+    last_row: str,
 ) -> None:
     compiler = shutil.which("gfortran")
     if compiler is None:
@@ -449,7 +453,7 @@ def test_generated_examples_compile_and_run(
     )
     assert completed.returncode == 0, completed.stdout + completed.stderr
     rows = [" ".join(line.split()) for line in completed.stdout.splitlines()]
-    assert len(rows) == 52
+    assert len(rows) == row_count
     assert rows[0] == first_row
     assert rows[-1] == last_row
 
@@ -475,7 +479,7 @@ def test_external_runtime_cli_compiles_and_runs(
     assert result == 0
     rows = [" ".join(line.split()) for line in capsys.readouterr().out.splitlines()]
     assert rows[0] == "3 4 5"
-    assert rows[-1] == "65 72 97"
+    assert rows[-1] == "20 21 29"
 
 
 @pytest.mark.requires_gfortran
