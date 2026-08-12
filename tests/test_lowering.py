@@ -520,6 +520,23 @@ def test_logical_integer_match_uses_exact_zero_one_conversion() -> None:
     )
 
 
+def test_nested_matches_render_inside_logical_expressions() -> None:
+    expression = parse_expression("(a -: b) *. ((c -: d) +. (e -: f))")
+    names = {
+        "a": TypeInfo(AtomType.COMPLEX, Shape.vector(2)),
+        "b": TypeInfo(AtomType.COMPLEX, Shape.vector(2)),
+        **{
+            name: TypeInfo(AtomType.INTEGER)
+            for name in ("c", "d", "e", "f")
+        },
+    }
+
+    assert infer_type(expression, names) == TypeInfo(AtomType.LOGICAL)
+    assert render_fortran_expression(expression, names=names) == (
+        "all(a == b) .and. (c == d .or. e == f)"
+    )
+
+
 @pytest.mark.parametrize(
     ("source", "operand_atom", "result_atom", "expected_fortran"),
     [

@@ -1249,6 +1249,14 @@ def _same_expression(left: Expression, right: Expression) -> bool:
     return False
 
 
+def _logical_dyad_spelling(expression: Expression) -> str | None:
+    expression = ungroup(expression)
+    if not isinstance(expression, DyadicApply):
+        return None
+    spelling = primitive_spelling(expression.verb)
+    return spelling if spelling in {"*.", "+."} else None
+
+
 def _parenthesize(text: str, precedence: int, required: int) -> str:
     return f"({text})" if precedence < required else text
 
@@ -1927,6 +1935,37 @@ def render_fortran_expression(
         if left_type.atom_type is AtomType.CHARACTER:
             return comparison
         return comparison if left_type.is_scalar else f"all({comparison})"
+    logical_spelling = _logical_dyad_spelling(bare_expression)
+    if logical_spelling is not None and names is not None:
+        infer_type(
+            bare_expression,
+            names,
+            name_transform,
+            named_verbs=named_verbs,
+        )
+        left = render_fortran_expression(
+            bare_expression.left,
+            name_transform,
+            names=names,
+            named_verbs=named_verbs,
+        )
+        right = render_fortran_expression(
+            bare_expression.right,
+            name_transform,
+            names=names,
+            named_verbs=named_verbs,
+        )
+        operator = _DYADIC_FORTRAN[logical_spelling]
+        precedence = _FORTRAN_PRECEDENCE[operator]
+        left_spelling = _logical_dyad_spelling(bare_expression.left)
+        right_spelling = _logical_dyad_spelling(bare_expression.right)
+        if left_spelling is not None:
+            left_operator = _DYADIC_FORTRAN[left_spelling]
+            left = _parenthesize(left, _FORTRAN_PRECEDENCE[left_operator], precedence)
+        if right_spelling is not None:
+            right_operator = _DYADIC_FORTRAN[right_spelling]
+            right = _parenthesize(right, _FORTRAN_PRECEDENCE[right_operator], precedence)
+        return f"{left} {operator} {right}"
     copied = dyad(expression, "#")
     if copied is not None and names is not None:
         selector_type = infer_type(

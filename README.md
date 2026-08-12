@@ -155,7 +155,7 @@ The parser currently recognizes:
 - integer power with constant nonnegative exponents, dyadic minimum and maximum,
   absolute value, integer signum, factorial, and binomial;
 - exact integer and logical Match plus J-tolerant real and mixed numeric Match
-  using dyadic `-:`;
+  using dyadic `-:`, including Matches nested in Boolean expressions;
 - a final noun as an array-valued verb result;
 - top-level `echo` of translated verb calls and assigned nouns, plus `exit 0`.
 

@@ -30,10 +30,7 @@ conjugated =: + result
 conjugated_expected =: 3j_1 7j_2
 total =: +/ conjugated
 combined =: */ conjugated
-conjugated_ok =: conjugated -: conjugated_expected
-total_ok =: total -: 10j_3
-combined_ok =: combined -: 19j_13
-ok =: conjugated_ok *. total_ok *. combined_ok
+ok =: (conjugated -: conjugated_expected) *. (total -: 10j_3) *. combined -: 19j_13
 """
 
 
@@ -138,6 +135,7 @@ def test_complex_vector_arithmetic_emits_complex_arrays() -> None:
     assert "conjugated = conjg(result_j)" in generated
     assert "total = sum(conjugated, dim=1)" in generated
     assert "combined = product(conjugated, dim=1)" in generated
+    assert "ok = all(conjugated == conjugated_expected) .and. " in generated
 
 
 def test_top_level_heterogeneous_boxed_match_is_decomposed() -> None:
