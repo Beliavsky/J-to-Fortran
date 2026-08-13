@@ -626,8 +626,15 @@ def test_return_mixture_workflow_supports_both_runtime_modes() -> None:
         r"(?m)^\s*integer\b[^\n:]*::[^\n]*\bdimension\b", embedded
     ) is None
     assert "call j_fit_em(observations, 400" in embedded
-    assert "allocate(weighted_density(observation_count, component_count), &" in embedded
-    assert "allocate(total_density(observation_count), new_weights" not in embedded
+    assert (
+        "allocate(weighted_density(observation_count, component_count), "
+        "total_density(observation_count))" in embedded
+    )
+    assert "new_weights" not in embedded
+    assert "new_means" not in embedded
+    assert "new_covariances" not in embedded
+    assert "weights(component), means(:, component)" in embedded
+    assert "previous_log_likelihood" in embedded
     assert 'call j_load_returns("asset_class_etf_prices.csv"' in embedded
     assert 'write (*,"(i10,3(1x,f18.6))")' in embedded
     assert 'write (*,"(a6,2(1x,f21.6))")' in embedded
