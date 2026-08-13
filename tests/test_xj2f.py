@@ -132,7 +132,9 @@ def test_time_both_prints_timings_after_output_mismatch(
     monkeypatch.setattr(xj2f, "_execute_repeated", execute)
 
     assert xj2f.main([str(source), "--time-both"]) == 1
-    error = capsys.readouterr().err
+    captured = capsys.readouterr()
+    assert "--- J output ---\n3.14\n\n--- Fortran output ---" in captured.out
+    error = captured.err
     assert "output mismatch at token 1" in error
     assert "translation:" in error
     assert "compilation:" in error

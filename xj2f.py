@@ -3691,6 +3691,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
         if run_both:
             _print_output("J output", j_output, True)
+            print()
             _print_output("Fortran output", fortran_output, True)
         elif run_j:
             _print_output("J output", j_output, False)
