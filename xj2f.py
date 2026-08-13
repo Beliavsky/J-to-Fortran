@@ -2628,10 +2628,22 @@ def emit_fortran(
         and not isinstance(result_type.shape.extents[1], int)
         and mapped_echo is None
     ]
+    materialized_rank_three = [
+        index
+        for index, (expression, result_type, _, _) in enumerate(echo_calls, 1)
+        if result_type.rank == 3
+        and re.fullmatch(r"[A-Za-z][A-Za-z0-9_]*", expression) is None
+    ]
     for index in unknown_echoes:
         lines.append(f"  integer, allocatable :: j_echo_{index}(:,:)")
-    if unknown_echoes:
-        lines.append("  integer :: j_row")
+    for index in materialized_rank_three:
+        result_type = echo_calls[index - 1][1]
+        intrinsic = {
+            AtomType.INTEGER: "integer",
+            AtomType.REAL: "real(kind=real64)",
+            AtomType.LOGICAL: "logical",
+        }[result_type.atom_type]
+        lines.append(f"  {intrinsic}, allocatable :: j_echo_{index}(:,:,:)")
     mapped_echoes = [
         (index, expression, result_type, mapped_echo)
         for index, (expression, result_type, _, mapped_echo) in enumerate(
@@ -2652,13 +2664,19 @@ def emit_fortran(
     ranked_echoes = [
         mapped for mapped in mapped_echoes if mapped[3][0] == "rank"
     ]
+    echo_indices: list[str] = []
+    if unknown_echoes:
+        echo_indices.append("j_row")
     if ranked_echoes:
-        indices = "j_cell_1, j_cell_2" if any(
+        echo_indices.extend(["j_cell_1", "j_cell_2"] if any(
             mapped_echo[3] == 3 for _, _, _, mapped_echo in ranked_echoes
-        ) else "j_cell_1"
-        lines.append(f"  integer :: {indices}")
+        ) else ["j_cell_1"])
     if any(mapped_echo[0] == "infix" for _, _, _, mapped_echo in mapped_echoes):
-        lines.append("  integer :: j_window")
+        echo_indices.append("j_window")
+    if any(result_type.rank == 3 for _, result_type, _, _ in echo_calls):
+        echo_indices.append("j_plane")
+    if echo_indices:
+        lines.append(f"  integer :: {', '.join(echo_indices)}")
     lines.append("")
     for assignment in active_assignments:
         append_comments(lines, assignment.line.number, indent="  ")
@@ -2703,6 +2721,10 @@ def emit_fortran(
                 f"      {function}({argument}(j_window:j_window + {width - 1}))"
             )
             lines.append("  end do")
+        display_expression = expression
+        if index in materialized_rank_three:
+            display_expression = f"j_echo_{index}"
+            lines.append(f"  {display_expression} = {expression}")
         if result_type.atom_type is AtomType.CHARACTER:
             lines.append(f'  write (*,"(a)") {expression}')
             continue
@@ -2720,6 +2742,17 @@ def emit_fortran(
             lines.append(
                 f'  write (*,"(*({descriptor}, 1x))") {expression}'
             )
+            continue
+        if result_type.rank == 3:
+            columns = result_type.shape.extents[2]
+            repeat = str(columns) if isinstance(columns, int) else "*"
+            descriptor = "g0" if result_type.atom_type is AtomType.REAL else "i0"
+            lines.append(f"  do j_plane = 1, size({display_expression}, 1)")
+            lines.append(
+                f'    write (*,"({repeat}({descriptor}, 1x))") '
+                f"transpose({display_expression}(j_plane, :, :))"
+            )
+            lines.append("  end do")
             continue
         columns = result_type.shape.extents[1]
         if isinstance(columns, int):
