@@ -434,6 +434,21 @@ def test_division_parenthesizes_composite_numerator_and_denominator() -> None:
     )
 
 
+def test_computed_integer_vector_selects_from_vector() -> None:
+    expression = parse_expression("indices { values")
+    names = {
+        "indices": TypeInfo(AtomType.INTEGER, Shape.vector(4)),
+        "values": TypeInfo(AtomType.REAL, Shape.vector(10)),
+    }
+
+    assert infer_type(expression, names) == TypeInfo(
+        AtomType.REAL, Shape.vector(4)
+    )
+    assert render_fortran_expression(expression, names=names) == (
+        "values(indices + 1)"
+    )
+
+
 def test_prime_expression_primitives_lower_generically() -> None:
     names = {
         "limit": TypeInfo(AtomType.INTEGER),

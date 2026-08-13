@@ -1111,6 +1111,30 @@ def infer_type(
                     True,
                 )
             return TypeInfo(source_type.atom_type, result_shape)
+        if spelling == "{":
+            left_type = infer_type(
+                expression.left,
+                names,
+                name_transform,
+                named_verbs=named_verbs,
+            )
+            right_type = infer_type(
+                expression.right,
+                names,
+                name_transform,
+                named_verbs=named_verbs,
+            )
+            if (
+                left_type.atom_type is not AtomType.INTEGER
+                or left_type.rank not in {0, 1}
+                or right_type.rank != 1
+            ):
+                raise LoweringError(
+                    "computed selection currently requires an integer scalar or "
+                    "vector index and a vector argument"
+                )
+            result_shape = Shape.scalar() if left_type.is_scalar else left_type.shape
+            return TypeInfo(right_type.atom_type, result_shape)
         if spelling == "$":
             extents = constant_shape_extents(
                 expression.left, names, name_transform
@@ -2470,6 +2494,38 @@ def render_fortran_expression(
                     indices.append(f"len({source}) + {index + 1}")
             return f"j_select_character({source}, [{', '.join(indices)}])"
         return _render_index_selection(selection, source_type, source)
+    computed_selection = dyad(expression, "{")
+    if computed_selection is not None and names is not None:
+        index_type = infer_type(
+            computed_selection[0],
+            names,
+            name_transform,
+            named_verbs=named_verbs,
+        )
+        source_type = infer_type(
+            computed_selection[1],
+            names,
+            name_transform,
+            named_verbs=named_verbs,
+        )
+        if (
+            index_type.atom_type is AtomType.INTEGER
+            and index_type.rank in {0, 1}
+            and source_type.rank == 1
+        ):
+            indices = render_fortran_expression(
+                computed_selection[0],
+                name_transform,
+                names=names,
+                named_verbs=named_verbs,
+            )
+            source = render_fortran_expression(
+                computed_selection[1],
+                name_transform,
+                names=names,
+                named_verbs=named_verbs,
+            )
+            return f"{source}({indices} + 1)"
     reshaped = dyad(expression, "$")
     if reshaped is not None and names is not None:
         extents = constant_shape_extents(
