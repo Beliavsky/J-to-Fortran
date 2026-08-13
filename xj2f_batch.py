@@ -152,6 +152,10 @@ def _case_command(source: Path, args: argparse.Namespace) -> list[str]:
     command = [sys.executable, str(Path(xj2f.__file__).resolve()), str(source)]
     command.extend([_mode_flag(args), "--runtime", args.runtime])
     command.extend(["--source-comments", args.source_comments])
+    if args.function_result_style:
+        command.extend(["--function-result-style", args.function_result_style])
+    if args.concise:
+        command.append("--concise")
     command.extend(["--compiler", args.compiler, "--timeout", str(args.timeout)])
     if args.run_diff:
         command.extend(["--diff-rtol", str(args.diff_rtol)])
@@ -265,6 +269,17 @@ def build_argument_parser() -> argparse.ArgumentParser:
         choices=("all", "commented", "none"),
         default="commented",
         help="J source annotations forwarded to xj2f.py",
+    )
+    parser.add_argument(
+        "--function-result-style",
+        choices=("named", "concise"),
+        default=None,
+        help="function result style forwarded to xj2f.py",
+    )
+    parser.add_argument(
+        "--concise",
+        action="store_true",
+        help="request concise generated Fortran",
     )
     parser.add_argument("--out-dir", help="directory forwarded to xj2f.py")
     parser.add_argument("--verbose", action="store_true", help="show successful output")

@@ -162,6 +162,27 @@ Generated procedures are `pure` when possible and `pure elemental` only when
 all arguments and the result are scalar. A function result is declared on its
 own line after the argument declarations.
 
+With `--function-result-style concise`, eligible nonrecursive scalar functions
+put the result type in the function statement and assign the function name.
+The concise form also omits the blank line after declarations:
+
+```fortran
+pure elemental integer function square(y)
+  integer, intent(in) :: y
+  square = y**2
+end function square
+```
+
+Array-valued and recursive functions retain the explicit `result(j_result)`
+form even when concise style is requested.
+
+The broader `--concise` option implies concise scalar results, omits redundant
+`pure` before `elemental`, and shortens `end function name` and
+`end subroutine name` to `end`. An explicit `--function-result-style named`
+keeps named results while retaining the other concise formatting. Generated
+procedures omit blank lines between declarations and executable statements in
+all styles.
+
 ## Vectors, Matrices, and Shape
 
 Spaces form a J numeric list:

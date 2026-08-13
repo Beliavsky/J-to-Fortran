@@ -640,6 +640,70 @@ def test_single_use_final_local_is_inlined_into_function_result() -> None:
     assert "result_j" not in generated
 
 
+def test_concise_scalar_function_uses_prefixed_type_and_function_name_result() -> None:
+    source = """square =: 3 : 0
+  result =. y * y
+  result
+)
+"""
+
+    generated = xj2f.emit_fortran(
+        xj2f.parse_j_source(Path("square.ijs"), source),
+        function_result_style="concise",
+    )
+
+    assert (
+        "pure elemental integer function square(y)\n"
+        "  integer, intent(in) :: y\n"
+        "  square = y**2\n"
+        "end function square"
+    ) in generated
+    assert "result(j_result)" not in generated
+    assert "\n\n  square =" not in generated
+
+
+def test_concise_preset_can_be_overridden_with_named_result_style() -> None:
+    source = """square =: 3 : 0
+  y * y
+)
+"""
+
+    program = xj2f.parse_j_source(Path("square.ijs"), source)
+    implied = xj2f.emit_fortran(program, concise=True)
+    named = xj2f.emit_fortran(
+        program, concise=True, function_result_style="named"
+    )
+
+    assert "elemental integer function square(y)" in implied
+    assert "  square = y**2\nend" in implied
+    assert "elemental function square(y) result(j_result)" in named
+    assert "  integer :: j_result\n  j_result = y**2\nend" in named
+    assert "end function square" not in implied
+    assert "end function square" not in named
+
+
+def test_concise_result_style_falls_back_for_array_and_recursive_results() -> None:
+    source = """duplicate =: 3 : 0
+  y , y
+)
+fact =: 3 : 0
+  if. y <: 1 do.
+    1
+  else.
+    y * fact y - 1
+  end.
+)
+"""
+
+    generated = xj2f.emit_fortran(
+        xj2f.parse_j_source(Path("fallback.ijs"), source),
+        function_result_style="concise",
+    )
+
+    assert "function duplicate(y) result(j_result)" in generated
+    assert "pure recursive function fact(y) result(j_result)" in generated
+
+
 def test_single_use_array_local_is_inlined_and_comments_are_preserved() -> None:
     source = """duplicate =: 3 : 0
   NB. Form the returned vector.

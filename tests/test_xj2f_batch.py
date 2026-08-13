@@ -101,6 +101,7 @@ def test_run_both_is_forwarded_to_xj2f(tmp_path: Path) -> None:
     assert "--run-both" in command
     assert "--run-diff" not in command
     assert command[command.index("--source-comments") + 1] == "commented"
+    assert "--function-result-style" not in command
     assert command[command.index("--jconsole") : command.index("--jconsole") + 2] == [
         "--jconsole",
         "custom-j",

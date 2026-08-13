@@ -48,6 +48,7 @@ from j2fortran.expression_parser import (
     parse_verb,
 )
 from j2fortran.fortran_style import (
+    apply_concise_procedure_style,
     collapse_short_fortran_continuations,
     coalesce_adjacent_allocate_statements,
     combine_adjacent_literal_writes,
@@ -56,6 +57,7 @@ from j2fortran.fortran_style import (
     combine_declarations,
     coalesce_simple_declaration_lines,
     procedure_prefix,
+    remove_procedure_declaration_gaps,
     replace_nonadvancing_write_loops,
     safe_fortran_identifier,
     wrap_fortran_comment,
@@ -94,6 +96,7 @@ from j2fortran.type_system import (
 
 VERSION = "0.1.0"
 SOURCE_COMMENT_MODES = {"all", "commented", "none"}
+FUNCTION_RESULT_STYLES = {"named", "concise"}
 RUNTIME_MODULE = "j2f_runtime"
 RUNTIME_PROCEDURES = {
     "addition_table_int": "j_addition_table_int",
@@ -732,9 +735,11 @@ class FunctionEmitter:
         named_verbs: dict[str, TypeInfo] | None = None,
         global_types: dict[str, TypeInfo] | None = None,
         source_comments: str = "commented",
+        function_result_style: str = "named",
     ):
         self.definition = definition
         self.source_comments = source_comments
+        self.function_result_style = function_result_style
         self.argument_types = argument_types or tuple(
             TypeInfo(AtomType.INTEGER) for _ in definition.arguments
         )
@@ -850,12 +855,27 @@ class FunctionEmitter:
         rendered_arguments = ", ".join(
             _fortran_name(argument) for argument in self.definition.arguments
         )
-        result = [
-            f"{purity} function {name}({rendered_arguments}) result(j_result)"
-        ]
         argument_names = {
             _fortran_name(argument) for argument in self.definition.arguments
         }
+        concise_result = (
+            self.function_result_style == "concise"
+            and not self.is_recursive
+            and self.result_type.rank == 0
+            and name not in argument_names
+            and name not in self.declarations
+        )
+        if concise_result:
+            result_type = self._result_declaration(self.result_type)
+            result = [
+                f"{purity} {result_type} function {name}({rendered_arguments})"
+            ]
+            result_name = re.compile(r"\bj_result\b")
+            self.body = [result_name.sub(name, line) for line in self.body]
+        else:
+            result = [
+                f"{purity} function {name}({rendered_arguments}) result(j_result)"
+            ]
         arguments: list[tuple[str, str]] = []
         locals_: list[tuple[str, str]] = []
         for variable, declaration in self.declarations.items():
@@ -866,9 +886,9 @@ class FunctionEmitter:
         result.extend(f"  {line}" for line in combine_declarations(arguments))
         # Keep the function result declaration separate and immediately after
         # dummy argument declarations, even when a local has the same type.
-        result.append(f"  {self._result_declaration(self.result_type)} :: j_result{self._result_shape(self.result_type)}")
+        if not concise_result:
+            result.append(f"  {self._result_declaration(self.result_type)} :: j_result{self._result_shape(self.result_type)}")
         result.extend(f"  {line}" for line in combine_declarations(locals_))
-        result.append("")
         result.extend(self.body)
         result.append(f"end function {name}")
         helpers: set[str] = set()
@@ -3150,6 +3170,7 @@ def _emit_numeric_csv_statistics_fortran(
     spec: NumericCsvStatisticsSpec,
     *,
     runtime: str,
+    concise: bool = False,
 ) -> str:
     """Emit the recognized numeric CSV return-statistics workflow."""
 
@@ -3287,6 +3308,9 @@ def _emit_numeric_csv_statistics_fortran(
     lines = replace_nonadvancing_write_loops(lines)
     lines = combine_adjacent_nonadvancing_writes(lines)
     lines = collapse_short_fortran_continuations(lines)
+    lines = remove_procedure_declaration_gaps(lines)
+    if concise:
+        lines = apply_concise_procedure_style(lines)
     return "\n".join(wrap_long_fortran_lines(lines))
 
 
@@ -3295,6 +3319,7 @@ def _emit_annual_csv_statistics_fortran(
     spec: AnnualCsvStatisticsSpec,
     *,
     runtime: str,
+    concise: bool = False,
 ) -> str:
     """Emit numeric CSV return statistics grouped by calendar year."""
 
@@ -3477,6 +3502,9 @@ def _emit_annual_csv_statistics_fortran(
     lines = replace_nonadvancing_write_loops(lines)
     lines = combine_adjacent_nonadvancing_writes(lines)
     lines = collapse_short_fortran_continuations(lines)
+    lines = remove_procedure_declaration_gaps(lines)
+    if concise:
+        lines = apply_concise_procedure_style(lines)
     return "\n".join(wrap_long_fortran_lines(lines))
 
 
@@ -3638,6 +3666,7 @@ def _emit_return_mixture_fortran(
     spec: ReturnMixtureSpec,
     *,
     runtime: str,
+    concise: bool = False,
 ) -> str:
     """Emit the recognized full-covariance return-mixture workflow."""
 
@@ -3779,6 +3808,9 @@ def _emit_return_mixture_fortran(
     lines = replace_nonadvancing_write_loops(lines)
     lines = combine_adjacent_nonadvancing_writes(lines)
     lines = collapse_short_fortran_continuations(lines)
+    lines = remove_procedure_declaration_gaps(lines)
+    if concise:
+        lines = apply_concise_procedure_style(lines)
     return "\n".join(wrap_long_fortran_lines(lines))
 
 
@@ -3787,25 +3819,32 @@ def emit_fortran(
     *,
     runtime: str = "embedded",
     source_comments: str = "commented",
+    function_result_style: str | None = None,
+    concise: bool = False,
 ) -> str:
     if runtime not in {"embedded", "external"}:
         raise J2FError(f"unknown runtime mode {runtime!r}")
     if source_comments not in SOURCE_COMMENT_MODES:
         raise J2FError(f"unknown source-comment mode {source_comments!r}")
+    if function_result_style is not None and function_result_style not in FUNCTION_RESULT_STYLES:
+        raise J2FError(f"unknown function-result style {function_result_style!r}")
+    effective_result_style = function_result_style or (
+        "concise" if concise else "named"
+    )
     return_mixture = _return_mixture_spec(program)
     if return_mixture is not None:
         return _emit_return_mixture_fortran(
-            program, return_mixture, runtime=runtime
+            program, return_mixture, runtime=runtime, concise=concise
         )
     annual_csv_statistics = _annual_csv_statistics_spec(program)
     if annual_csv_statistics is not None:
         return _emit_annual_csv_statistics_fortran(
-            program, annual_csv_statistics, runtime=runtime
+            program, annual_csv_statistics, runtime=runtime, concise=concise
         )
     csv_statistics = _numeric_csv_statistics_spec(program)
     if csv_statistics is not None:
         return _emit_numeric_csv_statistics_fortran(
-            program, csv_statistics, runtime=runtime
+            program, csv_statistics, runtime=runtime, concise=concise
         )
     top_expressions = [
         item for item in program.items if isinstance(item, ExpressionStatement)
@@ -3930,6 +3969,7 @@ def emit_fortran(
                 if name in captured_top_names
             },
             source_comments=source_comments,
+            function_result_style=effective_result_style,
         ).emit()
         append_comments(lines, definition.line.number)
         lines.extend(emitted)
@@ -4362,6 +4402,9 @@ def emit_fortran(
     lines = replace_nonadvancing_write_loops(lines)
     lines = combine_adjacent_nonadvancing_writes(lines)
     lines = collapse_short_fortran_continuations(lines)
+    lines = remove_procedure_declaration_gaps(lines)
+    if concise:
+        lines = apply_concise_procedure_style(lines)
     lines = wrap_long_fortran_lines(lines)
     return "\n".join(lines)
 
@@ -4371,6 +4414,8 @@ def transpile_path(
     *,
     runtime: str = "embedded",
     source_comments: str = "commented",
+    function_result_style: str | None = None,
+    concise: bool = False,
 ) -> str:
     try:
         text = input_path.read_text(encoding="utf-8")
@@ -4380,6 +4425,8 @@ def transpile_path(
         parse_j_source(input_path, text),
         runtime=runtime,
         source_comments=source_comments,
+        function_result_style=function_result_style,
+        concise=concise,
     )
 
 
@@ -4740,6 +4787,17 @@ def build_argument_parser() -> argparse.ArgumentParser:
         default="commented",
         help="emit J source annotations: all, commented, or none (default: commented)",
     )
+    parser.add_argument(
+        "--function-result-style",
+        choices=("named", "concise"),
+        default=None,
+        help="emit named or concise scalar results (default: concise with --concise, otherwise named)",
+    )
+    parser.add_argument(
+        "--concise",
+        action="store_true",
+        help="shorten procedure syntax and imply concise scalar results",
+    )
     parser.add_argument("--compile", action="store_true", help="compile generated Fortran")
     parser.add_argument("--run", action="store_true", help="compile and run generated Fortran")
     parser.add_argument("--run-j", action="store_true", help="run the original J script")
@@ -4830,6 +4888,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             parsed_program,
             runtime=args.runtime,
             source_comments=args.source_comments,
+            function_result_style=args.function_result_style,
+            concise=args.concise,
         )
         translate_seconds = time.perf_counter() - translate_started
 

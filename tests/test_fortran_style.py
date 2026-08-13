@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from j2fortran.fortran_style import (
+    apply_concise_procedure_style,
     collapse_short_fortran_continuations,
     coalesce_adjacent_allocate_statements,
     combine_adjacent_literal_writes,
@@ -10,6 +11,7 @@ from j2fortran.fortran_style import (
     coalesce_simple_declaration_lines,
     procedure_prefix,
     replace_nonadvancing_write_loops,
+    remove_procedure_declaration_gaps,
     safe_fortran_identifier,
     wrap_fortran_comment,
     wrap_long_fortran_lines,
@@ -265,6 +267,61 @@ def test_nonadvancing_write_combining_requires_matching_indentation() -> None:
     ]
 
     assert combine_adjacent_nonadvancing_writes(lines) == lines
+
+
+def test_procedure_declaration_gap_is_removed_by_default() -> None:
+    lines = [
+        "pure function square(y) result(j_result)",
+        "  integer, intent(in) :: y",
+        "  integer :: j_result",
+        "",
+        "  j_result = y**2",
+        "end function square",
+    ]
+
+    program_lines = [
+        "program example",
+        "  implicit none",
+        "  integer :: value",
+        "",
+        "  value = 1",
+        "end program example",
+    ]
+    assert remove_procedure_declaration_gaps(program_lines) == [
+        "program example",
+        "  implicit none",
+        "  integer :: value",
+        "  value = 1",
+        "end program example",
+    ]
+
+    assert remove_procedure_declaration_gaps(lines) == [
+        "pure function square(y) result(j_result)",
+        "  integer, intent(in) :: y",
+        "  integer :: j_result",
+        "  j_result = y**2",
+        "end function square",
+    ]
+
+
+def test_concise_procedure_style_shortens_attributes_and_endings() -> None:
+    lines = [
+        "pure elemental integer function square(y)",
+        "  square = y**2",
+        "end function square",
+        "pure subroutine update(x)",
+        "end subroutine update",
+        "end module example",
+    ]
+
+    assert apply_concise_procedure_style(lines) == [
+        "elemental integer function square(y)",
+        "  square = y**2",
+        "end",
+        "pure subroutine update(x)",
+        "end",
+        "end module example",
+    ]
 
 
 def test_long_and_character_literal_continuations_are_preserved() -> None:

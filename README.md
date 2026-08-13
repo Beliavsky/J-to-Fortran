@@ -119,6 +119,10 @@ end program sumsq_j
 - `--runtime-file FILE`: select the `j.f90` used to compile external-runtime output.
 - `--source-comments all|commented|none`: control migrated `NB.` prose and
   `! J:` source annotations; the default is `commented`.
+- `--function-result-style named|concise`: use explicit named results by
+  default, or concise type-prefixed syntax for eligible scalar functions.
+- `--concise`: shorten procedure syntax and imply concise scalar results;
+  explicitly specifying `--function-result-style named` retains named results.
 - `--compiler COMMAND`: select/configure a Fortran compiler.
 - `--ifx`: use Intel `ifx` rather than `gfortran`.
 - `--jconsole COMMAND`: select the J console command.

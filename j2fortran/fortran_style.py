@@ -730,3 +730,86 @@ def wrap_long_fortran_lines(
     for line in lines:
         wrapped.extend(wrap_long_fortran_line(line, max_length) or [line])
     return wrapped
+
+
+def remove_procedure_declaration_gaps(lines: Iterable[str]) -> list[str]:
+    """Remove blank lines between declarations and executable code."""
+
+    source = list(lines)
+    result: list[str] = []
+    procedure_header = re.compile(
+        r"^\s*(?:(?:pure|impure|elemental|recursive)\s+)*"
+        r"(?:[a-z][a-z0-9_]*(?:\s*\([^)]*\))?\s+)?"
+        r"(?:function|subroutine|program)\b",
+        re.IGNORECASE,
+    )
+    declaration = re.compile(
+        r"^\s*(?:integer|real|logical|complex|character|type\s*\(|class\s*\(|"
+        r"procedure\b)",
+        re.IGNORECASE,
+    )
+    in_procedure = False
+    declarations_seen = False
+    executable_seen = False
+    for index, line in enumerate(source):
+        stripped = line.strip()
+        if procedure_header.match(line):
+            in_procedure = True
+            declarations_seen = False
+            executable_seen = False
+            result.append(line)
+            continue
+        if in_procedure and re.match(
+            r"^\s*end\s*(?:function|subroutine|program)?(?:\s|$)",
+            line,
+            re.IGNORECASE,
+        ):
+            in_procedure = False
+            result.append(line)
+            continue
+        if not in_procedure or executable_seen:
+            result.append(line)
+            continue
+        if declaration.match(line):
+            declarations_seen = True
+            result.append(line)
+            continue
+        if not stripped:
+            if declarations_seen:
+                following = next(
+                    (candidate for candidate in source[index + 1 :] if candidate.strip()),
+                    "",
+                )
+                if following and not declaration.match(following):
+                    continue
+            result.append(line)
+            continue
+        if stripped.startswith(("!", "&")) or stripped.lower().startswith(
+            ("use ", "implicit ", "import ")
+        ):
+            result.append(line)
+            continue
+        executable_seen = declarations_seen
+        result.append(line)
+    return result
+
+
+def apply_concise_procedure_style(lines: Iterable[str]) -> list[str]:
+    """Shorten procedure attributes and endings without changing semantics."""
+
+    concise: list[str] = []
+    for line in lines:
+        line = re.sub(
+            r"^(\s*)pure\s+elemental\s+",
+            r"\1elemental ",
+            line,
+            flags=re.IGNORECASE,
+        )
+        if re.match(
+            r"^\s*end\s+(?:function|subroutine)(?:\s+[a-z][a-z0-9_]*)?\s*$",
+            line,
+            re.IGNORECASE,
+        ):
+            line = re.match(r"^(\s*)", line).group(1) + "end"
+        concise.append(line)
+    return concise
