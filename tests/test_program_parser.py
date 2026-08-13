@@ -496,6 +496,36 @@ exit 0
     assert results[5] == pytest.approx((8.0 / 3.0) ** 0.5)
 
 
+@pytest.mark.requires_gfortran
+def test_helpers_used_only_by_echo_are_exported_and_compile(tmp_path: Path) -> None:
+    compiler = shutil.which("gfortran")
+    if compiler is None:
+        pytest.skip("gfortran is not installed")
+    j_source = """values =: 1 2 3 4
+smoutput +/\\ values
+smoutput values */ values
+smoutput 3 +/\\ values
+exit 0
+"""
+    source = tmp_path / "echo_helpers_j.f90"
+    executable = tmp_path / "echo_helpers.exe"
+    program = xj2f.parse_j_source(Path("echo_helpers.ijs"), j_source)
+    generated = xj2f.emit_fortran(program)
+    source.write_text(generated, encoding="utf-8")
+
+    assert "public :: j_infix_sum_int" in generated
+    assert "j_multiplication_table_int" in generated
+    assert "j_prefix_sum_int" in generated
+    compiled = subprocess.run(
+        [compiler, "-std=f2018", str(source), "-o", str(executable)],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert compiled.returncode == 0, compiled.stdout + compiled.stderr
+
+
 def test_ranked_tacit_call_maps_over_rank_three_array_cells() -> None:
     source = """mean =: +/ % #
 cube =: 2 2 3 $ i. 12

@@ -2423,8 +2423,35 @@ def emit_fortran(
             )
         function_types[exported_name] = result_type
     top_assignments, top_helpers = _lower_top_assignments(program, function_types)
-    helpers.update(top_helpers)
-    exported_helpers = sorted(RUNTIME_PROCEDURES[helper] for helper in top_helpers)
+    echos = [item for item in program.items if isinstance(item, EchoStatement)]
+    top_types = {
+        assignment.name: assignment.type_info for assignment in top_assignments
+    }
+    top_noun_names = {
+        item.name for item in program.items if isinstance(item, Assign)
+    }
+    echo_helpers: set[str] = set()
+    for echo in echos:
+        try:
+            echo_ast = parse_expression(
+                _normalized_expression(echo.expression),
+                noun_names=top_noun_names,
+            )
+            echo_helpers.update(
+                required_runtime_helpers(
+                    echo_ast,
+                    top_types,
+                    _fortran_name,
+                    named_verbs=function_types,
+                )
+            )
+        except (ExpressionParseError, LexerError, LoweringError):
+            pass
+    helpers.update(top_helpers | echo_helpers)
+    exported_helper_keys = top_helpers | echo_helpers
+    exported_helpers = sorted(
+        RUNTIME_PROCEDURES[helper] for helper in exported_helper_keys
+    )
     if exported_helpers:
         lines.insert(lines.index(""), f"  public :: {', '.join(exported_helpers)}")
     if runtime == "external" and helpers:
@@ -2435,7 +2462,6 @@ def emit_fortran(
     lines.append(f"end module {module_name}")
     lines.append("")
 
-    echos = [item for item in program.items if isinstance(item, EchoStatement)]
     exits = [item for item in program.items if isinstance(item, ExitStatement)]
     for exit_statement in exits:
         if _normalized_expression(exit_statement.expression) != "0":
@@ -2464,12 +2490,6 @@ def emit_fortran(
     declarations = [_main_entity_declaration(assignment) for assignment in active_assignments]
     lines.extend(f"  {line}" for line in combine_declarations(declarations))
     assignment_by_name = {assignment.name: assignment for assignment in top_assignments}
-    top_types = {
-        assignment.name: assignment.type_info for assignment in top_assignments
-    }
-    top_noun_names = {
-        item.name for item in program.items if isinstance(item, Assign)
-    }
     echo_calls: list[
         tuple[
             str,
