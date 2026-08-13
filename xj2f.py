@@ -28,6 +28,7 @@ from j2fortran.ast import (
     AtopVerb,
     BondVerb,
     DyadicApply,
+    Expression,
     Group,
     ForkVerb,
     InnerProductVerb,
@@ -1803,6 +1804,38 @@ def _print_only_top_names(program: Program) -> set[str]:
     return result
 
 
+def _materialize_uniform_random_array(
+    expression: Expression, target_name: str
+) -> tuple[Expression, Expression] | None:
+    """Replace one nested random-array expression with its assignment target."""
+
+    random_shapes: list[Expression] = []
+
+    def replace(node: Expression) -> Expression:
+        random_shape = match_uniform_random_array(node)
+        if random_shape is not None:
+            random_shapes.append(random_shape)
+            return Name(target_name, node.span)
+        if isinstance(node, Group):
+            return dataclasses.replace(node, expression=replace(node.expression))
+        if isinstance(node, MonadicApply):
+            return dataclasses.replace(node, operand=replace(node.operand))
+        if isinstance(node, DyadicApply):
+            return dataclasses.replace(
+                node, left=replace(node.left), right=replace(node.right)
+            )
+        return node
+
+    transformed = replace(expression)
+    if not random_shapes:
+        return None
+    if len(random_shapes) > 1:
+        raise LoweringError(
+            "an assignment currently supports only one random array expression"
+        )
+    return random_shapes[0], transformed
+
+
 def _lower_top_assignments(
     program: Program, function_types: dict[str, TypeInfo]
 ) -> tuple[list[LoweredTopAssignment], set[str]]:
@@ -1829,8 +1862,11 @@ def _lower_top_assignments(
                 _fortran_name,
                 named_verbs=function_types,
             )
-            random_shape = match_uniform_random_array(expression)
-            if random_shape is not None:
+            materialized_random = _materialize_uniform_random_array(
+                expression, name
+            )
+            if materialized_random is not None:
+                random_shape, transformed = materialized_random
                 extents = constant_shape_extents(
                     random_shape, types, _fortran_name
                 )
@@ -1840,6 +1876,19 @@ def _lower_top_assignments(
                     )
                 rendered = ""
                 extent_text = ", ".join(str(extent) for extent in extents)
+                random_type = TypeInfo(AtomType.REAL, Shape(extents))
+                transformed_types = {**types, name: random_type}
+                after_random = (
+                    ""
+                    if isinstance(transformed, Name)
+                    and _fortran_name(transformed.identifier) == name
+                    else render_fortran_expression(
+                        transformed,
+                        _fortran_name,
+                        names=transformed_types,
+                        named_verbs=function_types,
+                    )
+                )
                 checks = tuple(
                     f'if ({extent} < 0) error stop "negative random array extent"'
                     for extent in extents
@@ -1849,6 +1898,7 @@ def _lower_top_assignments(
                     *checks,
                     f"allocate({name}({extent_text}))",
                     f"call random_number({name})",
+                    *((f"{name} = {after_random}",) if after_random else ()),
                 )
             else:
                 amendment = render_fortran_amendment(

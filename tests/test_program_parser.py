@@ -39,6 +39,26 @@ exit 0
 """
 
 
+CORRELATED_NORMALS = """n =: 100000
+c =: 2
+u1 =: 1e_12 >. ? n $ 0
+u2 =: ? n $ 0
+x =: (%: _2 * ^. u1) * 2 o. 2 * 1p1 * u2
+u3 =: 1e_12 >. ? n $ 0
+u4 =: ? n $ 0
+e =: (%: _2 * ^. u3) * 2 o. 2 * 1p1 * u4
+y =: (c * x) + e
+mean =: +/ % #
+x_centered =: x - mean x
+y_centered =: y - mean y
+empirical =: (+/ x_centered * y_centered) % %: (+/ *: x_centered) * +/ *: y_centered
+theoretical =: c % %: 1 + *: c
+smoutput empirical
+smoutput theoretical
+exit 0
+"""
+
+
 def test_monte_carlo_pi_uses_symbolic_random_array_extent() -> None:
     program = xj2f.parse_j_source(Path("pi.ijs"), MONTE_CARLO_PI)
     generated = xj2f.emit_fortran(program)
@@ -50,6 +70,20 @@ def test_monte_carlo_pi_uses_symbolic_random_array_extent() -> None:
     assert "call random_number(y)" in generated
     assert "sum(merge(1, 0, inside))" in generated
     assert "acos(-1.0_real64)" in generated
+
+
+def test_guarded_random_array_is_materialized_and_updated_in_place() -> None:
+    source = """n =: 1000
+values =: 1e_12 >. ? n $ 0
+smoutput values
+exit 0
+"""
+    program = xj2f.parse_j_source(Path("guarded_random.ijs"), source)
+    generated = xj2f.emit_fortran(program)
+
+    assert "allocate(values(n))" in generated
+    assert "call random_number(values)" in generated
+    assert "values = max(1e-12_real64, values)" in generated
 
 
 @pytest.mark.requires_gfortran
@@ -110,6 +144,33 @@ def test_normal_moments_compile_and_run(tmp_path: Path) -> None:
     assert second == pytest.approx(1.0, abs=0.05)
     assert abs(third) < 0.15
     assert fourth == pytest.approx(3.0, abs=0.3)
+
+
+@pytest.mark.requires_gfortran
+def test_correlated_normal_simulation_compiles_and_runs(tmp_path: Path) -> None:
+    compiler = shutil.which("gfortran")
+    if compiler is None:
+        pytest.skip("gfortran is not installed")
+    source = tmp_path / "correlation_j.f90"
+    executable = tmp_path / "correlation.exe"
+    program = xj2f.parse_j_source(Path("correlation.ijs"), CORRELATED_NORMALS)
+    source.write_text(xj2f.emit_fortran(program), encoding="utf-8")
+
+    compiled = subprocess.run(
+        [compiler, "-std=f2018", str(source), "-o", str(executable)],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert compiled.returncode == 0, compiled.stdout + compiled.stderr
+    completed = subprocess.run(
+        [str(executable)], cwd=tmp_path, capture_output=True, text=True, check=False
+    )
+    assert completed.returncode == 0
+    empirical, theoretical = map(float, completed.stdout.split())
+    assert empirical == pytest.approx(theoretical, abs=0.02)
+    assert theoretical == pytest.approx(2.0 / (5.0**0.5))
 
 
 def test_primes_conditional_has_structured_branches() -> None:
