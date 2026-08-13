@@ -11,6 +11,9 @@ prime-number example in this repository. When it encounters syntax outside
 the supported subset, it stops with the J source line and an explanation
 rather than silently guessing.
 
+For side-by-side explanations of common J and Fortran constructs, see the
+[J to Fortran syntax guide](j_to_fortran_syntax_guide.md).
+
 ## Quick start
 
 Install the project in an isolated environment or editable development mode:
@@ -158,6 +161,9 @@ use `--runtime-file FILE` to select another copy.
 
 ## Initially supported J subset
 
+The [J to Fortran syntax guide](j_to_fortran_syntax_guide.md) explains the
+language mappings and common pitfalls behind this implementation inventory.
+
 The parser currently recognizes:
 
 - standalone `NB.` comments, preserved as Fortran `!` comments;
@@ -211,7 +217,7 @@ The parser currently recognizes:
 - complex conjugate with monadic `+`, lowered to Fortran `conjg`;
 - complex magnitude lowered to the real-valued `abs` intrinsic;
 - complex sum and product reductions, including rank-1 matrix reductions;
-- rational literals represented as `real64` numerator/denominator quotients;
+- rational literals represented as `dp` numerator/denominator quotients;
 - integer base decode and mixed-radix encode;
 - integer polynomial evaluation through Horner's method;
 - heterogeneous top-level boxed test matches decomposed element by element;
