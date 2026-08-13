@@ -12,6 +12,106 @@ import xj2f
 ROOT = Path(__file__).resolve().parents[1]
 
 
+MONTE_CARLO_PI = """n =: 100000
+x =: ? n $ 0
+y =: ? n $ 0
+inside =: ((*: x) + *: y) <: 1
+pi_est =: 4 * (+/ inside) % n
+smoutput pi_est
+smoutput 1p1
+exit 0
+"""
+
+
+NORMAL_MOMENTS = """n =: 100000
+u1_raw =: ? n $ 0
+u1 =: 1e_12 >. u1_raw
+u2 =: ? n $ 0
+radius =: %: _2 * ^. u1
+angle =: 2 * 1p1 * u2
+z =: radius * 2 o. angle
+mean =: +/ % #
+smoutput mean z
+smoutput mean z ^ 2
+smoutput mean z ^ 3
+smoutput mean z ^ 4
+exit 0
+"""
+
+
+def test_monte_carlo_pi_uses_symbolic_random_array_extent() -> None:
+    program = xj2f.parse_j_source(Path("pi.ijs"), MONTE_CARLO_PI)
+    generated = xj2f.emit_fortran(program)
+
+    assert "real(kind=real64), allocatable :: x(:), y(:)" in generated
+    assert "allocate(x(n))" in generated
+    assert "call random_number(x)" in generated
+    assert "allocate(y(n))" in generated
+    assert "call random_number(y)" in generated
+    assert "sum(merge(1, 0, inside))" in generated
+    assert "acos(-1.0_real64)" in generated
+
+
+@pytest.mark.requires_gfortran
+def test_monte_carlo_pi_compiles_and_runs(tmp_path: Path) -> None:
+    compiler = shutil.which("gfortran")
+    if compiler is None:
+        pytest.skip("gfortran is not installed")
+    source = tmp_path / "pi_j.f90"
+    executable = tmp_path / "pi.exe"
+    program = xj2f.parse_j_source(Path("pi.ijs"), MONTE_CARLO_PI)
+    source.write_text(xj2f.emit_fortran(program), encoding="utf-8")
+
+    compiled = subprocess.run(
+        [compiler, "-std=f2018", str(source), "-o", str(executable)],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert compiled.returncode == 0, compiled.stdout + compiled.stderr
+    completed = subprocess.run(
+        [str(executable)], cwd=tmp_path, capture_output=True, text=True, check=False
+    )
+    assert completed.returncode == 0
+    estimate, actual = map(float, completed.stdout.split())
+    assert 3.0 < estimate < 3.3
+    assert actual == pytest.approx(3.141592653589793)
+
+
+@pytest.mark.requires_gfortran
+def test_normal_moments_compile_and_run(tmp_path: Path) -> None:
+    compiler = shutil.which("gfortran")
+    if compiler is None:
+        pytest.skip("gfortran is not installed")
+    source = tmp_path / "normal_j.f90"
+    executable = tmp_path / "normal.exe"
+    program = xj2f.parse_j_source(Path("normal.ijs"), NORMAL_MOMENTS)
+    generated = xj2f.emit_fortran(program)
+    source.write_text(generated, encoding="utf-8")
+
+    assert "radius = sqrt(-2 * log(u1))" in generated
+    assert "z = radius * cos(angle)" in generated
+    assert "real(kind=real64), intent(in) :: y(:)" in generated
+    compiled = subprocess.run(
+        [compiler, "-std=f2018", str(source), "-o", str(executable)],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert compiled.returncode == 0, compiled.stdout + compiled.stderr
+    completed = subprocess.run(
+        [str(executable)], cwd=tmp_path, capture_output=True, text=True, check=False
+    )
+    assert completed.returncode == 0
+    first, second, third, fourth = map(float, completed.stdout.split())
+    assert abs(first) < 0.05
+    assert second == pytest.approx(1.0, abs=0.05)
+    assert abs(third) < 0.15
+    assert fourth == pytest.approx(3.0, abs=0.3)
+
+
 def test_primes_conditional_has_structured_branches() -> None:
     path = ROOT / "primes.ijs"
     program = xj2f.parse_j_source(path, path.read_text(encoding="utf-8"))

@@ -229,7 +229,9 @@ def _is_boolean_strand(expression: Expression) -> bool:
 def _number_atom_type(expression: NumberLiteral) -> AtomType:
     if "j" in expression.text:
         return AtomType.COMPLEX
-    if "r" in expression.text or any(c in expression.text for c in ".eE"):
+    if any(c in expression.text for c in "pr") or any(
+        c in expression.text for c in ".eE"
+    ):
         return AtomType.REAL
     return AtomType.INTEGER
 
@@ -272,17 +274,38 @@ def _shapes_provably_different(left: Shape, right: Shape) -> bool:
     )
 
 
-def constant_shape_extents(expression: Expression) -> tuple[int, ...] | None:
+def constant_shape_extents(
+    expression: Expression,
+    names: Mapping[str, TypeInfo] | None = None,
+    name_transform: Callable[[str], str] = str.lower,
+) -> tuple[int | str, ...] | None:
     expression = ungroup(expression)
     if isinstance(expression, NumberLiteral):
         values = (integer_value(expression),)
     elif isinstance(expression, Strand):
         values = tuple(integer_value(item) for item in expression.items)
+    elif isinstance(expression, Name) and names is not None:
+        transformed = name_transform(expression.identifier)
+        if names.get(transformed) != TypeInfo(AtomType.INTEGER):
+            return None
+        return (transformed,)
     else:
         return None
     if any(value is None or value < 0 for value in values):
         return None
     return tuple(value for value in values if value is not None)
+
+
+def match_uniform_random_array(expression: Expression) -> Expression | None:
+    """Return the shape in J's uniform random-array idiom `? shape $ 0`."""
+
+    operand = monad(expression, "?")
+    if operand is None:
+        return None
+    reshaped = dyad(operand, "$")
+    if reshaped is None or integer_value(reshaped[1]) != 0:
+        return None
+    return reshaped[0]
 
 
 def _constant_index_axis(expression: Expression) -> IndexAxis | None:
@@ -704,6 +727,12 @@ def infer_type(
         spelling = primitive_spelling(expression.verb)
         if spelling == "$":
             return TypeInfo(AtomType.INTEGER, Shape.vector(operand_type.rank))
+        if spelling == "?":
+            if match_uniform_random_array(expression) is None:
+                raise LoweringError(
+                    "random generation currently supports only '? shape $ 0'"
+                )
+            return TypeInfo(AtomType.REAL, operand_type.shape)
         if spelling == "#":
             if operand_type.rank < 1:
                 raise LoweringError("tally currently requires an array operand")
@@ -823,6 +852,10 @@ def infer_type(
                 raise LoweringError("negative constant iota bounds are not supported")
             return TypeInfo(AtomType.INTEGER, Shape.vector(length))
         if spelling == "%:":
+            return TypeInfo(AtomType.REAL, operand_type.shape)
+        if spelling == "^.":
+            if operand_type.atom_type not in {AtomType.INTEGER, AtomType.REAL}:
+                raise LoweringError("natural logarithm requires a real numeric operand")
             return TypeInfo(AtomType.REAL, operand_type.shape)
         if spelling in {"<.", ">."}:
             return TypeInfo(AtomType.INTEGER, operand_type.shape)
@@ -1053,7 +1086,9 @@ def infer_type(
                 )
             return TypeInfo(source_type.atom_type, result_shape)
         if spelling == "$":
-            extents = constant_shape_extents(expression.left)
+            extents = constant_shape_extents(
+                expression.left, names, name_transform
+            )
             if extents is None:
                 raise LoweringError(
                     "domain error: reshape currently requires a constant nonnegative "
@@ -1292,16 +1327,30 @@ def infer_type(
             return TypeInfo(AtomType.INTEGER, Shape.vector())
         if spelling == "^":
             if (
-                left_type.atom_type is not AtomType.INTEGER
+                left_type.atom_type not in {
+                    AtomType.INTEGER,
+                    AtomType.REAL,
+                    AtomType.COMPLEX,
+                }
                 or right_type.atom_type is not AtomType.INTEGER
             ):
-                raise LoweringError("power currently requires integer arguments")
+                raise LoweringError(
+                    "power currently requires a numeric base and integer exponent"
+                )
             exponents = _integer_values(expression.right)
             if exponents is None or any(exponent < 0 for exponent in exponents):
                 raise LoweringError(
                     "integer power currently requires constant nonnegative exponents"
                 )
-            return TypeInfo(AtomType.INTEGER, shape)
+            return TypeInfo(left_type.atom_type, shape)
+        if spelling == "o.":
+            if integer_value(expression.left) != 2:
+                raise LoweringError(
+                    "circle function currently supports only cosine (2 o. y)"
+                )
+            if right_type.atom_type not in {AtomType.INTEGER, AtomType.REAL}:
+                raise LoweringError("cosine requires a real numeric operand")
+            return TypeInfo(AtomType.REAL, shape)
         if spelling in {"<.", ">."}:
             if (
                 left_type.atom_type not in {AtomType.INTEGER, AtomType.REAL}
@@ -1387,6 +1436,22 @@ _NOT_PRECEDENCE = 25
 def _fortran_number(spelling: str) -> str:
     if spelling in {"_", "_."}:
         raise LoweringError(f"special J number {spelling!r} is not supported")
+    if "p" in spelling:
+        coefficient, exponent = spelling.split("p", 1)
+        coefficient = coefficient.replace("_", "-")
+        exponent_value = int(exponent.replace("_", "-"))
+        pi_value = "acos(-1.0_real64)"
+        if exponent_value == 0:
+            power = "1.0_real64"
+        elif exponent_value == 1:
+            power = pi_value
+        else:
+            power = f"{pi_value}**{exponent_value}"
+        if coefficient == "1":
+            return power
+        if not any(character in coefficient for character in ".eE"):
+            coefficient += ".0"
+        return f"{coefficient}_real64 * {power}"
     if "r" in spelling:
         numerator, denominator = spelling.split("r", 1)
         numerator = numerator.replace("_", "-")
@@ -1597,6 +1662,8 @@ def _render_fortran_expression(
                 _ATOM_PRECEDENCE,
                 "call",
             )
+        if spelling == "^.":
+            return f"log({operand})", _ATOM_PRECEDENCE, "call"
         if spelling == "<.":
             return f"floor({operand})", _ATOM_PRECEDENCE, "call"
         if spelling == ">.":
@@ -1767,6 +1834,15 @@ def _render_fortran_expression(
             left = _parenthesize(left, left_precedence, _POWER_PRECEDENCE)
             right = _parenthesize(right, right_precedence, _POWER_PRECEDENCE)
             return f"{left}**{right}", _POWER_PRECEDENCE, "**"
+        if spelling == "o.":
+            if integer_value(expression.left) != 2:
+                raise LoweringError(
+                    "circle function currently supports only cosine (2 o. y)"
+                )
+            right, _, _ = _render_fortran_expression(
+                expression.right, name_transform
+            )
+            return f"cos({right})", _ATOM_PRECEDENCE, "call"
         if spelling in {"<.", ">."}:
             left, _, _ = _render_fortran_expression(expression.left, name_transform)
             right, _, _ = _render_fortran_expression(expression.right, name_transform)
@@ -1936,6 +2012,23 @@ def render_fortran_expression(
                 "*.": "all",
             }[ranked_reduction]
             return f"{intrinsic}({operand}, dim={operand_type.rank})"
+        if isinstance(bare_expression.verb, AdverbApplication):
+            reduction = primitive_spelling(bare_expression.verb.operand)
+            if bare_expression.verb.adverb == "/" and reduction == "+":
+                operand_type = infer_type(
+                    bare_expression.operand,
+                    names,
+                    name_transform,
+                    named_verbs=named_verbs,
+                )
+                if operand_type.atom_type is AtomType.LOGICAL:
+                    operand = render_fortran_expression(
+                        bare_expression.operand,
+                        name_transform,
+                        names=names,
+                        named_verbs=named_verbs,
+                    )
+                    return f"sum(merge(1, 0, {operand}))"
     if isinstance(bare_expression, DyadicApply) and names is not None:
         table = table_spelling(bare_expression.verb)
         if table in {"+", "=", "<"}:
@@ -2204,7 +2297,9 @@ def render_fortran_expression(
         return _render_index_selection(selection, source_type, source)
     reshaped = dyad(expression, "$")
     if reshaped is not None and names is not None:
-        extents = constant_shape_extents(reshaped[0])
+        extents = constant_shape_extents(
+            reshaped[0], names, name_transform
+        )
         if extents is None:
             raise LoweringError(
                 "domain error: reshape currently requires a constant nonnegative integer shape"
@@ -2225,8 +2320,12 @@ def render_fortran_expression(
             if all(isinstance(extent, int) for extent in source_type.shape.extents)
             else None
         )
-        target_size = math.prod(extents)
-        if source_size is None or source_size < target_size:
+        target_size = (
+            math.prod(extents)
+            if all(isinstance(extent, int) for extent in extents)
+            else None
+        )
+        if target_size is None or source_size is None or source_size < target_size:
             arguments.append(f"pad={source_array}")
         if len(extents) > 1:
             order = ", ".join(str(axis) for axis in range(len(extents), 0, -1))
@@ -2322,6 +2421,53 @@ def render_fortran_expression(
                 named_verbs=named_verbs,
             )
             return f"pack({values}, {selector})"
+    if isinstance(bare_expression, DyadicApply) and names is not None:
+        spelling = primitive_spelling(bare_expression.verb)
+        if spelling in _DYADIC_FORTRAN:
+            infer_type(
+                bare_expression,
+                names,
+                name_transform,
+                named_verbs=named_verbs,
+            )
+            operator = _DYADIC_FORTRAN[spelling]
+            precedence = _FORTRAN_PRECEDENCE[operator]
+            left = render_fortran_expression(
+                bare_expression.left,
+                name_transform,
+                names=names,
+                named_verbs=named_verbs,
+            )
+            if spelling == "*" and _same_expression(
+                bare_expression.left, bare_expression.right
+            ):
+                _, left_precedence, _ = _render_fortran_expression(
+                    bare_expression.left, name_transform
+                )
+                left = _parenthesize(
+                    left, left_precedence, _POWER_PRECEDENCE
+                )
+                return f"{left}**2"
+            right = render_fortran_expression(
+                bare_expression.right,
+                name_transform,
+                names=names,
+                named_verbs=named_verbs,
+            )
+            _, left_precedence, left_operator = _render_fortran_expression(
+                bare_expression.left, name_transform
+            )
+            _, right_precedence, right_operator = _render_fortran_expression(
+                bare_expression.right, name_transform
+            )
+            left = _parenthesize(left, left_precedence, precedence)
+            right_requires = precedence
+            if right_precedence == precedence:
+                associative = operator in {"+", "*", ".and.", ".or."}
+                if not (associative and right_operator == operator):
+                    right_requires += 1
+            right = _parenthesize(right, right_precedence, right_requires)
+            return f"{left} {operator} {right}"
     rendered, _, _ = _render_fortran_expression(bare_expression, name_transform)
     return rendered
 

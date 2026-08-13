@@ -1300,3 +1300,44 @@ def test_j_negative_numbers_are_rendered_as_fortran_signs() -> None:
 def test_unsupported_special_number_is_explicit() -> None:
     with pytest.raises(LoweringError, match="special J number"):
         render_fortran_expression(parse_expression("_"))
+
+
+@pytest.mark.parametrize(
+    ("j_source", "fortran"),
+    [
+        ("1p1", "acos(-1.0_real64)"),
+        ("2p1", "2.0_real64 * acos(-1.0_real64)"),
+        ("1p2", "acos(-1.0_real64)**2"),
+    ],
+)
+def test_pi_numeric_constants(j_source: str, fortran: str) -> None:
+    expression = parse_expression(j_source)
+
+    assert infer_type(expression, {}).atom_type is AtomType.REAL
+    assert render_fortran_expression(expression) == fortran
+
+
+@pytest.mark.parametrize(
+    ("j_source", "fortran"),
+    [("^. values", "log(values)"), ("2 o. values", "cos(values)")],
+)
+def test_normal_transform_primitives_preserve_vector_shape(
+    j_source: str, fortran: str
+) -> None:
+    expression = parse_expression(j_source)
+    names = {"values": TypeInfo(AtomType.REAL, Shape.vector("n"))}
+
+    assert infer_type(expression, names) == TypeInfo(
+        AtomType.REAL, Shape.vector("n")
+    )
+    assert render_fortran_expression(expression, names=names) == fortran
+
+
+def test_real_vector_integer_power_is_elemental() -> None:
+    expression = parse_expression("values ^ 4")
+    names = {"values": TypeInfo(AtomType.REAL, Shape.vector("n"))}
+
+    assert infer_type(expression, names) == TypeInfo(
+        AtomType.REAL, Shape.vector("n")
+    )
+    assert render_fortran_expression(expression, names=names) == "values**4"

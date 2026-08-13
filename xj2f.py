@@ -57,6 +57,7 @@ from j2fortran.fortran_style import (
 from j2fortran.lexer import LexerError
 from j2fortran.lowering import (
     LoweringError,
+    constant_shape_extents,
     infer_type,
     integer_value,
     match_append_row,
@@ -66,6 +67,7 @@ from j2fortran.lowering import (
     match_iota_sequence,
     match_named_infix_application,
     match_ranked_named_application,
+    match_uniform_random_array,
     match_zero_integer_matrix,
     required_runtime_helpers,
     render_fortran_amendment,
@@ -1827,24 +1829,46 @@ def _lower_top_assignments(
                 _fortran_name,
                 named_verbs=function_types,
             )
-            amendment = render_fortran_amendment(
-                expression,
-                name,
-                types,
-                _fortran_name,
-                named_verbs=function_types,
-            )
-            if amendment is None:
-                rendered = render_fortran_expression(
+            random_shape = match_uniform_random_array(expression)
+            if random_shape is not None:
+                extents = constant_shape_extents(
+                    random_shape, types, _fortran_name
+                )
+                if extents is None:
+                    raise LoweringError(
+                        "random array shape requires nonnegative integer extents"
+                    )
+                rendered = ""
+                extent_text = ", ".join(str(extent) for extent in extents)
+                checks = tuple(
+                    f'if ({extent} < 0) error stop "negative random array extent"'
+                    for extent in extents
+                    if isinstance(extent, str)
+                )
+                updates = (
+                    *checks,
+                    f"allocate({name}({extent_text}))",
+                    f"call random_number({name})",
+                )
+            else:
+                amendment = render_fortran_amendment(
                     expression,
+                    name,
+                    types,
                     _fortran_name,
-                    names=types,
                     named_verbs=function_types,
                 )
-                updates: tuple[str, ...] = ()
-            else:
-                rendered, update = amendment
-                updates = (update,)
+                if amendment is None:
+                    rendered = render_fortran_expression(
+                        expression,
+                        _fortran_name,
+                        names=types,
+                        named_verbs=function_types,
+                    )
+                    updates = ()
+                else:
+                    rendered, update = amendment
+                    updates = (update,)
         except (LexerError, ExpressionParseError, LoweringError, ValueError) as exc:
             raise _error_at(UnsupportedJError, assignment.line, str(exc)) from exc
         if type_info.atom_type not in {
@@ -2687,7 +2711,8 @@ def emit_fortran(
     lines.append("")
     for assignment in active_assignments:
         append_comments(lines, assignment.line.number, indent="  ")
-        lines.append(f"  {assignment.name} = {assignment.expression}")
+        if assignment.expression:
+            lines.append(f"  {assignment.name} = {assignment.expression}")
         lines.extend(f"  {update}" for update in assignment.updates)
     for index, (expression, result_type, comment_targets, mapped_echo) in enumerate(
         echo_calls, 1
@@ -3305,6 +3330,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         elif not args.tee and not args.tee_both and args.emit_ast != "-":
             print(output_path)
 
+        comparison_failed = False
         if compare:
             j_tokens = _normalized_output(j_output)
             fortran_tokens = _normalized_output(fortran_output)
@@ -3337,8 +3363,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                     f"Fortran={f_value!r}{difference}",
                     file=sys.stderr,
                 )
-                return 1
-            print(f"outputs match ({len(j_tokens)} tokens)", file=sys.stderr)
+                comparison_failed = True
+            else:
+                print(f"outputs match ({len(j_tokens)} tokens)", file=sys.stderr)
 
         if args.time or args.time_both:
             print(f"translation: {translate_seconds:.6f} s", file=sys.stderr)
@@ -3349,7 +3376,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 f"Fortran execution: {fortran_seconds / args.run_repeat:.6f} s average",
                 file=sys.stderr,
             )
-        return 0
+        return 1 if comparison_failed else 0
     except J2FError as exc:
         parser.exit(2, f"xj2f.py: error: {exc}\n")
 

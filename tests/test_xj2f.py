@@ -116,6 +116,30 @@ def test_diff_tolerances_are_configurable() -> None:
     assert args.diff_atol == pytest.approx(1e-9)
 
 
+def test_time_both_prints_timings_after_output_mismatch(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    source = tmp_path / "timed.ijs"
+    source.write_text("smoutput 1.0\nexit 0\n", encoding="utf-8")
+    monkeypatch.setattr(xj2f, "compile_fortran", lambda *args: None)
+    monkeypatch.setattr(xj2f, "_j_command", lambda *args: ["jconsole"])
+
+    def execute(*args, label: str, **kwargs) -> tuple[str, float]:
+        return ("3.14\n", 0.2) if label == "J" else ("3.0\n", 0.1)
+
+    monkeypatch.setattr(xj2f, "_execute_repeated", execute)
+
+    assert xj2f.main([str(source), "--time-both"]) == 1
+    error = capsys.readouterr().err
+    assert "output mismatch at token 1" in error
+    assert "translation:" in error
+    assert "compilation:" in error
+    assert "J execution: 0.200000 s average" in error
+    assert "Fortran execution: 0.100000 s average" in error
+
+
 def test_j_command_uses_jconsole_from_path_and_ignores_adjacent_shortcut(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

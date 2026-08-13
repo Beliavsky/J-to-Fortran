@@ -43,6 +43,14 @@ def test_membership_is_an_alphabetic_primitive() -> None:
     ]
 
 
+def test_circle_is_an_alphabetic_primitive() -> None:
+    assert significant("2 o. angle") == [
+        (TokenKind.NUMBER, "2"),
+        (TokenKind.PRIMITIVE, "o."),
+        (TokenKind.NAME, "angle"),
+    ]
+
+
 def test_control_words_and_loop_names() -> None:
     tokens = significant("for_item. 1 + i. y do.\nif. y <: 3 do.\nend.")
     controls = [value for kind, value in tokens if kind is TokenKind.CONTROL]
