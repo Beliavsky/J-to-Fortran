@@ -123,6 +123,8 @@ end program sumsq_j
   default, or concise type-prefixed syntax for eligible scalar functions.
 - `--concise`: shorten procedure syntax and imply concise scalar results;
   explicitly specifying `--function-result-style named` retains named results.
+- `--internal-procedures`: place generated application procedures after the
+  main program's `contains` statement instead of in a separate module.
 - `--compiler COMMAND`: select/configure a Fortran compiler.
 - `--ifx`: use Intel `ifx` rather than `gfortran`.
 - `--jconsole COMMAND`: select the J console command.

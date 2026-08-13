@@ -58,6 +58,7 @@ from j2fortran.fortran_style import (
     coalesce_simple_declaration_lines,
     procedure_prefix,
     remove_procedure_declaration_gaps,
+    move_module_procedures_into_program,
     replace_nonadvancing_write_loops,
     safe_fortran_identifier,
     wrap_fortran_comment,
@@ -3171,6 +3172,7 @@ def _emit_numeric_csv_statistics_fortran(
     *,
     runtime: str,
     concise: bool = False,
+    internal_procedures: bool = False,
 ) -> str:
     """Emit the recognized numeric CSV return-statistics workflow."""
 
@@ -3308,6 +3310,8 @@ def _emit_numeric_csv_statistics_fortran(
     lines = replace_nonadvancing_write_loops(lines)
     lines = combine_adjacent_nonadvancing_writes(lines)
     lines = collapse_short_fortran_continuations(lines)
+    if internal_procedures:
+        lines = move_module_procedures_into_program(lines)
     lines = remove_procedure_declaration_gaps(lines)
     if concise:
         lines = apply_concise_procedure_style(lines)
@@ -3320,6 +3324,7 @@ def _emit_annual_csv_statistics_fortran(
     *,
     runtime: str,
     concise: bool = False,
+    internal_procedures: bool = False,
 ) -> str:
     """Emit numeric CSV return statistics grouped by calendar year."""
 
@@ -3502,6 +3507,8 @@ def _emit_annual_csv_statistics_fortran(
     lines = replace_nonadvancing_write_loops(lines)
     lines = combine_adjacent_nonadvancing_writes(lines)
     lines = collapse_short_fortran_continuations(lines)
+    if internal_procedures:
+        lines = move_module_procedures_into_program(lines)
     lines = remove_procedure_declaration_gaps(lines)
     if concise:
         lines = apply_concise_procedure_style(lines)
@@ -3667,6 +3674,7 @@ def _emit_return_mixture_fortran(
     *,
     runtime: str,
     concise: bool = False,
+    internal_procedures: bool = False,
 ) -> str:
     """Emit the recognized full-covariance return-mixture workflow."""
 
@@ -3808,6 +3816,8 @@ def _emit_return_mixture_fortran(
     lines = replace_nonadvancing_write_loops(lines)
     lines = combine_adjacent_nonadvancing_writes(lines)
     lines = collapse_short_fortran_continuations(lines)
+    if internal_procedures:
+        lines = move_module_procedures_into_program(lines)
     lines = remove_procedure_declaration_gaps(lines)
     if concise:
         lines = apply_concise_procedure_style(lines)
@@ -3821,6 +3831,7 @@ def emit_fortran(
     source_comments: str = "commented",
     function_result_style: str | None = None,
     concise: bool = False,
+    internal_procedures: bool = False,
 ) -> str:
     if runtime not in {"embedded", "external"}:
         raise J2FError(f"unknown runtime mode {runtime!r}")
@@ -3834,17 +3845,20 @@ def emit_fortran(
     return_mixture = _return_mixture_spec(program)
     if return_mixture is not None:
         return _emit_return_mixture_fortran(
-            program, return_mixture, runtime=runtime, concise=concise
+            program, return_mixture, runtime=runtime, concise=concise,
+            internal_procedures=internal_procedures,
         )
     annual_csv_statistics = _annual_csv_statistics_spec(program)
     if annual_csv_statistics is not None:
         return _emit_annual_csv_statistics_fortran(
-            program, annual_csv_statistics, runtime=runtime, concise=concise
+            program, annual_csv_statistics, runtime=runtime, concise=concise,
+            internal_procedures=internal_procedures,
         )
     csv_statistics = _numeric_csv_statistics_spec(program)
     if csv_statistics is not None:
         return _emit_numeric_csv_statistics_fortran(
-            program, csv_statistics, runtime=runtime, concise=concise
+            program, csv_statistics, runtime=runtime, concise=concise,
+            internal_procedures=internal_procedures,
         )
     top_expressions = [
         item for item in program.items if isinstance(item, ExpressionStatement)
@@ -4402,6 +4416,8 @@ def emit_fortran(
     lines = replace_nonadvancing_write_loops(lines)
     lines = combine_adjacent_nonadvancing_writes(lines)
     lines = collapse_short_fortran_continuations(lines)
+    if internal_procedures:
+        lines = move_module_procedures_into_program(lines)
     lines = remove_procedure_declaration_gaps(lines)
     if concise:
         lines = apply_concise_procedure_style(lines)
@@ -4416,6 +4432,7 @@ def transpile_path(
     source_comments: str = "commented",
     function_result_style: str | None = None,
     concise: bool = False,
+    internal_procedures: bool = False,
 ) -> str:
     try:
         text = input_path.read_text(encoding="utf-8")
@@ -4427,6 +4444,7 @@ def transpile_path(
         source_comments=source_comments,
         function_result_style=function_result_style,
         concise=concise,
+        internal_procedures=internal_procedures,
     )
 
 
@@ -4798,6 +4816,11 @@ def build_argument_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="shorten procedure syntax and imply concise scalar results",
     )
+    parser.add_argument(
+        "--internal-procedures",
+        action="store_true",
+        help="place generated procedures inside the main program",
+    )
     parser.add_argument("--compile", action="store_true", help="compile generated Fortran")
     parser.add_argument("--run", action="store_true", help="compile and run generated Fortran")
     parser.add_argument("--run-j", action="store_true", help="run the original J script")
@@ -4890,6 +4913,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             source_comments=args.source_comments,
             function_result_style=args.function_result_style,
             concise=args.concise,
+            internal_procedures=args.internal_procedures,
         )
         translate_seconds = time.perf_counter() - translate_started
 

@@ -9,6 +9,7 @@ from j2fortran.fortran_style import (
     combine_adjacent_row_extension_assignments,
     combine_declarations,
     coalesce_simple_declaration_lines,
+    move_module_procedures_into_program,
     procedure_prefix,
     replace_nonadvancing_write_loops,
     remove_procedure_declaration_gaps,
@@ -321,6 +322,45 @@ def test_concise_procedure_style_shortens_attributes_and_endings() -> None:
         "pure subroutine update(x)",
         "end",
         "end module example",
+    ]
+
+
+def test_module_procedures_can_be_moved_inside_main_program() -> None:
+    lines = [
+        "module example_j_mod",
+        "  use, intrinsic :: iso_fortran_env, only: dp => real64",
+        "  implicit none",
+        "  private",
+        "  public :: square",
+        "contains",
+        "pure elemental integer function square(y)",
+        "  integer, intent(in) :: y",
+        "  square = y**2",
+        "end function square",
+        "end module example_j_mod",
+        "",
+        "program example_j",
+        "  use example_j_mod, only: square",
+        "  implicit none",
+        "  integer :: value",
+        "  value = square(3)",
+        "end program example_j",
+    ]
+
+    assert move_module_procedures_into_program(lines) == [
+        "program example_j",
+        "  use, intrinsic :: iso_fortran_env, only: dp => real64",
+        "  implicit none",
+        "  integer :: value",
+        "  value = square(3)",
+        "",
+        "contains",
+        "",
+        "pure elemental integer function square(y)",
+        "  integer, intent(in) :: y",
+        "  square = y**2",
+        "end function square",
+        "end program example_j",
     ]
 
 

@@ -183,6 +183,11 @@ keeps named results while retaining the other concise formatting. Generated
 procedures omit blank lines between declarations and executable statements in
 all styles.
 
+With `--internal-procedures`, translated application procedures are emitted
+after `contains` in the main program. This can make a standalone translation
+shorter by removing its generated application module and corresponding `use`
+statement. Helpers selected with `--runtime external` remain in `j.f90`.
+
 ## Vectors, Matrices, and Shape
 
 Spaces form a J numeric list:

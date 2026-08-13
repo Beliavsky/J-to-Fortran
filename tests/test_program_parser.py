@@ -682,6 +682,27 @@ def test_concise_preset_can_be_overridden_with_named_result_style() -> None:
     assert "end function square" not in named
 
 
+def test_internal_procedures_places_translated_function_after_contains() -> None:
+    source = """square =: 3 : 0
+  y * y
+)
+smoutput square 3
+exit 0
+"""
+
+    generated = xj2f.emit_fortran(
+        xj2f.parse_j_source(Path("square.ijs"), source),
+        internal_procedures=True,
+    )
+
+    assert "module square_j_mod" not in generated
+    assert "use square_j_mod" not in generated
+    assert "program square_j" in generated
+    assert generated.index("write (*") < generated.index("\ncontains\n")
+    assert generated.index("\ncontains\n") < generated.index("function square(y)")
+    assert "end program square_j" in generated
+
+
 def test_concise_result_style_falls_back_for_array_and_recursive_results() -> None:
     source = """duplicate =: 3 : 0
   y , y

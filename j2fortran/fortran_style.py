@@ -813,3 +813,179 @@ def apply_concise_procedure_style(lines: Iterable[str]) -> list[str]:
             line = re.match(r"^(\s*)", line).group(1) + "end"
         concise.append(line)
     return concise
+
+
+def move_module_procedures_into_program(lines: Iterable[str]) -> list[str]:
+    """Move one generated module's procedures under its main program."""
+
+    source = list(lines)
+    module_index = next(
+        (
+            index
+            for index, line in enumerate(source)
+            if re.match(r"^module\s+[a-z][a-z0-9_]*\s*$", line, re.IGNORECASE)
+        ),
+        None,
+    )
+    if module_index is None:
+        return source
+    module_match = re.match(
+        r"^module\s+([a-z][a-z0-9_]*)\s*$", source[module_index], re.IGNORECASE
+    )
+    module_name = module_match.group(1)
+    contains_index = next(
+        (
+            index
+            for index in range(module_index + 1, len(source))
+            if source[index].strip().lower() == "contains"
+        ),
+        None,
+    )
+    module_end = next(
+        (
+            index
+            for index in range(module_index + 1, len(source))
+            if re.match(r"^end\s+module\b", source[index], re.IGNORECASE)
+        ),
+        None,
+    )
+    if contains_index is None or module_end is None:
+        return source
+    program_index = next(
+        (
+            index
+            for index in range(module_end + 1, len(source))
+            if re.match(r"^program\s+[a-z][a-z0-9_]*\s*$", source[index], re.IGNORECASE)
+        ),
+        None,
+    )
+    if program_index is None:
+        return source
+    program_end = next(
+        (
+            index
+            for index in range(program_index + 1, len(source))
+            if re.match(r"^end\s+program\b", source[index], re.IGNORECASE)
+        ),
+        None,
+    )
+    if program_end is None:
+        return source
+
+    module_spec = source[module_index + 1 : contains_index]
+    procedures = source[contains_index + 1 : module_end]
+    program_body = source[program_index + 1 : program_end]
+    existing_contains = next(
+        (
+            index
+            for index, line in enumerate(program_body)
+            if line.strip().lower() == "contains"
+        ),
+        None,
+    )
+    if existing_contains is None:
+        program_main = program_body
+        existing_procedures: list[str] = []
+    else:
+        program_main = program_body[:existing_contains]
+        existing_procedures = program_body[existing_contains + 1 :]
+    generated_use = re.compile(
+        rf"^\s*use\s+{re.escape(module_name)}\b", re.IGNORECASE
+    )
+    use_line = re.compile(r"^\s*use\b", re.IGNORECASE)
+    def use_blocks(section: list[str]) -> list[list[str]]:
+        blocks: list[list[str]] = []
+        index = 0
+        while index < len(section):
+            if not use_line.match(section[index]):
+                index += 1
+                continue
+            block = [section[index]]
+            while block[-1].rstrip().endswith("&") and index + 1 < len(section):
+                index += 1
+                block.append(section[index])
+            if not generated_use.match(block[0]):
+                blocks.append(block)
+            index += 1
+        return blocks
+
+    uses: list[str] = []
+    seen_use_blocks: set[tuple[str, ...]] = set()
+    for block in [*use_blocks(module_spec), *use_blocks(program_main)]:
+        key = tuple(line.strip().lower() for line in block)
+        if key not in seen_use_blocks:
+            seen_use_blocks.add(key)
+            uses.extend(block)
+
+    interfaces: list[str] = []
+    declarations: list[str] = []
+    in_interface = False
+    for line in module_spec:
+        stripped = line.strip()
+        lowered = stripped.lower()
+        if lowered.startswith("interface "):
+            in_interface = True
+        if in_interface:
+            interfaces.append(
+                re.sub(
+                    r"^(\s*)module\s+procedure\s+",
+                    r"\1procedure :: ",
+                    line,
+                    flags=re.IGNORECASE,
+                )
+            )
+            if lowered.startswith("end interface"):
+                in_interface = False
+            continue
+        if (
+            not stripped
+            or use_line.match(line)
+            or lowered == "implicit none"
+            or lowered == "private"
+            or lowered.startswith("public ::")
+        ):
+            continue
+        declarations.append(line)
+
+    main_remainder: list[str] = []
+    index = 0
+    while index < len(program_main):
+        line = program_main[index]
+        if use_line.match(line):
+            while line.rstrip().endswith("&") and index + 1 < len(program_main):
+                index += 1
+                line = program_main[index]
+            index += 1
+            continue
+        if line.strip().lower() != "implicit none":
+            main_remainder.append(line)
+        index += 1
+    while main_remainder and not main_remainder[0].strip():
+        main_remainder.pop(0)
+    while procedures and not procedures[0].strip():
+        procedures.pop(0)
+    while procedures and not procedures[-1].strip():
+        procedures.pop()
+    while existing_procedures and not existing_procedures[0].strip():
+        existing_procedures.pop(0)
+    while existing_procedures and not existing_procedures[-1].strip():
+        existing_procedures.pop()
+
+    result = source[:module_index]
+    result.append(source[program_index])
+    result.extend(uses)
+    result.append("  implicit none")
+    if interfaces:
+        result.extend(interfaces)
+    result.extend(declarations)
+    result.extend(main_remainder)
+    if result and result[-1].strip():
+        result.append("")
+    result.append("contains")
+    if procedures:
+        result.extend(["", *procedures])
+    if existing_procedures:
+        result.extend(["", *existing_procedures])
+    result.append(source[program_end])
+    result.extend(source[program_end + 1 :])
+    return result
