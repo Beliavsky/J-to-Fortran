@@ -12,6 +12,7 @@ from .ast import (
     BondVerb,
     DyadicApply,
     Expression,
+    ForeignVerb,
     ForkVerb,
     Group,
     InnerProductVerb,
@@ -85,7 +86,9 @@ class ExpressionParser:
 
         if not self.tokens:
             raise ValueError("cannot parse an empty J verb")
-        if self._peek().kind is TokenKind.NUMBER:
+        if self._foreign_verb_end(self.index) is not None:
+            verb = self._verb()
+        elif self._peek().kind is TokenKind.NUMBER:
             noun = self._noun()
             if (
                 self.index >= len(self.tokens)
@@ -168,6 +171,68 @@ class ExpressionParser:
         raise ExpressionParseError(f"expected a noun, got {token.value!r}", token)
 
     def _verb(self, *, allow_inner_product: bool = True) -> Verb:
+        foreign_end = self._foreign_verb_end(self.index)
+        if foreign_end is not None:
+            family = self._take()
+            self._take()
+            service = self._take()
+            verb: Verb = ForeignVerb(
+                int(family.value),
+                int(service.value),
+                _cover(_token_span(family), _token_span(service)),
+            )
+        else:
+            verb = self._simple_verb(allow_inner_product=allow_inner_product)
+
+        while self.index < len(self.tokens):
+            modifier = self._peek()
+            if modifier.kind is not TokenKind.PRIMITIVE:
+                break
+            if modifier.value in _ADVERBS:
+                self._take()
+                verb = AdverbApplication(
+                    modifier.value,
+                    verb,
+                    _cover(verb.span, _token_span(modifier)),
+                )
+                continue
+            if modifier.value == '"':
+                self._take()
+                if self.index >= len(self.tokens) or self._peek().kind is not TokenKind.NUMBER:
+                    raise ExpressionParseError("rank conjunction requires a numeric rank", modifier)
+                rank_tokens = []
+                while (
+                    self.index < len(self.tokens)
+                    and self._peek().kind is TokenKind.NUMBER
+                ):
+                    rank_tokens.append(self._take())
+                rank_items = tuple(
+                    NumberLiteral(token.value, _token_span(token))
+                    for token in rank_tokens
+                )
+                rank = (
+                    rank_items[0]
+                    if len(rank_items) == 1
+                    else Strand(
+                        rank_items,
+                        _cover(rank_items[0].span, rank_items[-1].span),
+                    )
+                )
+                verb = RankApplication(verb, rank, _cover(verb.span, rank.span))
+                continue
+            break
+        if (
+            allow_inner_product
+            and self.index < len(self.tokens)
+            and self._peek().kind is TokenKind.PRIMITIVE
+            and self._peek().value == "."
+        ):
+            self._take()
+            product = self._verb(allow_inner_product=False)
+            return InnerProductVerb(verb, product, _cover(verb.span, product.span))
+        return verb
+
+    def _simple_verb(self, *, allow_inner_product: bool = True) -> Verb:
         token = self._peek()
         amend = self._amend_verb_end(self.index)
         if amend is not None:
@@ -225,52 +290,6 @@ class ExpressionParser:
         else:
             raise ExpressionParseError(f"expected a verb, got {token.value!r}", token)
 
-        while self.index < len(self.tokens):
-            modifier = self._peek()
-            if modifier.kind is not TokenKind.PRIMITIVE:
-                break
-            if modifier.value in _ADVERBS:
-                self._take()
-                verb = AdverbApplication(
-                    modifier.value,
-                    verb,
-                    _cover(verb.span, _token_span(modifier)),
-                )
-                continue
-            if modifier.value == '"':
-                self._take()
-                if self.index >= len(self.tokens) or self._peek().kind is not TokenKind.NUMBER:
-                    raise ExpressionParseError("rank conjunction requires a numeric rank", modifier)
-                rank_tokens = []
-                while (
-                    self.index < len(self.tokens)
-                    and self._peek().kind is TokenKind.NUMBER
-                ):
-                    rank_tokens.append(self._take())
-                rank_items = tuple(
-                    NumberLiteral(token.value, _token_span(token))
-                    for token in rank_tokens
-                )
-                rank = (
-                    rank_items[0]
-                    if len(rank_items) == 1
-                    else Strand(
-                        rank_items,
-                        _cover(rank_items[0].span, rank_items[-1].span),
-                    )
-                )
-                verb = RankApplication(verb, rank, _cover(verb.span, rank.span))
-                continue
-            break
-        if (
-            allow_inner_product
-            and self.index < len(self.tokens)
-            and self._peek().kind is TokenKind.PRIMITIVE
-            and self._peek().value == "."
-        ):
-            self._take()
-            product = self._verb(allow_inner_product=False)
-            return InnerProductVerb(verb, product, _cover(verb.span, product.span))
         return verb
 
     def _matching_parenthesis(self, start: int) -> int | None:
@@ -291,6 +310,8 @@ class ExpressionParser:
         if self.index >= len(self.tokens):
             return False
         token = self._peek()
+        if self._foreign_verb_end(self.index) is not None:
+            return True
         if token.kind is TokenKind.NAME and token.value in self.noun_names:
             return False
         if self._amend_verb_end(self.index) is not None:
@@ -308,6 +329,11 @@ class ExpressionParser:
         ):
             return True
         if (
+            token.value.lower() in {"fappend", "fwrite", "writefile"}
+            and following.kind is TokenKind.PRIMITIVE
+        ):
+            return True
+        if (
             following.kind is TokenKind.LPAREN
             and (
                 self._amend_verb_end(self.index + 1) is not None
@@ -321,6 +347,21 @@ class ExpressionParser:
             TokenKind.STRING,
             TokenKind.LPAREN,
         }
+
+    def _foreign_verb_end(self, start: int) -> int | None:
+        if start + 2 >= len(self.tokens):
+            return None
+        family, conjunction, service = self.tokens[start : start + 3]
+        if (
+            family.kind is TokenKind.NUMBER
+            and family.value.isdigit()
+            and conjunction.kind is TokenKind.PRIMITIVE
+            and conjunction.value == "!:"
+            and service.kind is TokenKind.NUMBER
+            and service.value.isdigit()
+        ):
+            return start + 2
+        return None
 
     def _amend_verb_end(self, start: int) -> tuple[int, int] | None:
         if start >= len(self.tokens) or self.tokens[start].kind is not TokenKind.LPAREN:
@@ -372,6 +413,8 @@ class ExpressionParser:
 
     @staticmethod
     def _verb_name(verb: Verb) -> str:
+        if isinstance(verb, ForeignVerb):
+            return f"{verb.family}!:{verb.service}"
         if isinstance(verb, PrimitiveVerb):
             return verb.spelling
         if isinstance(verb, NamedVerb):

@@ -158,6 +158,8 @@ def _case_command(source: Path, args: argparse.Namespace) -> list[str]:
         command.append("--concise")
     if args.internal_procedures:
         command.append("--internal-procedures")
+    if args.parameterize_constants:
+        command.append("--parameterize-constants")
     command.extend(["--compiler", args.compiler, "--timeout", str(args.timeout)])
     if args.run_diff:
         command.extend(["--diff-rtol", str(args.diff_rtol)])
@@ -287,6 +289,11 @@ def build_argument_parser() -> argparse.ArgumentParser:
         "--internal-procedures",
         action="store_true",
         help="place generated procedures inside each main program",
+    )
+    parser.add_argument(
+        "--parameterize-constants",
+        action="store_true",
+        help="emit safe top-level constant nouns as Fortran parameters",
     )
     parser.add_argument("--out-dir", help="directory forwarded to xj2f.py")
     parser.add_argument("--verbose", action="store_true", help="show successful output")

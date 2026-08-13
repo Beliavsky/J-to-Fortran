@@ -355,6 +355,39 @@ def test_general_real_determinant_uses_runtime_helper() -> None:
 
 
 @pytest.mark.parametrize(
+    ("source", "append"),
+    [
+        ("'hello' 1!:2 <'output.txt'", ".false."),
+        ("'hello' 1!:3 <'output.txt'", ".true."),
+        ("'hello' fwrite 'output.txt'", ".false."),
+        ("'hello' fappend 'output.txt'", ".true."),
+    ],
+)
+def test_whole_file_text_write_lowering(source: str, append: str) -> None:
+    expression = parse_expression(source)
+
+    assert infer_type(expression, {}) == TypeInfo(AtomType.INTEGER)
+    assert render_fortran_expression(expression, names={}) == (
+        f"j_write_text('hello', 'output.txt', {append})"
+    )
+    assert required_runtime_helpers(expression, {}) == {"write_text"}
+
+
+def test_file_write_rejects_noncharacter_data() -> None:
+    expression = parse_expression("(1 2 3) 1!:2 <'output.txt'")
+
+    with pytest.raises(LoweringError, match="data must be a character vector"):
+        infer_type(expression, {})
+
+
+def test_other_file_foreigns_have_an_explicit_diagnostic() -> None:
+    expression = parse_expression("1!:4 <'output.txt'")
+
+    with pytest.raises(LoweringError, match=r"foreign 1!:4 is not supported"):
+        infer_type(expression, {})
+
+
+@pytest.mark.parametrize(
     ("dividend", "expected_type", "helper"),
     [
         (

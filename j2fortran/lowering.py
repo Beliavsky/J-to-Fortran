@@ -11,6 +11,7 @@ from .ast import (
     AmendVerb,
     DyadicApply,
     Expression,
+    ForeignVerb,
     Group,
     InnerProductVerb,
     MonadicApply,
@@ -120,6 +121,44 @@ def _normalize_monadic_verb_chains(
 
 def primitive_spelling(verb: Verb) -> str | None:
     return verb.spelling if isinstance(verb, PrimitiveVerb) else None
+
+
+def file_write_mode(verb: Verb) -> str | None:
+    """Return the supported whole-file write mode for a J verb."""
+
+    if isinstance(verb, ForeignVerb) and verb.family == 1:
+        return {2: "replace", 3: "append"}.get(verb.service)
+    if isinstance(verb, NamedVerb):
+        return {
+            "fwrite": "replace",
+            "fappend": "append",
+        }.get(verb.identifier.lower())
+    return None
+
+
+def _validate_text_file_write(
+    expression: DyadicApply,
+    names: Mapping[str, TypeInfo],
+    name_transform: Callable[[str], str],
+    named_verbs: Mapping[str, TypeInfo] | None,
+) -> None:
+    text_type = infer_type(
+        expression.left, names, name_transform, named_verbs=named_verbs
+    )
+    filename_type = infer_type(
+        expression.right, names, name_transform, named_verbs=named_verbs
+    )
+    if (
+        text_type.atom_type is not AtomType.CHARACTER
+        or text_type.rank != 1
+        or text_type.boxed
+    ):
+        raise LoweringError("file write data must be a character vector")
+    if (
+        filename_type.atom_type is not AtomType.CHARACTER
+        or filename_type.rank != 1
+    ):
+        raise LoweringError("file write filename must be a character vector")
 
 
 def _rank_values(verb: Verb) -> tuple[int, ...] | None:
@@ -603,6 +642,11 @@ def infer_type(
         length = len(expression.value)
         return TypeInfo(AtomType.CHARACTER, Shape.vector(length), length)
     if isinstance(expression, MonadicApply):
+        if isinstance(expression.verb, ForeignVerb):
+            raise LoweringError(
+                f"foreign {expression.verb.family}!:{expression.verb.service} "
+                "is not supported"
+            )
         operand_type = infer_type(
             expression.operand, names, name_transform, named_verbs=named_verbs
         )
@@ -938,6 +982,16 @@ def infer_type(
                 name_transform,
                 named_verbs=named_verbs,
             )
+        if file_write_mode(expression.verb) is not None:
+            _validate_text_file_write(
+                expression, names, name_transform, named_verbs
+            )
+            return TypeInfo(AtomType.INTEGER)
+        if isinstance(expression.verb, ForeignVerb):
+            raise LoweringError(
+                f"foreign {expression.verb.family}!:{expression.verb.service} "
+                "is not supported"
+            )
         diagonal = match_matrix_diagonal(expression)
         if diagonal is not None:
             matrix_type = infer_type(
@@ -1058,12 +1112,14 @@ def infer_type(
                 expression.right, names, name_transform, named_verbs=named_verbs
             )
             if any(
-                type_info.atom_type not in {AtomType.INTEGER, AtomType.REAL}
+                type_info.atom_type
+                not in {AtomType.INTEGER, AtomType.REAL, AtomType.CHARACTER}
                 or type_info.rank not in {0, 1, 2}
                 for type_info in (left_type, right_type)
             ):
                 raise LoweringError(
-                    "direct dyadic named-verb application currently requires numeric scalar, vector, or matrix arguments"
+                    "direct dyadic named-verb application currently requires "
+                    "numeric arrays or character vectors"
                 )
             if named_verbs is None:
                 raise LoweringError(
@@ -1919,6 +1975,20 @@ def _render_fortran_expression(
             return operand, operand_precedence, None
         raise LoweringError(f"monadic verb {spelling!r} needs a dedicated lowering rule")
     if isinstance(expression, DyadicApply):
+        write_mode = file_write_mode(expression.verb)
+        if write_mode is not None:
+            text, _, _ = _render_fortran_expression(
+                expression.left, name_transform
+            )
+            filename, _, _ = _render_fortran_expression(
+                expression.right, name_transform
+            )
+            append = ".true." if write_mode == "append" else ".false."
+            return (
+                f"j_write_text({text}, {filename}, {append})",
+                _ATOM_PRECEDENCE,
+                "call",
+            )
         if isinstance(expression.verb, NamedVerb):
             left, _, _ = _render_fortran_expression(
                 expression.left, name_transform
@@ -2106,7 +2176,13 @@ def _render_fortran_expression(
         return f"{left} {operator} {right}", precedence, operator
     if isinstance(
         expression,
-        (AdverbApplication, InnerProductVerb, RankApplication, PrimitiveVerb),
+        (
+            AdverbApplication,
+            ForeignVerb,
+            InnerProductVerb,
+            RankApplication,
+            PrimitiveVerb,
+        ),
     ):
         raise LoweringError("a verb cannot be rendered as a noun expression")
     raise LoweringError(f"cannot render {type(expression).__name__}")
@@ -2126,6 +2202,18 @@ def render_fortran_expression(
     bare_expression = _normalize_monadic_verb_chains(
         expression, named_verbs, name_transform
     )
+    if (
+        isinstance(bare_expression, DyadicApply)
+        and file_write_mode(bare_expression.verb) is not None
+        and names is not None
+    ):
+        infer_type(
+            bare_expression, names, name_transform, named_verbs=named_verbs
+        )
+        rendered, _, _ = _render_fortran_expression(
+            bare_expression, name_transform
+        )
+        return rendered
     diagonal = match_matrix_diagonal(bare_expression)
     if diagonal is not None and names is not None:
         diagonal_type = infer_type(
@@ -3152,6 +3240,8 @@ def required_runtime_helpers(
             )
         )
     elif isinstance(expression, DyadicApply):
+        if file_write_mode(expression.verb) is not None:
+            helpers.add("write_text")
         diagonal = match_matrix_diagonal(expression)
         if diagonal is not None and names is not None:
             diagonal_type = infer_type(

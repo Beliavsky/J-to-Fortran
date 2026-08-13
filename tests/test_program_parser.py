@@ -59,6 +59,72 @@ exit 0
 """
 
 
+FILE_WRITES = """load 'files'
+filename =: 'written.txt'
+count =: 'alpha' 1!:2 <filename
+' beta' 1!:3 <filename
+' gamma' fappend filename
+smoutput count
+exit 0
+"""
+
+
+@pytest.mark.parametrize("runtime", ["embedded", "external"])
+@pytest.mark.requires_gfortran
+def test_text_file_overwrite_and_append_compile_and_run(
+    tmp_path: Path, runtime: str
+) -> None:
+    compiler = shutil.which("gfortran")
+    if compiler is None:
+        pytest.skip("gfortran is not installed")
+    program = xj2f.parse_j_source(tmp_path / "file_writes.ijs", FILE_WRITES)
+    generated = xj2f.emit_fortran(program, runtime=runtime)
+    source = tmp_path / "file_writes.f90"
+    executable = tmp_path / "file_writes.exe"
+    source.write_text(generated, encoding="utf-8")
+    sources = [str(source)]
+    if runtime == "external":
+        sources.insert(0, str(ROOT / "j.f90"))
+        assert "use j2f_runtime, only: j_write_text" in generated
+    else:
+        assert "function j_write_text" in generated
+    compiled = subprocess.run(
+        [compiler, "-std=f2018", *sources, "-o", str(executable)],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert compiled.returncode == 0, compiled.stdout + compiled.stderr
+
+    completed = subprocess.run(
+        [str(executable)],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert completed.stdout.strip() == "5"
+    assert (tmp_path / "written.txt").read_text(encoding="utf-8") == (
+        "alpha beta gamma"
+    )
+
+
+def test_foreign_verb_alias_emits_an_impure_function() -> None:
+    source = """writefile =: 1!:2
+count =: 'hello' writefile <'output.txt'
+smoutput count
+exit 0
+"""
+    generated = xj2f.emit_fortran(
+        xj2f.parse_j_source(Path("write_alias.ijs"), source)
+    )
+
+    assert "impure function writefile(x, y) result(j_result)" in generated
+    assert "j_result = j_write_text(x, y, .false.)" in generated
+
+
 def test_monte_carlo_pi_uses_symbolic_random_array_extent() -> None:
     program = xj2f.parse_j_source(Path("pi.ijs"), MONTE_CARLO_PI)
     generated = xj2f.emit_fortran(program)
@@ -701,6 +767,77 @@ exit 0
     assert generated.index("write (*") < generated.index("\ncontains\n")
     assert generated.index("\ncontains\n") < generated.index("function square(y)")
     assert "end program square_j" in generated
+
+
+def test_parameterize_constants_uses_semantics_not_j_name_case() -> None:
+    source = """N =: 10
+count =: N + 2
+values =: 1 2 3
+label =: 'sample'
+random =: ? count $ 0
+smoutput count
+smoutput values
+smoutput label
+smoutput # random
+exit 0
+"""
+    program = xj2f.parse_j_source(Path("parameters.ijs"), source)
+    ordinary = xj2f.emit_fortran(program)
+    generated = xj2f.emit_fortran(
+        program, parameterize_constants=True
+    )
+
+    assert "integer, parameter :: n_uppercase_1 = 10" in generated
+    assert "integer, parameter :: count_j = n_uppercase_1 + 2" in generated
+    assert "integer, parameter :: values(3) = [1, 2, 3]" in generated
+    assert "character(len=6), parameter :: label = 'sample'" in generated
+    assert "real(kind=dp), allocatable :: random(:)" in generated
+    assert "\n  count_j = n_uppercase_1 + 2" not in generated
+    assert "parameter ::" not in ordinary
+
+
+@pytest.mark.requires_gfortran
+def test_parameterized_constants_and_captured_dependencies_compile(
+    tmp_path: Path,
+) -> None:
+    compiler = shutil.which("gfortran")
+    if compiler is None:
+        pytest.skip("gfortran is not installed")
+    source_text = """scale =: 2
+offset =: scale + 1
+values =: 1 2 3
+addoffset =: 3 : 0
+  y + offset
+)
+smoutput addoffset 4
+smoutput values
+exit 0
+"""
+    generated = xj2f.emit_fortran(
+        xj2f.parse_j_source(tmp_path / "parameters.ijs", source_text),
+        parameterize_constants=True,
+        internal_procedures=True,
+    )
+    source = tmp_path / "parameters.f90"
+    executable = tmp_path / "parameters.exe"
+    source.write_text(generated, encoding="utf-8")
+    compiled = subprocess.run(
+        [compiler, "-std=f2018", str(source), "-o", str(executable)],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert compiled.returncode == 0, compiled.stdout + compiled.stderr
+    completed = subprocess.run(
+        [str(executable)],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert completed.stdout.split() == ["7", "1", "2", "3"]
 
 
 def test_concise_result_style_falls_back_for_array_and_recursive_results() -> None:

@@ -53,6 +53,13 @@ class PrimitiveVerb:
 
 
 @dataclass(frozen=True, slots=True)
+class ForeignVerb:
+    family: int
+    service: int
+    span: SourceSpan
+
+
+@dataclass(frozen=True, slots=True)
 class NamedVerb:
     identifier: str
     span: SourceSpan
@@ -109,6 +116,7 @@ class InnerProductVerb:
 
 Verb: TypeAlias = (
     AmendVerb
+    | ForeignVerb
     | NamedVerb
     | PrimitiveVerb
     | AdverbApplication

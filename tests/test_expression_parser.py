@@ -9,6 +9,7 @@ from j2fortran.ast import (
     BondVerb,
     DyadicApply,
     ForkVerb,
+    ForeignVerb,
     Group,
     InnerProductVerb,
     MonadicApply,
@@ -35,6 +36,17 @@ def test_parse_complete_reflex_verb_phrase() -> None:
     assert isinstance(verb, AdverbApplication)
     assert verb.adverb == "~"
     assert primitive(verb.operand) == "-"
+
+
+def test_file_foreign_is_preserved_as_a_derived_verb() -> None:
+    verb = parse_verb("1!:2")
+    expression = parse_expression("'hello' 1!:3 <'output.txt'")
+
+    assert isinstance(verb, ForeignVerb)
+    assert (verb.family, verb.service) == (1, 2)
+    assert isinstance(expression, DyadicApply)
+    assert isinstance(expression.verb, ForeignVerb)
+    assert (expression.verb.family, expression.verb.service) == (1, 3)
 
 
 def test_parse_noun_bond_verb_phrase() -> None:

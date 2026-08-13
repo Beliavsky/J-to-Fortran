@@ -120,6 +120,17 @@ def test_internal_procedures_is_forwarded_to_xj2f(tmp_path: Path) -> None:
     assert "--internal-procedures" in command
 
 
+def test_parameterize_constants_is_forwarded_to_xj2f(tmp_path: Path) -> None:
+    source = tmp_path / "valid.ijs"
+    args = xj2f_batch.build_argument_parser().parse_args(
+        [str(source), "--parameterize-constants"]
+    )
+
+    command = xj2f_batch._case_command(source, args)
+
+    assert "--parameterize-constants" in command
+
+
 def test_run_diff_tolerances_are_forwarded_to_xj2f(tmp_path: Path) -> None:
     source = tmp_path / "valid.ijs"
     args = xj2f_batch.build_argument_parser().parse_args(

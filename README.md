@@ -125,6 +125,8 @@ end program sumsq_j
   explicitly specifying `--function-result-style named` retains named results.
 - `--internal-procedures`: place generated application procedures after the
   main program's `contains` statement instead of in a separate module.
+- `--parameterize-constants`: emit safe, deterministic top-level nouns as
+  Fortran named constants; eligibility is inferred independently of J case.
 - `--compiler COMMAND`: select/configure a Fortran compiler.
 - `--ifx`: use Intel `ifx` rather than `gfortran`.
 - `--jconsole COMMAND`: select the J console command.
@@ -238,6 +240,9 @@ The parser currently recognizes:
 - a final noun as an array-valued verb result;
 - top-level `echo` and `smoutput`, including character literals, translated verb
   calls, and assigned nouns, plus `exit 0`.
+- whole-file character-vector overwrite and append through dyadic `1!:2` and
+  `1!:3`, plus `fwrite` and `fappend`; write expressions return their character
+  count, and `load 'files'` is consumed when these supported aliases are used;
 - the numeric CSV return-statistics workflow in `price_return_stats.ijs`, with
   CRLF/blank-line handling, header symbols, annualized statistics, and labeled
   correlation output; embedded and external runtimes share the same CSV reader.

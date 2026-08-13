@@ -20,8 +20,31 @@ module j2f_runtime
   public :: j_select_character
   public :: j_solve_2x2_matrix_int, j_solve_2x2_vector_int
   public :: j_solve_real_vector
+  public :: j_write_text
 
 contains
+
+function j_write_text(text, filename, append) result(count)
+  character(len=*), intent(in) :: text, filename
+  logical, intent(in) :: append
+  integer :: count
+  integer :: io_status, output_unit
+  if (append) then
+    open(newunit=output_unit, file=filename, status="unknown", &
+      position="append", access="stream", form="unformatted", &
+      action="write", iostat=io_status)
+  else
+    open(newunit=output_unit, file=filename, status="replace", &
+      access="stream", form="unformatted", action="write", &
+      iostat=io_status)
+  end if
+  if (io_status /= 0) error stop "cannot open J output file"
+  write(output_unit, iostat=io_status) text
+  if (io_status /= 0) error stop "cannot write J output file"
+  close(output_unit, iostat=io_status)
+  if (io_status /= 0) error stop "cannot close J output file"
+  count = len(text)
+end function j_write_text
 
 subroutine j_read_numeric_csv(filename, symbols, values)
   character(len=*), intent(in) :: filename

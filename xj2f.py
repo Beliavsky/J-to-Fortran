@@ -29,6 +29,7 @@ from j2fortran.ast import (
     BondVerb,
     DyadicApply,
     Expression,
+    ForeignVerb,
     Group,
     ForkVerb,
     InnerProductVerb,
@@ -38,6 +39,7 @@ from j2fortran.ast import (
     NumberLiteral,
     PrimitiveVerb,
     RankApplication,
+    Strand,
     StringLiteral,
     Verb,
     ast_to_dict,
@@ -68,6 +70,7 @@ from j2fortran.lexer import LexerError
 from j2fortran.lowering import (
     LoweringError,
     constant_shape_extents,
+    file_write_mode,
     infer_type,
     integer_value,
     match_append_row,
@@ -138,6 +141,7 @@ RUNTIME_PROCEDURES = {
     "solve_2x2_vector_int": "j_solve_2x2_vector_int",
     "solve_real_vector": "j_solve_real_vector",
     "sort_int_vector": "j_sort_int_vector",
+    "write_text": "j_write_text",
 }
 
 
@@ -274,6 +278,8 @@ class LoweredTopAssignment:
     print_only: bool
     updates: tuple[str, ...] = ()
     temporary_declarations: tuple[tuple[str, str], ...] = ()
+    is_parameter: bool = False
+    parameter_dependencies: tuple[str, ...] = ()
 
 
 @dataclasses.dataclass(frozen=True)
@@ -395,7 +401,13 @@ class Parser:
                 )
                 if isinstance(
                     tacit_verb,
-                    (AdverbApplication, AtopVerb, BondVerb, InnerProductVerb),
+                    (
+                        AdverbApplication,
+                        AtopVerb,
+                        BondVerb,
+                        ForeignVerb,
+                        InnerProductVerb,
+                    ),
                 ) or supported_fork:
                     self._remove_immediately_shadowed_definition(
                         items, assignment.group(1)
@@ -815,12 +827,16 @@ class FunctionEmitter:
             declaration = {
                 AtomType.INTEGER: "integer, intent(in)",
                 AtomType.REAL: "real(kind=dp), intent(in)",
+                AtomType.CHARACTER: "character(len=*), intent(in)",
             }.get(argument_type.atom_type)
             if declaration is None:
                 raise UnsupportedJError(
                     "function arguments currently require integer or real values"
                 )
-            if argument_type.rank == 1:
+            if (
+                argument_type.atom_type is not AtomType.CHARACTER
+                and argument_type.rank == 1
+            ):
                 declaration += "-vector"
             elif argument_type.rank == 2:
                 declaration += "-matrix"
@@ -845,14 +861,17 @@ class FunctionEmitter:
             self.types[_fortran_name(argument)]
             for argument in self.definition.arguments
         ]
-        purity = (
-            "pure recursive"
-            if self.is_recursive
-            else procedure_prefix(
-                [argument_type.rank for argument_type in argument_types],
-                result_rank=self.result_type.rank,
+        if "write_text" in self.expression_helpers:
+            purity = "impure"
+        else:
+            purity = (
+                "pure recursive"
+                if self.is_recursive
+                else procedure_prefix(
+                    [argument_type.rank for argument_type in argument_types],
+                    result_rank=self.result_type.rank,
+                )
             )
-        )
         rendered_arguments = ", ".join(
             _fortran_name(argument) for argument in self.definition.arguments
         )
@@ -1081,6 +1100,9 @@ class FunctionEmitter:
             ),
             "real(kind=dp), intent(in)-matrix": TypeInfo(
                 AtomType.REAL, Shape.matrix()
+            ),
+            "character(len=*), intent(in)": TypeInfo(
+                AtomType.CHARACTER, Shape.vector()
             ),
             "integer": TypeInfo(AtomType.INTEGER),
             "integer, allocatable-vector": TypeInfo(AtomType.INTEGER, Shape.vector()),
@@ -1475,10 +1497,9 @@ class FunctionEmitter:
             raise _error_at(UnsupportedJError, line, str(exc)) from exc
         self.result_type = TypeInfo(result_type.atom_type, shape)
 
-    @staticmethod
-    def _parse_expression(expression: str, line: SourceLine):
+    def _parse_expression(self, expression: str, line: SourceLine):
         try:
-            return parse_expression(expression)
+            return parse_expression(expression, noun_names=set(self.types))
         except (LexerError, ExpressionParseError, ValueError) as exc:
             raise _error_at(
                 UnsupportedJError,
@@ -1507,6 +1528,33 @@ class FunctionEmitter:
 
 def _runtime_helpers(helpers: set[str]) -> list[str]:
     result: list[str] = []
+    if "write_text" in helpers:
+        result.extend(
+            [
+                "function j_write_text(text, filename, append) result(count)",
+                "  character(len=*), intent(in) :: text, filename",
+                "  logical, intent(in) :: append",
+                "  integer :: count",
+                "  integer :: io_status, output_unit",
+                "  if (append) then",
+                '    open(newunit=output_unit, file=filename, status="unknown", &',
+                '      position="append", access="stream", form="unformatted", &',
+                '      action="write", iostat=io_status)',
+                "  else",
+                '    open(newunit=output_unit, file=filename, status="replace", &',
+                '      access="stream", form="unformatted", action="write", &',
+                '      iostat=io_status)',
+                "  end if",
+                '  if (io_status /= 0) error stop "cannot open J output file"',
+                "  write(output_unit, iostat=io_status) text",
+                '  if (io_status /= 0) error stop "cannot write J output file"',
+                "  close(output_unit, iostat=io_status)",
+                '  if (io_status /= 0) error stop "cannot close J output file"',
+                "  count = len(text)",
+                "end function j_write_text",
+                "",
+            ]
+        )
     if "read_numeric_csv" in helpers:
         result.extend(
             [
@@ -2417,8 +2465,127 @@ def _materialize_uniform_random_array(
     return random_shapes[0], transformed
 
 
+def _parameter_expression_dependencies(
+    expression: Expression,
+    parameter_names: set[str],
+) -> set[str] | None:
+    """Return dependencies when an expression is a safe constant initializer."""
+
+    expression = ungroup(expression)
+    if isinstance(expression, (NumberLiteral, StringLiteral, Strand)):
+        return set()
+    if isinstance(expression, Name):
+        name = _fortran_name(expression.identifier)
+        return {name} if name in parameter_names else None
+    if isinstance(expression, MonadicApply):
+        if not isinstance(expression.verb, PrimitiveVerb) or expression.verb.spelling not in {
+            "]",
+            "+",
+            "-",
+            "*:",
+            "<:",
+            ">:",
+            "|",
+            "%:",
+            "^.",
+            "^",
+            "<.",
+            ">.",
+            "-.",
+            "<",
+            ">",
+            "$",
+            "#",
+            ",",
+            "{.",
+            "{:",
+            "}.",
+            "}:",
+            "|:",
+        }:
+            return None
+        return _parameter_expression_dependencies(
+            expression.operand, parameter_names
+        )
+    if isinstance(expression, DyadicApply):
+        if not isinstance(expression.verb, PrimitiveVerb) or expression.verb.spelling not in {
+            "+",
+            "-",
+            "*",
+            "%",
+            "^",
+            "=",
+            "~:",
+            "<",
+            "<:",
+            ">",
+            ">:",
+            "*.",
+            "+.",
+            ",",
+            ",:",
+            ",.",
+            "$",
+            "{.",
+            "}.",
+            "|.",
+            "o.",
+            "<.",
+            ">.",
+        }:
+            return None
+        left = _parameter_expression_dependencies(
+            expression.left, parameter_names
+        )
+        right = _parameter_expression_dependencies(
+            expression.right, parameter_names
+        )
+        if left is None or right is None:
+            return None
+        return left | right
+    return None
+
+
+def _parameter_candidate(
+    expression: Expression,
+    type_info: TypeInfo,
+    types: dict[str, TypeInfo],
+    parameter_names: set[str],
+    function_types: dict[str, TypeInfo],
+    updates: tuple[str, ...],
+    temporary_declarations: tuple[tuple[str, str], ...],
+) -> tuple[str, ...] | None:
+    if updates or temporary_declarations or type_info.boxed:
+        return None
+    if type_info.rank > 0 and any(
+        not isinstance(extent, int) for extent in type_info.shape.extents
+    ):
+        return None
+    bare = ungroup(expression)
+    if type_info.atom_type is AtomType.CHARACTER and not isinstance(
+        bare, (Name, StringLiteral)
+    ):
+        return None
+    dependencies = _parameter_expression_dependencies(
+        expression, parameter_names
+    )
+    if dependencies is None:
+        return None
+    if required_runtime_helpers(
+        expression,
+        types,
+        _fortran_name,
+        named_verbs=function_types,
+    ):
+        return None
+    return tuple(sorted(dependencies))
+
+
 def _lower_top_assignments(
-    program: Program, function_types: dict[str, TypeInfo]
+    program: Program,
+    function_types: dict[str, TypeInfo],
+    *,
+    parameterize_constants: bool = False,
 ) -> tuple[list[LoweredTopAssignment], set[str]]:
     types: dict[str, TypeInfo] = {}
     lowered: list[LoweredTopAssignment] = []
@@ -2426,6 +2593,7 @@ def _lower_top_assignments(
     noun_names: set[str] = set()
     print_only = _print_only_top_names(program)
     random_index = 0
+    parameter_names: set[str] = set()
     for assignment in (item for item in program.items if isinstance(item, Assign)):
         name = _fortran_name(assignment.name)
         if name in types:
@@ -2541,21 +2709,71 @@ def _lower_top_assignments(
                 named_verbs=function_types,
             )
         )
+        has_side_effect = (
+            isinstance(ungroup(expression), DyadicApply)
+            and file_write_mode(ungroup(expression).verb) is not None
+        )
+        parameter_dependencies = (
+            _parameter_candidate(
+                expression,
+                type_info,
+                types,
+                parameter_names,
+                function_types,
+                updates,
+                temporary_declarations,
+            )
+            if parameterize_constants and not has_side_effect
+            else None
+        )
+        is_parameter = parameter_dependencies is not None
+        if is_parameter:
+            parameter_names.add(name)
         lowered.append(
             LoweredTopAssignment(
                 assignment.line,
                 name,
                 rendered,
                 type_info,
-                name in print_only and not updates,
+                name in print_only
+                and not updates
+                and not has_side_effect
+                and not is_parameter,
                 updates,
                 temporary_declarations,
+                is_parameter,
+                parameter_dependencies or (),
             )
         )
     return lowered, helpers
 
 
 def _main_entity_declaration(assignment: LoweredTopAssignment) -> tuple[str, str]:
+    if assignment.is_parameter:
+        intrinsic = {
+            AtomType.INTEGER: "integer",
+            AtomType.REAL: "real(kind=dp)",
+            AtomType.COMPLEX: "complex(kind=dp)",
+            AtomType.LOGICAL: "logical",
+        }.get(assignment.type_info.atom_type)
+        if assignment.type_info.atom_type is AtomType.CHARACTER:
+            length = assignment.type_info.character_length
+            if not isinstance(length, int):
+                raise UnsupportedJError(
+                    "parameter character length must be known"
+                )
+            intrinsic = f"character(len={length})"
+        if intrinsic is None:
+            raise UnsupportedJError("unsupported named constant type")
+        entity = assignment.name
+        if assignment.type_info.rank > 0 and (
+            assignment.type_info.atom_type is not AtomType.CHARACTER
+        ):
+            extents = ",".join(
+                str(extent) for extent in assignment.type_info.shape.extents
+            )
+            entity += f"({extents})"
+        return f"{intrinsic}, parameter", f"{entity} = {assignment.expression}"
     intrinsic = {
         AtomType.INTEGER: "integer",
         AtomType.REAL: "real(kind=dp)",
@@ -2574,6 +2792,30 @@ def _main_entity_declaration(assignment: LoweredTopAssignment) -> tuple[str, str
         dimensions = ",".join(":" for _ in range(assignment.type_info.rank))
         return f"{intrinsic}, allocatable", f"{assignment.name}({dimensions})"
     return intrinsic, assignment.name
+
+
+def _assignment_declarations(
+    assignments: list[LoweredTopAssignment],
+) -> list[str]:
+    """Combine declarations without hiding parameter dependency order."""
+
+    result: list[str] = []
+    pending: list[tuple[str, str]] = []
+
+    def flush() -> None:
+        if pending:
+            result.extend(combine_declarations(pending))
+            pending.clear()
+
+    for assignment in assignments:
+        declaration = _main_entity_declaration(assignment)
+        if assignment.is_parameter and assignment.parameter_dependencies:
+            flush()
+            result.extend(combine_declarations([declaration]))
+        else:
+            pending.append(declaration)
+    flush()
+    return result
 
 
 def _infer_top_assignment_types(
@@ -2734,8 +2976,14 @@ def _definition_argument_types(
                 except LoweringError:
                     argument_types = ()
             if argument_types and all(
-                argument_type.atom_type in {AtomType.INTEGER, AtomType.REAL}
-                and argument_type.rank in {0, 1, 2}
+                (
+                    argument_type.atom_type in {AtomType.INTEGER, AtomType.REAL}
+                    and argument_type.rank in {0, 1, 2}
+                )
+                or (
+                    argument_type.atom_type is AtomType.CHARACTER
+                    and argument_type.rank == 1
+                )
                 for argument_type in argument_types
             ):
                 key = (call_name, len(argument_types))
@@ -2911,6 +3159,8 @@ def _definition_argument_types(
 
 
 def _simple_verb_source(verb: Verb) -> str | None:
+    if isinstance(verb, ForeignVerb):
+        return f"{verb.family}!:{verb.service}"
     if isinstance(verb, PrimitiveVerb):
         return verb.spelling
     if isinstance(verb, NamedVerb):
@@ -2972,6 +3222,21 @@ def _explicit_definitions(program: Program) -> list[VerbDefinition]:
             definitions.append(item)
             continue
         if not isinstance(item, TacitVerbDefinition):
+            continue
+        if isinstance(item.verb, ForeignVerb):
+            definitions.append(
+                VerbDefinition(
+                    item.line,
+                    item.name,
+                    ("x", "y"),
+                    (
+                        ExpressionStatement(
+                            item.line,
+                            f"x {item.verb.family}!:{item.verb.service} y",
+                        ),
+                    ),
+                )
+            )
             continue
         if (
             isinstance(item.verb, AdverbApplication)
@@ -3076,6 +3341,45 @@ def _boxed_tuple_items(expression) -> list | None:
         *(left_items if left_items is not None else [expression.left]),
         *(right_items if right_items is not None else [expression.right]),
     ]
+
+
+def _lower_top_level_file_operations(program: Program) -> Program:
+    """Materialize ignored file-write results and consume `load 'files'`."""
+
+    noun_names = {
+        item.name for item in program.items if isinstance(item, Assign)
+    }
+    existing_names = set(noun_names)
+    items: list[TopLevel] = []
+    write_index = 0
+    for item in program.items:
+        if not isinstance(item, ExpressionStatement):
+            items.append(item)
+            continue
+        if _normalized_expression(item.expression) == "load 'files'":
+            continue
+        try:
+            expression = ungroup(
+                parse_expression(item.expression, noun_names=noun_names)
+            )
+        except (LexerError, ExpressionParseError):
+            items.append(item)
+            continue
+        if not (
+            isinstance(expression, DyadicApply)
+            and file_write_mode(expression.verb) is not None
+        ):
+            items.append(item)
+            continue
+        while True:
+            write_index += 1
+            name = f"j_ignored_write_count_{write_index}"
+            if name not in existing_names:
+                break
+        existing_names.add(name)
+        noun_names.add(name)
+        items.append(Assign(item.line, name, "=.", item.expression))
+    return dataclasses.replace(program, items=tuple(items))
 
 
 def _expand_top_level_boxed_match(program: Program) -> Program:
@@ -3797,7 +4101,7 @@ def _emit_return_mixture_fortran(
             '  write (*,"(a,i0)") "components chosen by AIC: ", aic_components, &',
             '                     "components chosen by BIC: ", bic_components, &',
             '                     "two-component fit"',
-            f"  do model = 1, 2",
+            "  do model = 1, 2",
             "    call j_print_component(model, symbols, trading_days, weights2(model), &",
             "      means2(:, model), covariances2(:, :, model))",
             "  end do",
@@ -3832,6 +4136,7 @@ def emit_fortran(
     function_result_style: str | None = None,
     concise: bool = False,
     internal_procedures: bool = False,
+    parameterize_constants: bool = False,
 ) -> str:
     if runtime not in {"embedded", "external"}:
         raise J2FError(f"unknown runtime mode {runtime!r}")
@@ -3860,6 +4165,7 @@ def emit_fortran(
             program, csv_statistics, runtime=runtime, concise=concise,
             internal_procedures=internal_procedures,
         )
+    program = _lower_top_level_file_operations(program)
     top_expressions = [
         item for item in program.items if isinstance(item, ExpressionStatement)
     ]
@@ -3998,19 +4304,34 @@ def emit_fortran(
                 "ambivalent verb valences must have the same result type",
             )
         function_types[exported_name] = result_type
-    top_assignments, top_helpers = _lower_top_assignments(program, function_types)
+    top_assignments, top_helpers = _lower_top_assignments(
+        program,
+        function_types,
+        parameterize_constants=parameterize_constants,
+    )
+    parameter_assignments = {
+        assignment.name: assignment
+        for assignment in top_assignments
+        if assignment.is_parameter
+    }
+    while True:
+        added = {
+            dependency
+            for name in captured_top_names
+            if name in parameter_assignments
+            for dependency in parameter_assignments[name].parameter_dependencies
+            if dependency not in captured_top_names
+        }
+        if not added:
+            break
+        captured_top_names.update(added)
     captured_assignments = [
         assignment
         for assignment in top_assignments
         if assignment.name in captured_top_names
     ]
     if captured_assignments:
-        module_declarations = combine_declarations(
-            [
-                _main_entity_declaration(assignment)
-                for assignment in captured_assignments
-            ]
-        )
+        module_declarations = _assignment_declarations(captured_assignments)
         module_specification = [
             f"  public :: {', '.join(assignment.name for assignment in captured_assignments)}",
             *(f"  {declaration}" for declaration in module_declarations),
@@ -4084,16 +4405,19 @@ def emit_fortran(
     ):
         lines.append("  use, intrinsic :: iso_fortran_env, only: dp => real64")
     lines.append("  implicit none")
-    declarations = [
-        declaration
+    local_assignments = [
+        assignment
         for assignment in active_assignments
         if assignment.name not in captured_top_names
-        for declaration in (
-            _main_entity_declaration(assignment),
-            *assignment.temporary_declarations,
-        )
     ]
-    lines.extend(f"  {line}" for line in combine_declarations(declarations))
+    declarations = _assignment_declarations(local_assignments)
+    temporary_declarations = [
+        declaration
+        for assignment in local_assignments
+        for declaration in assignment.temporary_declarations
+    ]
+    declarations.extend(combine_declarations(temporary_declarations))
+    lines.extend(f"  {line}" for line in declarations)
     assignment_by_name = {assignment.name: assignment for assignment in top_assignments}
     echo_calls: list[
         tuple[
@@ -4290,6 +4614,11 @@ def emit_fortran(
         lines.append(f"  integer :: {', '.join(echo_indices)}")
     lines.append("")
     for assignment in active_assignments:
+        if assignment.is_parameter:
+            append_comments(lines, assignment.line.number, indent="  ")
+    for assignment in active_assignments:
+        if assignment.is_parameter:
+            continue
         append_comments(lines, assignment.line.number, indent="  ")
         if assignment.expression:
             lines.append(f"  {assignment.name} = {assignment.expression}")
@@ -4433,6 +4762,7 @@ def transpile_path(
     function_result_style: str | None = None,
     concise: bool = False,
     internal_procedures: bool = False,
+    parameterize_constants: bool = False,
 ) -> str:
     try:
         text = input_path.read_text(encoding="utf-8")
@@ -4445,6 +4775,7 @@ def transpile_path(
         function_result_style=function_result_style,
         concise=concise,
         internal_procedures=internal_procedures,
+        parameterize_constants=parameterize_constants,
     )
 
 
@@ -4821,6 +5152,11 @@ def build_argument_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="place generated procedures inside the main program",
     )
+    parser.add_argument(
+        "--parameterize-constants",
+        action="store_true",
+        help="emit safe top-level constant nouns as Fortran parameters",
+    )
     parser.add_argument("--compile", action="store_true", help="compile generated Fortran")
     parser.add_argument("--run", action="store_true", help="compile and run generated Fortran")
     parser.add_argument("--run-j", action="store_true", help="run the original J script")
@@ -4914,6 +5250,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             function_result_style=args.function_result_style,
             concise=args.concise,
             internal_procedures=args.internal_procedures,
+            parameterize_constants=args.parameterize_constants,
         )
         translate_seconds = time.perf_counter() - translate_started
 

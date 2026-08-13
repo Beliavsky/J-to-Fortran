@@ -188,6 +188,46 @@ after `contains` in the main program. This can make a standalone translation
 shorter by removing its generated application module and corresponding `use`
 statement. Helpers selected with `--runtime external` remain in `j.f90`.
 
+## Inferred Named Constants
+
+With `--parameterize-constants`, a top-level noun assigned a compile-time
+constant expression is emitted with Fortran's `parameter` attribute:
+
+```j
+trading_days =: 252
+periods =: 2 * trading_days
+strikes =: 80 90 100 110 120
+```
+
+```fortran
+integer, parameter :: trading_days = 252
+integer, parameter :: periods = 2 * trading_days
+integer, parameter :: strikes(5) = [80, 90, 100, 110, 120]
+```
+
+Inference follows assignments and dependencies rather than J's uppercase-name
+convention. A candidate must have a fixed type and shape, use only constant
+operations, and depend only on earlier inferred constants. Random generation,
+file I/O, translated procedure calls, amendments, and dynamic shapes remain
+executable assignments.
+
+## Text File Output
+
+The supported file-output subset writes an entire character vector, either
+replacing the file with `1!:2` or appending with `1!:3`:
+
+```j
+count =: 'first' 1!:2 <'report.txt'
+' second' 1!:3 <'report.txt'
+```
+
+The generated `j_write_text` helper uses unformatted stream I/O, so Fortran
+does not add a record terminator. It returns the number of characters written.
+The standard-library names `fwrite` and `fappend` are recognized as the same
+operations, and `load 'files'` is consumed for scripts using this subset.
+Explicit handles, indexed I/O, binary arrays, and other `1!:` services are not
+yet translated.
+
 ## Vectors, Matrices, and Shape
 
 Spaces form a J numeric list:
