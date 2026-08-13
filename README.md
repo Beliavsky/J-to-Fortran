@@ -101,7 +101,10 @@ end program sumsq_j
 - `--run`: compile and run the generated Fortran.
 - `--run-j`: run the original J script.
 - `--run-both`: run J and Fortran and display both outputs.
-- `--run-diff`: run both and compare output tokens.
+- `--run-diff`: run both and compare output tokens; real values use numerical
+  tolerances so J's shorter display precision can match Fortran output.
+- `--diff-rtol VALUE`: set the relative real-value tolerance (default `5e-6`).
+- `--diff-atol VALUE`: set the absolute real-value tolerance (default `1e-12`).
 - `--time`: time translation, compilation, and Fortran execution.
 - `--time-both`: time both implementations and compare their output.
 - `--run-repeat N`: repeat executions after a single translation/build.

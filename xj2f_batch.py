@@ -153,6 +153,9 @@ def _case_command(source: Path, args: argparse.Namespace) -> list[str]:
     command.extend([_mode_flag(args), "--runtime", args.runtime])
     command.extend(["--source-comments", args.source_comments])
     command.extend(["--compiler", args.compiler, "--timeout", str(args.timeout)])
+    if args.run_diff:
+        command.extend(["--diff-rtol", str(args.diff_rtol)])
+        command.extend(["--diff-atol", str(args.diff_atol)])
     if args.runtime_file:
         command.extend(["--runtime-file", args.runtime_file])
     if args.ifx:
@@ -227,6 +230,18 @@ def build_argument_parser() -> argparse.ArgumentParser:
         help="run J and Fortran and display both outputs",
     )
     mode.add_argument("--run-diff", action="store_true", help="compare J and Fortran output")
+    parser.add_argument(
+        "--diff-rtol",
+        type=xj2f._nonnegative_float,
+        default=5e-6,
+        help="relative tolerance forwarded with --run-diff",
+    )
+    parser.add_argument(
+        "--diff-atol",
+        type=xj2f._nonnegative_float,
+        default=1e-12,
+        help="absolute tolerance forwarded with --run-diff",
+    )
     parser.add_argument("--jobs", type=int, default=1, help="parallel jobs (default: 1)")
     parser.add_argument("--limit", type=int, default=0, help="maximum files (0 = all)")
     parser.add_argument(

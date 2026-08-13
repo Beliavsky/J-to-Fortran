@@ -108,6 +108,25 @@ def test_run_both_is_forwarded_to_xj2f(tmp_path: Path) -> None:
     assert command[-2:] == ["--out", str(tmp_path / "valid_j.f90")]
 
 
+def test_run_diff_tolerances_are_forwarded_to_xj2f(tmp_path: Path) -> None:
+    source = tmp_path / "valid.ijs"
+    args = xj2f_batch.build_argument_parser().parse_args(
+        [
+            str(source),
+            "--run-diff",
+            "--diff-rtol",
+            "1e-4",
+            "--diff-atol",
+            "1e-9",
+        ]
+    )
+
+    command = xj2f_batch._case_command(source, args)
+
+    assert command[command.index("--diff-rtol") + 1] == "0.0001"
+    assert command[command.index("--diff-atol") + 1] == "1e-09"
+
+
 def test_batch_build_outputs_are_unique(tmp_path: Path) -> None:
     parser = xj2f_batch.build_argument_parser()
     first = tmp_path / "first.ijs"

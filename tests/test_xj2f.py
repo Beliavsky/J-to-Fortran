@@ -70,6 +70,52 @@ ok =: result -: expected
 """
 
 
+@pytest.mark.parametrize(
+    ("j_token", "fortran_token"),
+    [
+        ("3.16228", "3.1622776601683795"),
+        ("_2.8", "-2.7999999999999994"),
+        ("1e_3", "0.0010000000000000000"),
+        ("_", "Infinity"),
+        ("__", "-Infinity"),
+        ("_.", "NaN"),
+    ],
+)
+def test_output_token_comparison_tolerates_j_numeric_formatting(
+    j_token: str, fortran_token: str
+) -> None:
+    assert xj2f._output_tokens_equal(
+        j_token,
+        fortran_token,
+        relative_tolerance=5e-6,
+        absolute_tolerance=1e-12,
+    )
+
+
+@pytest.mark.parametrize(
+    ("j_token", "fortran_token"),
+    [("1000000", "1000001"), ("3.14", "3.15"), ("label", "Label")],
+)
+def test_output_token_comparison_rejects_meaningful_differences(
+    j_token: str, fortran_token: str
+) -> None:
+    assert not xj2f._output_tokens_equal(
+        j_token,
+        fortran_token,
+        relative_tolerance=5e-6,
+        absolute_tolerance=1e-12,
+    )
+
+
+def test_diff_tolerances_are_configurable() -> None:
+    args = xj2f.build_argument_parser().parse_args(
+        ["demo.ijs", "--run-diff", "--diff-rtol", "1e-4", "--diff-atol", "1e-9"]
+    )
+
+    assert args.diff_rtol == pytest.approx(1e-4)
+    assert args.diff_atol == pytest.approx(1e-9)
+
+
 def test_j_command_uses_jconsole_from_path_and_ignores_adjacent_shortcut(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import dataclasses
 import json
+import math
 import os
 import re
 import shlex
@@ -3049,6 +3050,62 @@ def _normalized_output(text: str) -> list[str]:
     return text.split()
 
 
+def _numeric_output_token(
+    token: str, *, j_syntax: bool
+) -> tuple[int | float, bool] | None:
+    """Parse a scalar output token and report whether it is an integer literal."""
+
+    normalized = token
+    if j_syntax:
+        special = {"_": math.inf, "__": -math.inf, "_.": math.nan}
+        if token in special:
+            return special[token], False
+        if re.match(r"_\d", normalized):
+            normalized = "-" + normalized[1:]
+        normalized = re.sub(r"([eE])_", r"\1-", normalized)
+    normalized = re.sub(r"([dD])", "e", normalized)
+    if re.fullmatch(r"[+-]?\d+", normalized):
+        return int(normalized), True
+    try:
+        return float(normalized), False
+    except ValueError:
+        return None
+
+
+def _output_tokens_equal(
+    j_token: str,
+    fortran_token: str,
+    *,
+    relative_tolerance: float,
+    absolute_tolerance: float,
+) -> bool:
+    if j_token == fortran_token:
+        return True
+    j_number = _numeric_output_token(j_token, j_syntax=True)
+    fortran_number = _numeric_output_token(fortran_token, j_syntax=False)
+    if j_number is None or fortran_number is None:
+        return False
+    j_value, j_is_integer = j_number
+    fortran_value, fortran_is_integer = fortran_number
+    if j_is_integer and fortran_is_integer:
+        return j_value == fortran_value
+    if math.isnan(float(j_value)) or math.isnan(float(fortran_value)):
+        return math.isnan(float(j_value)) and math.isnan(float(fortran_value))
+    return math.isclose(
+        float(j_value),
+        float(fortran_value),
+        rel_tol=relative_tolerance,
+        abs_tol=absolute_tolerance,
+    )
+
+
+def _nonnegative_float(value: str) -> float:
+    parsed = float(value)
+    if not math.isfinite(parsed) or parsed < 0.0:
+        raise argparse.ArgumentTypeError("must be a finite nonnegative number")
+    return parsed
+
+
 def _print_output(label: str, text: str, show_label: bool) -> None:
     if show_label:
         print(f"--- {label} ---")
@@ -3092,7 +3149,23 @@ def build_argument_parser() -> argparse.ArgumentParser:
     parser.add_argument("--run", action="store_true", help="compile and run generated Fortran")
     parser.add_argument("--run-j", action="store_true", help="run the original J script")
     parser.add_argument("--run-both", action="store_true", help="run original J and generated Fortran")
-    parser.add_argument("--run-diff", action="store_true", help="run both and compare whitespace-normalized output")
+    parser.add_argument(
+        "--run-diff",
+        action="store_true",
+        help="run both and compare output tokens, with tolerance for real values",
+    )
+    parser.add_argument(
+        "--diff-rtol",
+        type=_nonnegative_float,
+        default=5e-6,
+        help="relative tolerance for real output comparison (default: 5e-6)",
+    )
+    parser.add_argument(
+        "--diff-atol",
+        type=_nonnegative_float,
+        default=1e-12,
+        help="absolute tolerance for real output comparison (default: 1e-12)",
+    )
     parser.add_argument("--time", action="store_true", help="time translation, compilation, and Fortran execution")
     parser.add_argument("--time-both", action="store_true", help="time J and Fortran and compare their output")
     parser.add_argument("--run-repeat", type=int, default=1, help="number of execution trials after one build")
@@ -3235,19 +3308,33 @@ def main(argv: Sequence[str] | None = None) -> int:
         if compare:
             j_tokens = _normalized_output(j_output)
             fortran_tokens = _normalized_output(fortran_output)
-            if j_tokens != fortran_tokens:
-                mismatch = next(
-                    (
-                        index
-                        for index, pair in enumerate(zip(j_tokens, fortran_tokens))
-                        if pair[0] != pair[1]
-                    ),
-                    min(len(j_tokens), len(fortran_tokens)),
-                )
+            mismatch = next(
+                (
+                    index
+                    for index, pair in enumerate(zip(j_tokens, fortran_tokens))
+                    if not _output_tokens_equal(
+                        pair[0],
+                        pair[1],
+                        relative_tolerance=args.diff_rtol,
+                        absolute_tolerance=args.diff_atol,
+                    )
+                ),
+                min(len(j_tokens), len(fortran_tokens)),
+            )
+            if mismatch < max(len(j_tokens), len(fortran_tokens)):
                 j_value = j_tokens[mismatch] if mismatch < len(j_tokens) else "<end>"
                 f_value = fortran_tokens[mismatch] if mismatch < len(fortran_tokens) else "<end>"
+                difference = ""
+                j_number = _numeric_output_token(j_value, j_syntax=True)
+                f_number = _numeric_output_token(f_value, j_syntax=False)
+                if j_number is not None and f_number is not None:
+                    j_numeric = float(j_number[0])
+                    f_numeric = float(f_number[0])
+                    if math.isfinite(j_numeric) and math.isfinite(f_numeric):
+                        difference = f", absolute difference={abs(j_numeric - f_numeric):.6g}"
                 print(
-                    f"output mismatch at token {mismatch + 1}: J={j_value!r}, Fortran={f_value!r}",
+                    f"output mismatch at token {mismatch + 1}: J={j_value!r}, "
+                    f"Fortran={f_value!r}{difference}",
                     file=sys.stderr,
                 )
                 return 1
