@@ -1533,7 +1533,10 @@ def infer_type(
                 raise LoweringError(
                     "power currently requires numeric base and exponent"
                 )
-            if right_type.atom_type is AtomType.INTEGER:
+            if (
+                left_type.atom_type is AtomType.INTEGER
+                and right_type.atom_type is AtomType.INTEGER
+            ):
                 exponents = _integer_values(expression.right)
                 if exponents is None or any(exponent < 0 for exponent in exponents):
                     raise LoweringError(

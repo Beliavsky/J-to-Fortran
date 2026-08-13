@@ -198,6 +198,41 @@ def test_black_scholes_example_compiles_and_runs(tmp_path: Path) -> None:
 
 
 @pytest.mark.requires_gfortran
+def test_american_option_tree_compiles_and_runs(tmp_path: Path) -> None:
+    compiler = shutil.which("gfortran")
+    if compiler is None:
+        pytest.skip("gfortran is not installed")
+    source = tmp_path / "american_options_j.f90"
+    executable = tmp_path / "american_options.exe"
+    program = xj2f.parse_j_source(
+        ROOT / "american_options.ijs",
+        (ROOT / "american_options.ijs").read_text(encoding="utf-8"),
+    )
+    source.write_text(xj2f.emit_fortran(program), encoding="utf-8")
+
+    compiled = subprocess.run(
+        [compiler, "-std=f2018", str(source), "-o", str(executable)],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert compiled.returncode == 0, compiled.stdout + compiled.stderr
+    completed = subprocess.run(
+        [str(executable)], cwd=tmp_path, capture_output=True, text=True, check=False
+    )
+    assert completed.returncode == 0
+    lines = completed.stdout.splitlines()
+    assert lines[0] == "strikes"
+    assert [int(value) for value in lines[1].split()] == [70, 80, 90, 100, 110, 120, 130]
+    calls = [float(value) for value in lines[3].split()]
+    puts = [float(value) for value in lines[5].split()]
+    assert calls[3] == pytest.approx(10.4466, abs=1e-4)
+    assert puts[3] == pytest.approx(6.08881, abs=1e-4)
+    assert puts[-1] == pytest.approx(30.0)
+
+
+@pytest.mark.requires_gfortran
 def test_random_component_mask_uses_a_real_temporary(tmp_path: Path) -> None:
     compiler = shutil.which("gfortran")
     if compiler is None:

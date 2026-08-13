@@ -1563,6 +1563,19 @@ def test_real_scalar_power_accepts_real_exponent() -> None:
     )
 
 
+def test_real_base_accepts_dynamic_integer_vector_exponents() -> None:
+    expression = parse_expression("up ^ exponents")
+    names = {
+        "up": TypeInfo(AtomType.REAL),
+        "exponents": TypeInfo(AtomType.INTEGER, Shape.vector("n")),
+    }
+
+    assert infer_type(expression, names) == TypeInfo(
+        AtomType.REAL, Shape.vector("n")
+    )
+    assert render_fortran_expression(expression, names=names) == "up**exponents"
+
+
 @pytest.mark.parametrize(
     ("j_source", "fortran"),
     [
