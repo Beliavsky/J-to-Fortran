@@ -271,6 +271,110 @@ def test_numeric_csv_statistics_compile_and_run(tmp_path: Path) -> None:
 
 
 @pytest.mark.requires_gfortran
+def test_annual_csv_statistics_compile_and_run(tmp_path: Path) -> None:
+    compiler = shutil.which("gfortran")
+    if compiler is None:
+        pytest.skip("gfortran is not installed")
+    csv_name = "small_annual_prices.csv"
+    (tmp_path / csv_name).write_text(
+        "Date,AAA,BBB\n"
+        "2023-12-29,100,50\n"
+        "2024-01-02,102,49\n"
+        "2024-01-03,101,51\n"
+        "2025-01-02,104,50\n"
+        "2025-01-03,103,53\n",
+        encoding="ascii",
+    )
+    j_source = (ROOT / "price_return_stats_annual.ijs").read_text(
+        encoding="utf-8"
+    )
+    j_source = j_source.replace("asset_class_etf_prices.csv", csv_name)
+    source = tmp_path / "price_return_stats_annual_j.f90"
+    executable = tmp_path / "price_return_stats_annual.exe"
+    program = xj2f.parse_j_source(Path("price_return_stats_annual.ijs"), j_source)
+    source.write_text(xj2f.emit_fortran(program), encoding="utf-8")
+
+    compiled = subprocess.run(
+        [compiler, "-std=f2018", str(source), "-o", str(executable)],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert compiled.returncode == 0, compiled.stdout + compiled.stderr
+    completed = subprocess.run(
+        [str(executable)], cwd=tmp_path, capture_output=True, text=True, check=False
+    )
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert "5 4" in completed.stdout
+    assert "2024 2" in completed.stdout
+    assert "2025 2" in completed.stdout
+    assert completed.stdout.count("year and return observations") == 2
+    assert completed.stdout.count("correlation matrix of daily log returns") == 2
+    assert "AAA" in completed.stdout and "BBB" in completed.stdout
+
+
+@pytest.mark.requires_gfortran
+def test_return_mixture_compile_and_run(tmp_path: Path) -> None:
+    compiler = shutil.which("gfortran")
+    if compiler is None:
+        pytest.skip("gfortran is not installed")
+    csv_name = "small_mixture_prices.csv"
+    (tmp_path / csv_name).write_text(
+        "Date,AAA,BBB\n"
+        "2025-01-02,100,80\n"
+        "2025-01-03,101,79\n"
+        "2025-01-06,99,81\n"
+        "2025-01-07,102,80\n"
+        "2025-01-08,101,83\n"
+        "2025-01-09,104,82\n"
+        "2025-01-10,103,85\n"
+        "2025-01-13,106,84\n"
+        "2025-01-14,105,88\n"
+        "2025-01-15,109,86\n"
+        "2025-01-16,107,90\n"
+        "2025-01-17,111,89\n"
+        "2025-01-21,110,93\n"
+        "2025-01-22,114,91\n"
+        "2025-01-23,112,95\n",
+        encoding="ascii",
+    )
+    j_source = (ROOT / "fit_return_mixture.ijs").read_text(encoding="utf-8")
+    j_source = j_source.replace("asset_class_etf_prices.csv", csv_name)
+    source = tmp_path / "fit_return_mixture_j.f90"
+    executable = tmp_path / "fit_return_mixture.exe"
+    program = xj2f.parse_j_source(Path("fit_return_mixture.ijs"), j_source)
+    source.write_text(xj2f.emit_fortran(program), encoding="utf-8")
+
+    compiled = subprocess.run(
+        [compiler, "-std=f2018", str(source), "-o", str(executable)],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert compiled.returncode == 0, compiled.stdout + compiled.stderr
+    completed = subprocess.run(
+        [str(executable)], cwd=tmp_path, capture_output=True, text=True, check=False
+    )
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert "14 2" in completed.stdout
+    assert "AAA" in completed.stdout and "BBB" in completed.stdout
+    assert "components chosen by AIC" in completed.stdout
+    assert "three-component fit" in completed.stdout
+    asset_lines = [
+        line
+        for line in completed.stdout.splitlines()
+        if line.startswith(("   AAA", "   BBB"))
+    ]
+    decimal_columns = {
+        tuple(index for index, character in enumerate(line) if character == ".")
+        for line in asset_lines
+    }
+    assert len(decimal_columns) == 1
+
+
+@pytest.mark.requires_gfortran
 def test_random_component_mask_uses_a_real_temporary(tmp_path: Path) -> None:
     compiler = shutil.which("gfortran")
     if compiler is None:

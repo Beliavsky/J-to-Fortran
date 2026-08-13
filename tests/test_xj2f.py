@@ -566,6 +566,46 @@ def test_numeric_csv_statistics_workflow_supports_both_runtime_modes() -> None:
     )
 
 
+def test_annual_csv_statistics_workflow_supports_both_runtime_modes() -> None:
+    source = (ROOT / "price_return_stats_annual.ijs").read_text(encoding="utf-8")
+    program = xj2f.parse_j_source(Path("price_return_stats_annual.ijs"), source)
+
+    embedded = xj2f.emit_fortran(program)
+    external = xj2f.emit_fortran(program, runtime="external")
+
+    assert "subroutine j_read_price_years" in embedded
+    assert "return_years = price_years(2:)" in embedded
+    assert "count(return_years == years(year_index))" in embedded
+    assert "selected_returns(selected_row, :) = returns(return_row, :)" in embedded
+    assert 'write (*,"(2(i0,1x))") years(year_index)' in embedded
+    assert "subroutine j_read_numeric_csv" in embedded
+    assert "subroutine j_read_numeric_csv" not in external
+    assert "use j2f_runtime, only: j_read_numeric_csv" in external
+
+
+def test_return_mixture_workflow_supports_both_runtime_modes() -> None:
+    source = (ROOT / "fit_return_mixture.ijs").read_text(encoding="utf-8")
+    program = xj2f.parse_j_source(Path("fit_return_mixture.ijs"), source)
+
+    embedded = xj2f.emit_fortran(program)
+    external = xj2f.emit_fortran(program, runtime="external")
+
+    assert "subroutine j_read_numeric_csv" in embedded
+    assert "pure subroutine j_fit_em" in embedded
+    assert "pure function j_mv_density" in embedded
+    assert "dimension = size(observations, 2)" in embedded
+    assert "call j_fit_em(observations, 400" in embedded
+    assert 'call j_load_returns("asset_class_etf_prices.csv"' in embedded
+    assert 'write (*,"(i10,3(1x,f18.6))")' in embedded
+    assert 'write (*,"(a6,2(1x,f21.6))")' in embedded
+    assert 'write (*,"(f8.6)") weight' in embedded
+    assert "subroutine j_read_numeric_csv" not in external
+    assert (
+        "use j2f_runtime, only: j_determinant_real, j_inverse_real, "
+        "j_read_numeric_csv"
+    ) in external
+
+
 def test_running_maximum_is_available_in_both_runtime_modes() -> None:
     source = """result =: >./\\ 3 1 4 1 5
 expected =: 3 3 4 4 5

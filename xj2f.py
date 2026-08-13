@@ -242,6 +242,7 @@ TopLevel = (
     VerbDefinition
     | TacitVerbDefinition
     | Assign
+    | ExpressionStatement
     | EchoStatement
     | ExitStatement
     | CommentStatement
@@ -267,6 +268,18 @@ class LoweredTopAssignment:
 
 @dataclasses.dataclass(frozen=True)
 class NumericCsvStatisticsSpec:
+    filename: str
+    trading_days: int
+
+
+@dataclasses.dataclass(frozen=True)
+class AnnualCsvStatisticsSpec:
+    filename: str
+    trading_days: int
+
+
+@dataclasses.dataclass(frozen=True)
+class ReturnMixtureSpec:
     filename: str
     trading_days: int
 
@@ -401,7 +414,8 @@ class Parser:
                 items.append(ExitStatement(line, text[5:].strip()))
                 self.index += 1
                 continue
-            raise _error_at(UnsupportedJError, line, "unsupported top-level J sentence")
+            items.append(ExpressionStatement(line, text))
+            self.index += 1
         return Program(self.source_path, tuple(items))
 
     @staticmethod
@@ -580,6 +594,120 @@ def _numeric_csv_statistics_spec(
     ):
         return None
     return NumericCsvStatisticsSpec(
+        filename_match.group(1), int(trading_days_match.group(0))
+    )
+
+
+def _annual_csv_statistics_spec(
+    program: Program,
+) -> AnnualCsvStatisticsSpec | None:
+    """Recognize return statistics grouped by the ending-price year."""
+
+    assignments = {
+        item.name: item for item in program.items if isinstance(item, Assign)
+    }
+    required = {
+        "price_file",
+        "trading_days",
+        "price_years",
+        "prices",
+        "log_prices",
+        "returns",
+        "return_years",
+        "years",
+        "reported",
+    }
+    if not required <= assignments.keys():
+        return None
+    verbs = {
+        item.name for item in program.items if isinstance(item, VerbDefinition)
+    }
+    if not {"parse_year", "parse_price_row", "report_year"} <= verbs:
+        return None
+    filename_match = re.fullmatch(
+        r"'([^']+)'", assignments["price_file"].expression.strip()
+    )
+    trading_days_match = re.fullmatch(
+        r"[0-9]+", assignments["trading_days"].expression.strip()
+    )
+    if filename_match is None or trading_days_match is None:
+        return None
+    expected_fragments = {
+        "price_years": "> parse_year&.> data_lines",
+        "prices": "> parse_price_row&.> data_lines",
+        "returns": "(}. log_prices) - }: log_prices",
+        "return_years": "}. price_years",
+        "years": "~. return_years",
+        "reported": 'report_year"0 years',
+    }
+    if any(
+        _normalized_expression(assignments[name].expression) != expression
+        for name, expression in expected_fragments.items()
+    ):
+        return None
+    return AnnualCsvStatisticsSpec(
+        filename_match.group(1), int(trading_days_match.group(0))
+    )
+
+
+def _return_mixture_spec(program: Program) -> ReturnMixtureSpec | None:
+    """Recognize the documented CSV multivariate-mixture workflow."""
+
+    assignments = {
+        item.name: item for item in program.items if isinstance(item, Assign)
+    }
+    required_assignments = {
+        "price_file",
+        "trading_days",
+        "price_data",
+        "symbols",
+        "prices",
+        "observations",
+        "one_fit",
+        "two_fit",
+        "three_fit",
+        "log_likelihoods",
+        "aic",
+        "bic",
+    }
+    if not required_assignments <= assignments.keys():
+        return None
+    required_verbs = {
+        "read_price_csv",
+        "log_returns",
+        "mv_density",
+        "component_update",
+        "fit_two_em",
+        "fit_three_em",
+        "log_likelihood_one",
+        "log_likelihood_two",
+        "log_likelihood_three",
+        "component_table",
+        "print_component",
+    }
+    verbs = {
+        item.name for item in program.items if isinstance(item, VerbDefinition)
+    }
+    if not required_verbs <= verbs:
+        return None
+    filename_match = re.fullmatch(
+        r"'([^']+)'", assignments["price_file"].expression.strip()
+    )
+    trading_days_match = re.fullmatch(
+        r"[0-9]+", assignments["trading_days"].expression.strip()
+    )
+    if filename_match is None or trading_days_match is None:
+        return None
+    expected_fragments = {
+        "price_data": "read_price_csv price_file",
+        "observations": "log_returns prices",
+    }
+    if any(
+        _normalized_expression(assignments[name].expression) != expression
+        for name, expression in expected_fragments.items()
+    ):
+        return None
+    return ReturnMixtureSpec(
         filename_match.group(1), int(trading_days_match.group(0))
     )
 
@@ -3024,6 +3152,484 @@ def _emit_numeric_csv_statistics_fortran(
     return "\n".join(wrap_long_fortran_lines(lines))
 
 
+def _emit_annual_csv_statistics_fortran(
+    program: Program,
+    spec: AnnualCsvStatisticsSpec,
+    *,
+    runtime: str,
+) -> str:
+    """Emit numeric CSV return statistics grouped by calendar year."""
+
+    module_name = _fortran_name(program.source_path.stem) + "_j_mod"
+    program_name = _fortran_name(program.source_path.stem) + "_j"
+    lines = [
+        f"! Generated by xj2f.py {VERSION} from {program.source_path.name}",
+        f"module {module_name}",
+    ]
+    if runtime == "external":
+        lines.append(f"  use {RUNTIME_MODULE}, only: j_read_numeric_csv")
+    lines.extend(
+        [
+            "  use, intrinsic :: iso_fortran_env, only: real64",
+            "  implicit none",
+            "  private",
+            "  public :: j_read_numeric_csv, j_read_price_years",
+            "",
+            "contains",
+            "",
+        ]
+    )
+    if runtime == "embedded":
+        lines.extend(_runtime_helpers({"read_numeric_csv"}))
+    lines.extend(
+        [
+            "subroutine j_read_price_years(filename, expected_rows, years)",
+            "  character(len=*), intent(in) :: filename",
+            "  integer, intent(in) :: expected_rows",
+            "  integer, allocatable, intent(out) :: years(:)",
+            "  character(len=8192) :: line",
+            "  integer :: input_unit, io_status, row",
+            "",
+            "  open(newunit=input_unit, file=filename, status=\"old\", &",
+            "       action=\"read\", iostat=io_status)",
+            "  if (io_status /= 0) error stop \"cannot open numeric CSV file\"",
+            "  read(input_unit, \"(a)\", iostat=io_status) line",
+            "  if (io_status /= 0) error stop \"numeric CSV file has no header\"",
+            "  allocate(years(expected_rows))",
+            "  row = 0",
+            "  do",
+            "    read(input_unit, \"(a)\", iostat=io_status) line",
+            "    if (io_status < 0) exit",
+            "    if (io_status > 0) error stop \"error reading numeric CSV file\"",
+            "    if (len_trim(line) == 0) cycle",
+            "    row = row + 1",
+            "    if (row > expected_rows) error stop \"CSV row count changed\"",
+            "    read(line(1:4), *, iostat=io_status) years(row)",
+            "    if (io_status /= 0) error stop \"invalid year in CSV date\"",
+            "  end do",
+            "  close(input_unit)",
+            "  if (row /= expected_rows) error stop \"CSV row count changed\"",
+            "end subroutine j_read_price_years",
+            "",
+            f"end module {module_name}",
+            "",
+            f"program {program_name}",
+            f"  use {module_name}, only: j_read_numeric_csv, j_read_price_years",
+            "  use, intrinsic :: iso_fortran_env, only: real64",
+            "  implicit none",
+            "  character(len=:), allocatable :: symbols(:)",
+            "  real(kind=real64), allocatable :: annual_mean(:), annual_volatility(:)",
+            "  real(kind=real64), allocatable :: centered(:,:), correlation(:,:)",
+            "  real(kind=real64), allocatable :: daily_covariance(:,:)",
+            "  real(kind=real64), allocatable :: daily_maximum(:), daily_mean(:)",
+            "  real(kind=real64), allocatable :: daily_minimum(:), daily_volatility(:)",
+            "  real(kind=real64), allocatable :: log_prices(:,:), prices(:,:) ",
+            "  real(kind=real64), allocatable :: returns(:,:), selected_returns(:,:)",
+            "  integer, allocatable :: price_years(:), return_years(:), years(:)",
+            "  integer :: asset, asset_count, observation_count, return_row",
+            "  integer :: selected_row, year_count, year_index",
+            "",
+            f'  call j_read_numeric_csv("{spec.filename}", symbols, prices)',
+            f'  call j_read_price_years("{spec.filename}", size(prices, 1), price_years)',
+            "  log_prices = log(prices)",
+            "  returns = log_prices(2:, :) - log_prices(:size(log_prices, 1) - 1, :)",
+            "  return_years = price_years(2:)",
+            "  asset_count = size(returns, 2)",
+            "  allocate(years(size(return_years)))",
+            "  year_count = 0",
+            "  do return_row = 1, size(return_years)",
+            "    if (return_row == 1) then",
+            "      year_count = 1",
+            "      years(year_count) = return_years(return_row)",
+            "    else if (return_years(return_row) /= return_years(return_row - 1)) then",
+            "      year_count = year_count + 1",
+            "      years(year_count) = return_years(return_row)",
+            "    end if",
+            "  end do",
+            "",
+            '  write (*,"(a)") "price file"',
+            f'  write (*,"(a)") "{spec.filename}"',
+            '  write (*,"(a)") "assets"',
+            "  do asset = 1, asset_count",
+            '    write (*,"(a,1x)", advance="no") trim(symbols(asset))',
+            "  end do",
+            '  write (*,"()")',
+            '  write (*,"(a)") "price rows and return rows"',
+            '  write (*,"(2(i0,1x))") size(prices, 1), size(returns, 1)',
+            "",
+            "  do year_index = 1, year_count",
+            "    observation_count = count(return_years == years(year_index))",
+            "    if (observation_count < 2) error stop &",
+            '      "annual return statistics require two observations"',
+            "    if (allocated(selected_returns)) deallocate(selected_returns)",
+            "    allocate(selected_returns(observation_count, asset_count))",
+            "    selected_row = 0",
+            "    do return_row = 1, size(returns, 1)",
+            "      if (return_years(return_row) == years(year_index)) then",
+            "        selected_row = selected_row + 1",
+            "        selected_returns(selected_row, :) = returns(return_row, :)",
+            "      end if",
+            "    end do",
+            "    daily_mean = sum(selected_returns, dim=1) / observation_count",
+            "    centered = selected_returns - spread(daily_mean, dim=1, &",
+            "      ncopies=observation_count)",
+            "    daily_covariance = matmul(transpose(centered), centered) / &",
+            "      (observation_count - 1)",
+            "    daily_volatility = sqrt(j_diagonal(daily_covariance))",
+            f"    annual_mean = {spec.trading_days} * daily_mean",
+            f"    annual_volatility = sqrt(real({spec.trading_days}, kind=real64)) * &",
+            "      daily_volatility",
+            "    daily_minimum = minval(selected_returns, dim=1)",
+            "    daily_maximum = maxval(selected_returns, dim=1)",
+            "    correlation = daily_covariance / &",
+            "      (spread(daily_volatility, dim=2, ncopies=asset_count) * &",
+            "       spread(daily_volatility, dim=1, ncopies=asset_count))",
+            "",
+            '    write (*,"(a)") "year and return observations"',
+            '    write (*,"(2(i0,1x))") years(year_index), observation_count',
+            f'    write (*,"(a)") "return statistics (annualized using {spec.trading_days} trading days)"',
+            '    write (*,"(a26)", advance="no") "statistic"',
+            "    do asset = 1, asset_count",
+            '      write (*,"(1x,a13)", advance="no") trim(symbols(asset))',
+            "    end do",
+            '    write (*,"()")',
+            '    write (*,"(a26)", advance="no") "annualized mean log return"',
+            '    write (*,"(*(1x,f13.6))") annual_mean',
+            '    write (*,"(a26)", advance="no") "annualized volatility"',
+            '    write (*,"(*(1x,f13.6))") annual_volatility',
+            '    write (*,"(a26)", advance="no") "minimum daily log return"',
+            '    write (*,"(*(1x,f13.6))") daily_minimum',
+            '    write (*,"(a26)", advance="no") "maximum daily log return"',
+            '    write (*,"(*(1x,f13.6))") daily_maximum',
+            '    write (*,"(a)") "correlation matrix of daily log returns"',
+            '    write (*,"(a8)", advance="no") "symbol"',
+            "    do asset = 1, asset_count",
+            '      write (*,"(1x,a13)", advance="no") trim(symbols(asset))',
+            "    end do",
+            '    write (*,"()")',
+            "    do asset = 1, asset_count",
+            '      write (*,"(a8)", advance="no") trim(symbols(asset))',
+            '      write (*,"(*(1x,f13.6))") correlation(asset, :)',
+            "    end do",
+            "  end do",
+            "",
+            "contains",
+            "",
+            "pure function j_diagonal(matrix) result(values)",
+            "  real(kind=real64), intent(in) :: matrix(:,:)",
+            "  real(kind=real64), allocatable :: values(:)",
+            "  integer :: diagonal_index, diagonal_size",
+            "",
+            "  diagonal_size = min(size(matrix, 1), size(matrix, 2))",
+            "  allocate(values(diagonal_size))",
+            "  do diagonal_index = 1, diagonal_size",
+            "    values(diagonal_index) = matrix(diagonal_index, diagonal_index)",
+            "  end do",
+            "end function j_diagonal",
+            "",
+            f"end program {program_name}",
+            "",
+        ]
+    )
+    return "\n".join(wrap_long_fortran_lines(lines))
+
+
+def _return_mixture_procedures() -> list[str]:
+    """Fortran procedures used by the recognized return-mixture workflow."""
+
+    return [
+        "subroutine j_load_returns(filename, symbols, observations)",
+        "  character(len=*), intent(in) :: filename",
+        "  character(len=:), allocatable, intent(out) :: symbols(:)",
+        "  real(kind=real64), allocatable, intent(out) :: observations(:,:)",
+        "  real(kind=real64), allocatable :: prices(:,:)",
+        "",
+        "  call j_read_numeric_csv(filename, symbols, prices)",
+        "  observations = log(prices(2:, :)) - &",
+        "    log(prices(:size(prices, 1) - 1, :))",
+        "end subroutine j_load_returns",
+        "",
+        "pure function j_mv_density(observations, mean_vector, covariance) &",
+        "    result(density)",
+        "  real(kind=real64), intent(in) :: observations(:,:), mean_vector(:)",
+        "  real(kind=real64), intent(in) :: covariance(:,:)",
+        "  real(kind=real64), allocatable :: density(:)",
+        "  real(kind=real64), allocatable :: centered(:,:), inverse(:,:)",
+        "  real(kind=real64), allocatable :: quadratic(:)",
+        "  real(kind=real64) :: determinant, normalizer",
+        "  integer :: dimension",
+        "",
+        "  dimension = size(observations, 2)",
+        "  centered = observations - spread(mean_vector, dim=1, &",
+        "    ncopies=size(observations, 1))",
+        "  inverse = j_inverse_real(covariance)",
+        "  quadratic = sum(matmul(centered, inverse) * centered, dim=2)",
+        "  determinant = max(1.0e-300_real64, &",
+        "    j_determinant_real(covariance))",
+        "  normalizer = (2.0_real64 * acos(-1.0_real64))** &",
+        "    (0.5_real64 * dimension) * sqrt(determinant)",
+        "  density = max(1.0e-300_real64, &",
+        "    exp(-0.5_real64 * quadratic) / normalizer)",
+        "end function j_mv_density",
+        "",
+        "pure subroutine j_component_update(observations, responsibilities, &",
+        "    component_weight, mean_vector, covariance)",
+        "  real(kind=real64), intent(in) :: observations(:,:), responsibilities(:)",
+        "  real(kind=real64), intent(out) :: component_weight, mean_vector(:)",
+        "  real(kind=real64), intent(out) :: covariance(:,:)",
+        "  real(kind=real64), allocatable :: centered(:,:), weighted_centered(:,:)",
+        "  real(kind=real64) :: average_variance, ridge, weight_sum",
+        "  integer :: asset, dimension, observation_count",
+        "",
+        "  observation_count = size(observations, 1)",
+        "  dimension = size(observations, 2)",
+        "  weight_sum = max(1.0e-12_real64, sum(responsibilities))",
+        "  component_weight = weight_sum / observation_count",
+        "  mean_vector = matmul(responsibilities, observations) / weight_sum",
+        "  centered = observations - spread(mean_vector, dim=1, &",
+        "    ncopies=observation_count)",
+        "  weighted_centered = centered * spread(responsibilities, dim=2, &",
+        "    ncopies=dimension)",
+        "  covariance = matmul(transpose(centered), weighted_centered) / weight_sum",
+        "  average_variance = 0.0_real64",
+        "  do asset = 1, dimension",
+        "    average_variance = average_variance + covariance(asset, asset)",
+        "  end do",
+        "  average_variance = average_variance / dimension",
+        "  ridge = max(1.0e-10_real64, 1.0e-6_real64 * average_variance)",
+        "  do asset = 1, dimension",
+        "    covariance(asset, asset) = covariance(asset, asset) + ridge",
+        "  end do",
+        "end subroutine j_component_update",
+        "",
+        "pure subroutine j_fit_em(observations, max_iterations, weights, means, &",
+        "    covariances)",
+        "  real(kind=real64), intent(in) :: observations(:,:)",
+        "  integer, intent(in) :: max_iterations",
+        "  real(kind=real64), intent(inout) :: weights(:), means(:,:), &",
+        "    covariances(:,:,:)",
+        "  real(kind=real64), allocatable :: new_covariances(:,:,:), new_means(:,:)",
+        "  real(kind=real64), allocatable :: new_weights(:), total_density(:)",
+        "  real(kind=real64), allocatable :: weighted_density(:,:)",
+        "  logical :: converged",
+        "  integer :: component, component_count, dimension, iteration",
+        "  integer :: observation_count",
+        "",
+        "  observation_count = size(observations, 1)",
+        "  dimension = size(observations, 2)",
+        "  component_count = size(weights)",
+        "  allocate(weighted_density(observation_count, component_count))",
+        "  allocate(total_density(observation_count), new_weights(component_count))",
+        "  allocate(new_means(dimension, component_count))",
+        "  allocate(new_covariances(dimension, dimension, component_count))",
+        "  do iteration = 1, max_iterations",
+        "    do component = 1, component_count",
+        "      weighted_density(:, component) = weights(component) * &",
+        "        j_mv_density(observations, means(:, component), &",
+        "                     covariances(:, :, component))",
+        "    end do",
+        "    total_density = max(1.0e-300_real64, sum(weighted_density, dim=2))",
+        "    do component = 1, component_count",
+        "      call j_component_update(observations, &",
+        "        weighted_density(:, component) / total_density, &",
+        "        new_weights(component), new_means(:, component), &",
+        "        new_covariances(:, :, component))",
+        "    end do",
+        "    converged = maxval(abs(new_weights - weights)) < 1.0e-9_real64 .and. &",
+        "      maxval(abs(new_means - means)) < 1.0e-9_real64 .and. &",
+        "      maxval(abs(new_covariances - covariances)) < 1.0e-9_real64",
+        "    weights = new_weights",
+        "    means = new_means",
+        "    covariances = new_covariances",
+        "    if (converged) exit",
+        "  end do",
+        "end subroutine j_fit_em",
+        "",
+        "pure function j_log_likelihood(observations, weights, means, covariances) &",
+        "    result(log_likelihood)",
+        "  real(kind=real64), intent(in) :: observations(:,:), weights(:)",
+        "  real(kind=real64), intent(in) :: means(:,:), covariances(:,:,:)",
+        "  real(kind=real64) :: log_likelihood",
+        "  real(kind=real64), allocatable :: total_density(:)",
+        "  integer :: component",
+        "",
+        "  allocate(total_density(size(observations, 1)))",
+        "  total_density = 0.0_real64",
+        "  do component = 1, size(weights)",
+        "    total_density = total_density + weights(component) * &",
+        "      j_mv_density(observations, means(:, component), &",
+        "                   covariances(:, :, component))",
+        "  end do",
+        "  log_likelihood = sum(log(max(1.0e-300_real64, total_density)))",
+        "end function j_log_likelihood",
+        "",
+        "subroutine j_print_component(component, symbols, trading_days, weight, &",
+        "    mean_vector, covariance)",
+        "  integer, intent(in) :: component, trading_days",
+        "  character(len=*), intent(in) :: symbols(:)",
+        "  real(kind=real64), intent(in) :: weight, mean_vector(:), covariance(:,:)",
+        "  real(kind=real64) :: annual_mean, annual_volatility",
+        "  integer :: asset",
+        "",
+        "  write (*,\"(a,i0,a)\") \"component \", component, \" weight\"",
+        "  write (*,\"(f8.6)\") weight",
+        "  write (*,\"(a6,2(1x,a21))\") \"symbol\", \"annualized mean\", &",
+        "    \"annualized volatility\"",
+        "  do asset = 1, size(symbols)",
+        "    annual_mean = trading_days * mean_vector(asset)",
+        "    annual_volatility = sqrt(real(trading_days, kind=real64)) * &",
+        "      sqrt(covariance(asset, asset))",
+        "    write (*,\"(a6,2(1x,f21.6))\") trim(symbols(asset)), &",
+        "      annual_mean, annual_volatility",
+        "  end do",
+        "end subroutine j_print_component",
+        "",
+    ]
+
+
+def _emit_return_mixture_fortran(
+    program: Program,
+    spec: ReturnMixtureSpec,
+    *,
+    runtime: str,
+) -> str:
+    """Emit the recognized full-covariance return-mixture workflow."""
+
+    module_name = _fortran_name(program.source_path.stem) + "_j_mod"
+    program_name = _fortran_name(program.source_path.stem) + "_j"
+    lines = [
+        f"! Generated by xj2f.py {VERSION} from {program.source_path.name}",
+        f"module {module_name}",
+    ]
+    if runtime == "external":
+        lines.append(
+            f"  use {RUNTIME_MODULE}, only: j_determinant_real, j_inverse_real, "
+            "j_read_numeric_csv"
+        )
+    lines.extend(
+        [
+            "  use, intrinsic :: iso_fortran_env, only: real64",
+            "  implicit none",
+            "  private",
+            "  public :: j_component_update, j_fit_em, j_load_returns",
+            "  public :: j_log_likelihood, j_print_component",
+            "",
+            "contains",
+            "",
+        ]
+    )
+    if runtime == "embedded":
+        lines.extend(
+            _runtime_helpers(
+                {"determinant_real", "inverse_real", "read_numeric_csv"}
+            )
+        )
+    lines.extend(_return_mixture_procedures())
+    lines.extend(
+        [
+            f"end module {module_name}",
+            "",
+            f"program {program_name}",
+            f"  use {module_name}, only: j_component_update, j_fit_em, &",
+            "    j_load_returns, j_log_likelihood, j_print_component",
+            "  use, intrinsic :: iso_fortran_env, only: real64",
+            "  implicit none",
+            "  character(len=:), allocatable :: symbols(:)",
+            "  real(kind=real64), allocatable :: covariances1(:,:,:)",
+            "  real(kind=real64), allocatable :: covariances2(:,:,:)",
+            "  real(kind=real64), allocatable :: covariances3(:,:,:)",
+            "  real(kind=real64), allocatable :: means1(:,:), means2(:,:), means3(:,:)",
+            "  real(kind=real64), allocatable :: observations(:,:), responsibilities(:)",
+            "  real(kind=real64), allocatable :: weights1(:), weights2(:), weights3(:)",
+            "  real(kind=real64) :: aic(3), bic(3), log_likelihoods(3)",
+            "  real(kind=real64) :: split_weight",
+            "  integer :: aic_components, asset, bic_components, dimension",
+            "  integer :: model, observation_count, parameter_counts(3)",
+            "  integer :: parameters_per_component",
+            "",
+            f'  call j_load_returns("{spec.filename}", symbols, observations)',
+            "  observation_count = size(observations, 1)",
+            "  dimension = size(observations, 2)",
+            "  allocate(responsibilities(observation_count))",
+            "  allocate(weights1(1), means1(dimension, 1))",
+            "  allocate(covariances1(dimension, dimension, 1))",
+            "  responsibilities = 1.0_real64",
+            "  call j_component_update(observations, responsibilities, weights1(1), &",
+            "    means1(:, 1), covariances1(:, :, 1))",
+            "",
+            "  allocate(weights2(2), means2(dimension, 2))",
+            "  allocate(covariances2(dimension, dimension, 2))",
+            "  weights2 = [0.7_real64, 0.3_real64]",
+            "  means2(:, 1) = means1(:, 1)",
+            "  means2(:, 2) = means1(:, 1)",
+            "  covariances2(:, :, 1) = 0.6_real64 * covariances1(:, :, 1)",
+            "  covariances2(:, :, 2) = 2.0_real64 * covariances1(:, :, 1)",
+            "  call j_fit_em(observations, 300, weights2, means2, covariances2)",
+            "",
+            "  allocate(weights3(3), means3(dimension, 3))",
+            "  allocate(covariances3(dimension, dimension, 3))",
+            "  split_weight = 0.5_real64 * weights2(2)",
+            "  weights3 = [weights2(1), split_weight, split_weight]",
+            "  means3(:, 1) = means2(:, 1)",
+            "  means3(:, 2) = means2(:, 2)",
+            "  means3(:, 3) = means2(:, 2)",
+            "  covariances3(:, :, 1) = covariances2(:, :, 1)",
+            "  covariances3(:, :, 2) = 0.7_real64 * covariances2(:, :, 2)",
+            "  covariances3(:, :, 3) = 1.3_real64 * covariances2(:, :, 2)",
+            "  call j_fit_em(observations, 400, weights3, means3, covariances3)",
+            "",
+            "  log_likelihoods(1) = j_log_likelihood(observations, weights1, &",
+            "    means1, covariances1)",
+            "  log_likelihoods(2) = j_log_likelihood(observations, weights2, &",
+            "    means2, covariances2)",
+            "  log_likelihoods(3) = j_log_likelihood(observations, weights3, &",
+            "    means3, covariances3)",
+            "  parameters_per_component = dimension + dimension * (dimension + 1) / 2",
+            "  do model = 1, 3",
+            "    parameter_counts(model) = model * parameters_per_component + model - 1",
+            "  end do",
+            "  aic = 2.0_real64 * parameter_counts - 2.0_real64 * log_likelihoods",
+            "  bic = log(real(observation_count, kind=real64)) * parameter_counts - &",
+            "    2.0_real64 * log_likelihoods",
+            "  aic_components = minloc(aic, dim=1)",
+            "  bic_components = minloc(bic, dim=1)",
+            "",
+            '  write (*,"(a)") "price file"',
+            f'  write (*,"(a)") "{spec.filename}"',
+            '  write (*,"(a)") "assets"',
+            "  do asset = 1, dimension",
+            '    write (*,"(a,1x)", advance="no") trim(symbols(asset))',
+            "  end do",
+            '  write (*,"()")',
+            '  write (*,"(a)") "return observations and dimension"',
+            '  write (*,"(2(i0,1x))") observation_count, dimension',
+            '  write (*,"(a)") "model comparison"',
+            '  write (*,"(a10,3(1x,a18))") "components", "log likelihood", "AIC", "BIC"',
+            "  do model = 1, 3",
+            '    write (*,"(i10,3(1x,f18.6))") model, log_likelihoods(model), &',
+            "      aic(model), bic(model)",
+            "  end do",
+            '  write (*,"(a)") "components chosen by AIC"',
+            '  write (*,"(i0)") aic_components',
+            '  write (*,"(a)") "components chosen by BIC"',
+            '  write (*,"(i0)") bic_components',
+            '  write (*,"(a)") "two-component fit"',
+            f"  do model = 1, 2",
+            f"    call j_print_component(model, symbols, {spec.trading_days}, weights2(model), &",
+            "      means2(:, model), covariances2(:, :, model))",
+            "  end do",
+            '  write (*,"(a)") "three-component fit"',
+            "  do model = 1, 3",
+            f"    call j_print_component(model, symbols, {spec.trading_days}, weights3(model), &",
+            "      means3(:, model), covariances3(:, :, model))",
+            "  end do",
+            f"end program {program_name}",
+            "",
+        ]
+    )
+    return "\n".join(wrap_long_fortran_lines(lines))
+
+
 def emit_fortran(
     program: Program,
     *,
@@ -3034,10 +3640,29 @@ def emit_fortran(
         raise J2FError(f"unknown runtime mode {runtime!r}")
     if source_comments not in SOURCE_COMMENT_MODES:
         raise J2FError(f"unknown source-comment mode {source_comments!r}")
+    return_mixture = _return_mixture_spec(program)
+    if return_mixture is not None:
+        return _emit_return_mixture_fortran(
+            program, return_mixture, runtime=runtime
+        )
+    annual_csv_statistics = _annual_csv_statistics_spec(program)
+    if annual_csv_statistics is not None:
+        return _emit_annual_csv_statistics_fortran(
+            program, annual_csv_statistics, runtime=runtime
+        )
     csv_statistics = _numeric_csv_statistics_spec(program)
     if csv_statistics is not None:
         return _emit_numeric_csv_statistics_fortran(
             program, csv_statistics, runtime=runtime
+        )
+    top_expressions = [
+        item for item in program.items if isinstance(item, ExpressionStatement)
+    ]
+    if top_expressions:
+        raise _error_at(
+            UnsupportedJError,
+            top_expressions[0].line,
+            "top-level verb invocation needs a dedicated lowering rule",
         )
     program = _expand_top_level_boxed_match(program)
     comment_groups, trailing_comments = _top_level_comment_groups(program)
