@@ -309,6 +309,26 @@ def test_while_loop_is_included_in_expression_report() -> None:
     assert report["verbs"][0]["body"][0]["role"] == "while"
 
 
+def test_break_exits_the_enclosing_fortran_loop() -> None:
+    source = """first =: 3 : 0
+  result =. y
+  for_i. i. 10 do.
+    if. i > 2 do.
+      break.
+    end.
+    result =. result + i
+  end.
+  result
+)
+"""
+
+    generated = xj2f.emit_fortran(
+        xj2f.parse_j_source(Path("break.ijs"), source)
+    )
+
+    assert "if (i > 2) then\n      exit\n    end if" in generated
+
+
 def test_plain_iota_for_loop_emits_zero_based_values() -> None:
     source = """sumfirst =: 3 : 0
   s =. 0

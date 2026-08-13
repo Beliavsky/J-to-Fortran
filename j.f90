@@ -17,6 +17,7 @@ module j2f_runtime
   public :: j_raze_character
   public :: j_select_character
   public :: j_solve_2x2_matrix_int, j_solve_2x2_vector_int
+  public :: j_solve_real_vector
 
 contains
 
@@ -387,6 +388,49 @@ pure function j_solve_2x2_matrix_int(rhs, coefficients) result(solution)
   solution(2, :) = (real(coefficients(1, 1), kind=real64) * rhs(2, :) - &
     real(coefficients(2, 1), kind=real64) * rhs(1, :)) / determinant
 end function j_solve_2x2_matrix_int
+
+pure function j_solve_real_vector(rhs, coefficients) result(solution)
+  real(kind=real64), intent(in) :: rhs(:), coefficients(:,:)
+  real(kind=real64), allocatable :: solution(:)
+  real(kind=real64), allocatable :: work(:,:), work_rhs(:), row_buffer(:)
+  real(kind=real64) :: factor, scalar_buffer
+  integer :: column, row, pivot_row, system_size
+
+  system_size = size(rhs)
+  if (size(coefficients, 1) /= system_size .or. &
+      size(coefficients, 2) /= system_size) &
+    error stop "linear solve shape mismatch"
+  work = coefficients
+  work_rhs = rhs
+  allocate(solution(system_size), row_buffer(system_size))
+  do column = 1, system_size
+    pivot_row = column - 1 + &
+      maxloc(abs(work(column:system_size, column)), dim=1)
+    if (abs(work(pivot_row, column)) <= tiny(1.0_real64)) &
+      error stop "singular matrix"
+    if (pivot_row /= column) then
+      row_buffer = work(column, :)
+      work(column, :) = work(pivot_row, :)
+      work(pivot_row, :) = row_buffer
+      scalar_buffer = work_rhs(column)
+      work_rhs(column) = work_rhs(pivot_row)
+      work_rhs(pivot_row) = scalar_buffer
+    end if
+    do row = column + 1, system_size
+      factor = work(row, column) / work(column, column)
+      work(row, column:system_size) = work(row, column:system_size) - &
+        factor * work(column, column:system_size)
+      work_rhs(row) = work_rhs(row) - factor * work_rhs(column)
+    end do
+  end do
+  do row = system_size, 1, -1
+    solution(row) = work_rhs(row)
+    if (row < system_size) solution(row) = solution(row) - &
+      dot_product(work(row, row + 1:system_size), &
+                  solution(row + 1:system_size))
+    solution(row) = solution(row) / work(row, row)
+  end do
+end function j_solve_real_vector
 
 pure elemental function j_match_real(left, right) result(matches)
   real(kind=real64), intent(in) :: left, right

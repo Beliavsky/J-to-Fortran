@@ -861,6 +861,11 @@ def infer_type(
             if operand_type.atom_type not in {AtomType.INTEGER, AtomType.REAL}:
                 raise LoweringError("exponential requires a real numeric operand")
             return TypeInfo(AtomType.REAL, operand_type.shape)
+        if spelling == "=":
+            if operand_type.rank != 1:
+                raise LoweringError("self-classify currently requires a vector")
+            extent = operand_type.shape.extents[0]
+            return TypeInfo(AtomType.LOGICAL, Shape.matrix(extent, extent))
         if spelling in {"<.", ">."}:
             return TypeInfo(AtomType.INTEGER, operand_type.shape)
         if spelling == "-.":
@@ -1046,21 +1051,38 @@ def infer_type(
             right_type = infer_type(
                 expression.right, names, name_transform, named_verbs=named_verbs
             )
+            allowed_types = (
+                {AtomType.INTEGER, AtomType.REAL, AtomType.LOGICAL}
+                if table == "*"
+                else {AtomType.INTEGER}
+            )
             if (
-                left_type.atom_type is not AtomType.INTEGER
-                or right_type.atom_type is not AtomType.INTEGER
+                left_type.atom_type not in allowed_types
+                or right_type.atom_type not in allowed_types
                 or left_type.rank != 1
                 or right_type.rank != 1
             ):
-                raise LoweringError("table currently requires two integer vectors")
+                raise LoweringError(
+                    "table currently requires two supported numeric vectors"
+                )
             if table == "^":
                 exponents = _integer_values(expression.right)
                 if exponents is None or any(exponent < 0 for exponent in exponents):
                     raise LoweringError(
                         "power table currently requires constant nonnegative exponents"
                     )
+            atom_type = (
+                AtomType.LOGICAL
+                if table in {"=", "<"}
+                else (
+                    AtomType.REAL
+                    if AtomType.REAL
+                    in {left_type.atom_type, right_type.atom_type}
+                    else AtomType.INTEGER
+                )
+            )
             return TypeInfo(
-                AtomType.LOGICAL if table in {"=", "<"} else AtomType.INTEGER,
+                atom_type,
                 Shape.matrix(
                     left_type.shape.extents[0], right_type.shape.extents[0]
                 ),
@@ -1139,10 +1161,12 @@ def infer_type(
                     "catenate currently requires scalar or vector arguments"
                 )
             atom_types = {left_type.atom_type, right_type.atom_type}
-            if len(atom_types) > 1 and atom_types != {
-                AtomType.INTEGER,
-                AtomType.LOGICAL,
-            }:
+            compatible_mixed_types = (
+                {AtomType.INTEGER, AtomType.LOGICAL},
+                {AtomType.INTEGER, AtomType.REAL},
+                {AtomType.LOGICAL, AtomType.REAL},
+            )
+            if len(atom_types) > 1 and atom_types not in compatible_mixed_types:
                 raise LoweringError("catenate currently requires matching atom types")
             left_extent = 1 if left_type.is_scalar else left_type.shape.extents[0]
             right_extent = 1 if right_type.is_scalar else right_type.shape.extents[0]
@@ -1150,9 +1174,13 @@ def infer_type(
                 left_extent, right_extent
             )
             atom_type = (
-                AtomType.INTEGER
-                if AtomType.INTEGER in atom_types
-                else left_type.atom_type
+                AtomType.REAL
+                if AtomType.REAL in atom_types
+                else (
+                    AtomType.INTEGER
+                    if AtomType.INTEGER in atom_types
+                    else left_type.atom_type
+                )
             )
             return TypeInfo(atom_type, Shape.vector(extent))
         if spelling == ",:":
@@ -1168,8 +1196,28 @@ def infer_type(
                 left_type.atom_type, Shape.matrix(2, vector_shape.extents[0])
             )
         if spelling == ",.":
+            if left_type.rank == 2 and right_type.rank == 1:
+                if left_type.atom_type is not right_type.atom_type:
+                    raise LoweringError(
+                        "matrix-column stitch requires matching atom types"
+                    )
+                try:
+                    rows = agree_shapes(
+                        Shape.vector(left_type.shape.extents[0]),
+                        right_type.shape,
+                    ).extents[0]
+                except ShapeMismatchError as exc:
+                    raise LoweringError(
+                        f"length error: matrix-column stitch {exc}"
+                    ) from exc
+                columns = _sum_extents(left_type.shape.extents[1], 1)
+                return TypeInfo(
+                    left_type.atom_type, Shape.matrix(rows, columns)
+                )
             if left_type.rank != 1 or right_type.rank != 1:
-                raise LoweringError("stitch currently requires two vectors")
+                raise LoweringError(
+                    "stitch currently requires two vectors or a matrix and column"
+                )
             if left_type.atom_type is not right_type.atom_type:
                 raise LoweringError("stitch currently requires matching atom types")
             try:
@@ -1258,6 +1306,19 @@ def infer_type(
                 )
             return TypeInfo(AtomType.LOGICAL)
         if spelling == "%.":
+            if (
+                left_type.atom_type is AtomType.REAL
+                and right_type.atom_type is AtomType.REAL
+                and left_type.rank == 1
+                and right_type.rank == 2
+            ):
+                rows, columns = right_type.shape.extents
+                length = left_type.shape.extents[0]
+                if rows is not None and columns is not None and rows != columns:
+                    raise LoweringError("matrix division requires a square divisor")
+                if length is not None and rows is not None and length != rows:
+                    raise LoweringError("matrix division shape mismatch")
+                return left_type
             if (
                 left_type.atom_type is not AtomType.INTEGER
                 or right_type.atom_type is not AtomType.INTEGER
@@ -1672,6 +1733,13 @@ def _render_fortran_expression(
             return f"log({operand})", _ATOM_PRECEDENCE, "call"
         if spelling == "^":
             return f"exp({operand})", _ATOM_PRECEDENCE, "call"
+        if spelling == "=":
+            return (
+                f"spread({operand}, dim=2, ncopies=size({operand})) == "
+                f"spread({operand}, dim=1, ncopies=size({operand}))",
+                _FORTRAN_PRECEDENCE["=="],
+                "==",
+            )
         if spelling == "<.":
             return f"floor({operand})", _ATOM_PRECEDENCE, "call"
         if spelling == ">.":
@@ -2039,7 +2107,7 @@ def render_fortran_expression(
                     return f"sum(merge(1, 0, {operand}))"
     if isinstance(bare_expression, DyadicApply) and names is not None:
         table = table_spelling(bare_expression.verb)
-        if table in {"+", "=", "<"}:
+        if table in {"+", "*", "=", "<"}:
             infer_type(
                 bare_expression,
                 names,
@@ -2058,7 +2126,31 @@ def render_fortran_expression(
                 names=names,
                 named_verbs=named_verbs,
             )
-            operator = {"+": "+", "=": "==", "<": "<"}[table]
+            left_type = infer_type(
+                bare_expression.left,
+                names,
+                name_transform,
+                named_verbs=named_verbs,
+            )
+            right_type = infer_type(
+                bare_expression.right,
+                names,
+                name_transform,
+                named_verbs=named_verbs,
+            )
+            # Keep the established integer multiplication helper.  Other
+            # numeric and logical tables lower directly with SPREAD.
+            if (
+                table == "*"
+                and left_type.atom_type is AtomType.INTEGER
+                and right_type.atom_type is AtomType.INTEGER
+            ):
+                return f"j_multiplication_table_int({left}, {right})"
+            if left_type.atom_type is AtomType.LOGICAL:
+                left = f"merge(1, 0, {left})"
+            if right_type.atom_type is AtomType.LOGICAL:
+                right = f"merge(1, 0, {right})"
+            operator = {"+": "+", "*": "*", "=": "==", "<": "<"}[table]
             return (
                 f"spread({left}, dim=2, ncopies=size({right})) {operator} "
                 f"spread({right}, dim=1, ncopies=size({left}))"
@@ -2071,6 +2163,24 @@ def render_fortran_expression(
             named_verbs=named_verbs,
         )
         spelling = primitive_spelling(bare_expression.verb)
+        if spelling in {"+", "-", "|"} and not (
+            spelling == "+" and operand_type.atom_type is AtomType.COMPLEX
+        ):
+            operand = render_fortran_expression(
+                bare_expression.operand,
+                name_transform,
+                names=names,
+                named_verbs=named_verbs,
+            )
+            if spelling == "|":
+                return f"abs({operand})"
+            operand_expression = ungroup(bare_expression.operand)
+            if (
+                isinstance(operand_expression, DyadicApply)
+                and match_index_selection(operand_expression) is None
+            ):
+                operand = f"({operand})"
+            return f"{spelling}{operand}"
         if spelling in {"^", "^."}:
             operand = render_fortran_expression(
                 bare_expression.operand,
@@ -2127,6 +2237,12 @@ def render_fortran_expression(
         )
         if left_type.atom_type is AtomType.CHARACTER:
             return f"{left} // {right}"
+        if AtomType.REAL in {left_type.atom_type, right_type.atom_type}:
+            if left_type.atom_type is AtomType.LOGICAL:
+                left = f"merge(1.0_real64, 0.0_real64, {left})"
+            if right_type.atom_type is AtomType.LOGICAL:
+                right = f"merge(1.0_real64, 0.0_real64, {right})"
+            return f"[real(kind=real64) :: {left}, {right}]"
         if {left_type.atom_type, right_type.atom_type} == {
             AtomType.INTEGER,
             AtomType.LOGICAL,
@@ -2136,6 +2252,37 @@ def render_fortran_expression(
             if right_type.atom_type is AtomType.LOGICAL:
                 right = f"merge(1, 0, {right})"
         return f"[{left}, {right}]"
+    stitched = dyad(bare_expression, ",.")
+    if stitched is not None and names is not None:
+        left_type = infer_type(
+            stitched[0], names, name_transform, named_verbs=named_verbs
+        )
+        right_type = infer_type(
+            stitched[1], names, name_transform, named_verbs=named_verbs
+        )
+        if left_type.rank == 2 and right_type.rank == 1:
+            infer_type(
+                bare_expression,
+                names,
+                name_transform,
+                named_verbs=named_verbs,
+            )
+            left = render_fortran_expression(
+                stitched[0],
+                name_transform,
+                names=names,
+                named_verbs=named_verbs,
+            )
+            right = render_fortran_expression(
+                stitched[1],
+                name_transform,
+                names=names,
+                named_verbs=named_verbs,
+            )
+            return (
+                f"reshape([{left}, {right}], "
+                f"[size({left}, 1), size({left}, 2) + 1])"
+            )
     boxed_list = dyad(bare_expression, ";")
     if boxed_list is not None and names is not None:
         items = _flatten_semicolon_list(bare_expression)
@@ -2176,6 +2323,17 @@ def render_fortran_expression(
             names=names,
             named_verbs=named_verbs,
         )
+        dividend_type = infer_type(
+            matrix_division[0], names, name_transform, named_verbs=named_verbs
+        )
+        divisor_type = infer_type(
+            matrix_division[1], names, name_transform, named_verbs=named_verbs
+        )
+        if (
+            dividend_type.atom_type is AtomType.REAL
+            and divisor_type.atom_type is AtomType.REAL
+        ):
+            return f"j_solve_real_vector({dividend}, {divisor})"
         helper = (
             "j_solve_2x2_vector_int"
             if result_type.rank == 1
@@ -2243,14 +2401,12 @@ def render_fortran_expression(
         right = render_fortran_expression(
             divided[1], name_transform, names=names, named_verbs=named_verbs
         )
-        _, right_precedence, _ = _render_fortran_expression(
-            divided[1], name_transform
-        )
-        right = _parenthesize(
-            right, right_precedence, _FORTRAN_PRECEDENCE["/"]
-        )
+        if isinstance(ungroup(divided[1]), DyadicApply):
+            right = f"({right})"
         if left_type.atom_type is AtomType.INTEGER:
             left = f"real({left}, kind=real64)"
+        elif isinstance(ungroup(divided[0]), DyadicApply):
+            left = f"({left})"
         return f"{left} / {right}"
     if (
         isinstance(bare_expression, MonadicApply)
@@ -2440,6 +2596,38 @@ def render_fortran_expression(
             return f"pack({values}, {selector})"
     if isinstance(bare_expression, DyadicApply) and names is not None:
         spelling = primitive_spelling(bare_expression.verb)
+        if spelling in {"<.", ">."}:
+            left_type = infer_type(
+                bare_expression.left,
+                names,
+                name_transform,
+                named_verbs=named_verbs,
+            )
+            right_type = infer_type(
+                bare_expression.right,
+                names,
+                name_transform,
+                named_verbs=named_verbs,
+            )
+            left = render_fortran_expression(
+                bare_expression.left,
+                name_transform,
+                names=names,
+                named_verbs=named_verbs,
+            )
+            right = render_fortran_expression(
+                bare_expression.right,
+                name_transform,
+                names=names,
+                named_verbs=named_verbs,
+            )
+            if AtomType.REAL in {left_type.atom_type, right_type.atom_type}:
+                if left_type.atom_type is AtomType.INTEGER:
+                    left = f"real({left}, kind=real64)"
+                if right_type.atom_type is AtomType.INTEGER:
+                    right = f"real({right}, kind=real64)"
+            intrinsic = "min" if spelling == "<." else "max"
+            return f"{intrinsic}({left}, {right})"
         if spelling in _DYADIC_FORTRAN:
             infer_type(
                 bare_expression,
@@ -2495,12 +2683,18 @@ def render_fortran_expression(
                 right_type.atom_type is AtomType.LOGICAL
             ):
                 right = f"merge(1, 0, {right})"
-            _, left_precedence, left_operator = _render_fortran_expression(
-                bare_expression.left, name_transform
-            )
-            _, right_precedence, right_operator = _render_fortran_expression(
-                bare_expression.right, name_transform
-            )
+            try:
+                _, left_precedence, left_operator = _render_fortran_expression(
+                    bare_expression.left, name_transform
+                )
+            except LoweringError:
+                left_precedence, left_operator = _ATOM_PRECEDENCE, None
+            try:
+                _, right_precedence, right_operator = _render_fortran_expression(
+                    bare_expression.right, name_transform
+                )
+            except LoweringError:
+                right_precedence, right_operator = _ATOM_PRECEDENCE, None
             left = _parenthesize(left, left_precedence, precedence)
             right_requires = precedence
             if right_precedence == precedence:
@@ -2674,7 +2868,23 @@ def required_runtime_helpers(
                 name_transform,
                 named_verbs=named_verbs,
             )
-            helper = "solve_2x2_vector_int" if left_type.rank == 1 else "solve_2x2_matrix_int"
+            right_type = infer_type(
+                expression.right,
+                names,
+                name_transform,
+                named_verbs=named_verbs,
+            )
+            if (
+                left_type.atom_type is AtomType.REAL
+                and right_type.atom_type is AtomType.REAL
+            ):
+                helper = "solve_real_vector"
+            else:
+                helper = (
+                    "solve_2x2_vector_int"
+                    if left_type.rank == 1
+                    else "solve_2x2_matrix_int"
+                )
             helpers.add(helper)
         if primitive_spelling(expression.verb) == "-:" and names is not None:
             left_type = infer_type(

@@ -121,6 +121,7 @@ RUNTIME_PROCEDURES = {
     "signum_int": "j_signum_int",
     "solve_2x2_matrix_int": "j_solve_2x2_matrix_int",
     "solve_2x2_vector_int": "j_solve_2x2_vector_int",
+    "solve_real_vector": "j_solve_real_vector",
     "sort_int_vector": "j_sort_int_vector",
 }
 
@@ -527,6 +528,7 @@ class FunctionEmitter:
         argument_types: tuple[TypeInfo, ...] | None = None,
         *,
         named_verbs: dict[str, TypeInfo] | None = None,
+        global_types: dict[str, TypeInfo] | None = None,
         source_comments: str = "commented",
     ):
         self.definition = definition
@@ -535,7 +537,7 @@ class FunctionEmitter:
             TypeInfo(AtomType.INTEGER) for _ in definition.arguments
         )
         self.declarations: dict[str, str] = {}
-        self.types: dict[str, TypeInfo] = {}
+        self.types: dict[str, TypeInfo] = dict(global_types or {})
         self.body: list[str] = []
         self.indent = 1
         self.returned = False
@@ -807,6 +809,8 @@ class FunctionEmitter:
             self._emit_while(statement)
         elif isinstance(statement, IfStatement):
             self._emit_if(statement)
+        elif statement.expression == "break.":
+            self._write("exit")
         else:
             self._emit_result(statement)
 
@@ -1673,6 +1677,54 @@ def _runtime_helpers(helpers: set[str]) -> list[str]:
                 "",
             ]
         )
+    if "solve_real_vector" in helpers:
+        result.extend(
+            [
+                "pure function j_solve_real_vector(rhs, coefficients) result(solution)",
+                "  real(kind=real64), intent(in) :: rhs(:), coefficients(:,:)",
+                "  real(kind=real64), allocatable :: solution(:)",
+                "  real(kind=real64), allocatable :: work(:,:), work_rhs(:), row_buffer(:)",
+                "  real(kind=real64) :: factor, scalar_buffer",
+                "  integer :: column, row, pivot_row, system_size",
+                "",
+                "  system_size = size(rhs)",
+                "  if (size(coefficients, 1) /= system_size .or. &",
+                "      size(coefficients, 2) /= system_size) &",
+                '    error stop "linear solve shape mismatch"',
+                "  work = coefficients",
+                "  work_rhs = rhs",
+                "  allocate(solution(system_size), row_buffer(system_size))",
+                "  do column = 1, system_size",
+                "    pivot_row = column - 1 + &",
+                "      maxloc(abs(work(column:system_size, column)), dim=1)",
+                "    if (abs(work(pivot_row, column)) <= tiny(1.0_real64)) &",
+                '      error stop "singular matrix"',
+                "    if (pivot_row /= column) then",
+                "      row_buffer = work(column, :)",
+                "      work(column, :) = work(pivot_row, :)",
+                "      work(pivot_row, :) = row_buffer",
+                "      scalar_buffer = work_rhs(column)",
+                "      work_rhs(column) = work_rhs(pivot_row)",
+                "      work_rhs(pivot_row) = scalar_buffer",
+                "    end if",
+                "    do row = column + 1, system_size",
+                "      factor = work(row, column) / work(column, column)",
+                "      work(row, column:system_size) = work(row, column:system_size) - &",
+                "        factor * work(column, column:system_size)",
+                "      work_rhs(row) = work_rhs(row) - factor * work_rhs(column)",
+                "    end do",
+                "  end do",
+                "  do row = system_size, 1, -1",
+                "    solution(row) = work_rhs(row)",
+                "    if (row < system_size) solution(row) = solution(row) - &",
+                "      dot_product(work(row, row + 1:system_size), &",
+                "                  solution(row + 1:system_size))",
+                "    solution(row) = solution(row) / work(row, row)",
+                "  end do",
+                "end function j_solve_real_vector",
+                "",
+            ]
+        )
     if "match_real" in helpers:
         result.extend(
             [
@@ -2005,6 +2057,75 @@ def _main_entity_declaration(assignment: LoweredTopAssignment) -> tuple[str, str
         dimensions = ",".join(":" for _ in range(assignment.type_info.rank))
         return f"{intrinsic}, allocatable", f"{assignment.name}({dimensions})"
     return intrinsic, assignment.name
+
+
+def _infer_top_assignment_types(
+    program: Program, function_types: dict[str, TypeInfo]
+) -> dict[str, TypeInfo]:
+    """Infer the top-level prefix currently supported by known verb results."""
+
+    types: dict[str, TypeInfo] = {}
+    noun_names: set[str] = set()
+    for assignment in (item for item in program.items if isinstance(item, Assign)):
+        try:
+            expression = parse_expression(
+                assignment.expression, noun_names=noun_names
+            )
+            types[_fortran_name(assignment.name)] = infer_type(
+                expression,
+                types,
+                _fortran_name,
+                named_verbs=function_types,
+            )
+        except (LexerError, ExpressionParseError, LoweringError):
+            pass
+        noun_names.add(assignment.name)
+    return types
+
+
+def _captured_top_names(
+    definitions: list[VerbDefinition], program: Program
+) -> set[str]:
+    """Find top-level nouns referenced from explicit verb bodies."""
+
+    top_names = {
+        item.name: _fortran_name(item.name)
+        for item in program.items
+        if isinstance(item, Assign)
+    }
+    captured: set[str] = set()
+
+    def inspect(statements: tuple[Statement, ...]) -> None:
+        for statement in statements:
+            if isinstance(statement, CommentStatement):
+                continue
+            texts: list[str] = []
+            if isinstance(statement, Assign):
+                texts.append(statement.expression)
+            elif isinstance(statement, ExpressionStatement):
+                texts.append(statement.expression)
+            elif isinstance(statement, ForLoop):
+                texts.append(statement.expression)
+                inspect(statement.body)
+            elif isinstance(statement, WhileLoop):
+                texts.append(statement.condition)
+                inspect(statement.body)
+            elif isinstance(statement, IfStatement):
+                texts.append(statement.condition)
+                inspect(statement.body)
+                for branch in statement.elseif_branches:
+                    texts.append(branch.condition)
+                    inspect(branch.body)
+                if statement.else_body is not None:
+                    inspect(statement.else_body)
+            for text in texts:
+                for j_name, fortran_name in top_names.items():
+                    if re.search(rf"\b{re.escape(j_name)}\b", text):
+                        captured.add(fortran_name)
+
+    for definition in definitions:
+        inspect(definition.body)
+    return captured
 
 
 def _definition_argument_types(
@@ -2554,6 +2675,7 @@ def emit_fortran(
                 )
             )
     definitions = [definition for definition, _ in specialized_definitions]
+    captured_top_names = _captured_top_names(definitions, program)
     if not definitions and not any(
         isinstance(item, (Assign, EchoStatement)) for item in program.items
     ):
@@ -2587,6 +2709,7 @@ def emit_fortran(
                 "  end interface",
             ]
         )
+    module_declaration_index = len(lines)
     lines.extend(["", "contains", ""])
 
     helpers: set[str] = set()
@@ -2594,10 +2717,18 @@ def emit_fortran(
     function_types: dict[str, TypeInfo] = {}
     for definition, signature in specialized_definitions:
         exported_name = _fortran_name(definition.generic_name or definition.name)
+        available_top_types = _infer_top_assignment_types(
+            program, function_types
+        )
         emitted, required, result_type = FunctionEmitter(
             definition,
             signature,
             named_verbs=function_types,
+            global_types={
+                name: type_info
+                for name, type_info in available_top_types.items()
+                if name in captured_top_names
+            },
             source_comments=source_comments,
         ).emit()
         append_comments(lines, definition.line.number)
@@ -2614,6 +2745,25 @@ def emit_fortran(
             )
         function_types[exported_name] = result_type
     top_assignments, top_helpers = _lower_top_assignments(program, function_types)
+    captured_assignments = [
+        assignment
+        for assignment in top_assignments
+        if assignment.name in captured_top_names
+    ]
+    if captured_assignments:
+        module_declarations = combine_declarations(
+            [
+                _main_entity_declaration(assignment)
+                for assignment in captured_assignments
+            ]
+        )
+        module_specification = [
+            f"  public :: {', '.join(assignment.name for assignment in captured_assignments)}",
+            *(f"  {declaration}" for declaration in module_declarations),
+        ]
+        lines[module_declaration_index:module_declaration_index] = (
+            module_specification
+        )
     echos = [item for item in program.items if isinstance(item, EchoStatement)]
     top_types = {
         assignment.name: assignment.type_info for assignment in top_assignments
@@ -2664,7 +2814,9 @@ def emit_fortran(
 
     program_name = _fortran_name(program.source_path.stem) + "_j"
     active_assignments = [assignment for assignment in top_assignments if not assignment.print_only]
-    main_imports = sorted(function_names | set(exported_helpers))
+    main_imports = sorted(
+        function_names | set(exported_helpers) | captured_top_names
+    )
     lines.append(f"program {program_name}")
     if main_imports:
         lines.append(f"  use {module_name}, only: {', '.join(main_imports)}")
@@ -2681,6 +2833,7 @@ def emit_fortran(
     declarations = [
         declaration
         for assignment in active_assignments
+        if assignment.name not in captured_top_names
         for declaration in (
             _main_entity_declaration(assignment),
             *assignment.temporary_declarations,

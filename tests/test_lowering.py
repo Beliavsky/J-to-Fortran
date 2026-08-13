@@ -371,6 +371,56 @@ def test_two_by_two_matrix_division_uses_runtime_solver(
     assert required_runtime_helpers(expression, names) == {helper.removeprefix("j_")}
 
 
+def test_real_matrix_division_uses_general_runtime_solver() -> None:
+    expression = parse_expression("b %. a")
+    names = {
+        "a": TypeInfo(AtomType.REAL, Shape.matrix(5, 5)),
+        "b": TypeInfo(AtomType.REAL, Shape.vector(5)),
+    }
+
+    assert infer_type(expression, names) == names["b"]
+    assert (
+        render_fortran_expression(expression, names=names)
+        == "j_solve_real_vector(b, a)"
+    )
+    assert required_runtime_helpers(expression, names) == {"solve_real_vector"}
+
+
+def test_negated_vector_selection_can_be_nested_in_exponential() -> None:
+    expression = parse_expression("^ -0 { values", noun_names={"values"})
+    names = {"values": TypeInfo(AtomType.REAL, Shape.vector(5))}
+
+    assert infer_type(expression, names) == TypeInfo(AtomType.REAL)
+    assert render_fortran_expression(expression, names=names) == "exp(-values(1))"
+
+
+def test_catenate_promotes_integer_and_real_items() -> None:
+    expression = parse_expression("estimate, truth, estimate - truth")
+    names = {
+        "estimate": TypeInfo(AtomType.REAL),
+        "truth": TypeInfo(AtomType.INTEGER),
+    }
+
+    assert infer_type(expression, names) == TypeInfo(
+        AtomType.REAL, Shape.vector(3)
+    )
+    assert "real(kind=real64)" in render_fortran_expression(expression, names=names)
+
+
+def test_division_parenthesizes_composite_numerator_and_denominator() -> None:
+    expression = parse_expression("(observed - fitted) % step * scale")
+    names = {
+        "observed": TypeInfo(AtomType.REAL, Shape.vector(5)),
+        "fitted": TypeInfo(AtomType.REAL, Shape.vector(5)),
+        "step": TypeInfo(AtomType.REAL),
+        "scale": TypeInfo(AtomType.REAL, Shape.vector(5)),
+    }
+
+    assert render_fortran_expression(expression, names=names) == (
+        "(observed - fitted) / (step * scale)"
+    )
+
+
 def test_prime_expression_primitives_lower_generically() -> None:
     names = {
         "limit": TypeInfo(AtomType.INTEGER),

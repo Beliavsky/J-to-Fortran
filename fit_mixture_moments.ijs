@@ -50,11 +50,11 @@ NB. Form a numerical 5 by 5 Jacobian of the scaled moment residuals.
 moment_jacobian =: 3 : 0
   step_size =. 1e_5
   base =. mixture_moments y
-  jacobian =. 5 0 $ 0
+  jacobian =. 5 5 $ 0.0
   for_parameter. i. 5 do.
     shifted =. y + step_size * parameter = i. 5
     column =. ((mixture_moments shifted) - base) % step_size * moment_scale
-    jacobian =. jacobian ,. column
+    jacobian =. jacobian + column */ (parameter = i. 5)
   end.
   jacobian
 )
@@ -67,8 +67,8 @@ fit_mixture =: 3 : 0
   for_iteration. i. 100 do.
     residual =. (sample_moments - mixture_moments parameters) % moment_scale
     jacobian =. moment_jacobian parameters
-    normal_matrix =. ((|: jacobian) +/ . * jacobian) + damping * identity
-    normal_rhs =. (|: jacobian) +/ . * residual
+    normal_matrix =. ((|: jacobian) (+/ . *) jacobian) + damping * identity
+    normal_rhs =. (|: jacobian) (+/ . *) residual
     update =. normal_rhs %. normal_matrix
     parameters =. parameters + update
     if. 1e_9 > >./ | update do.
