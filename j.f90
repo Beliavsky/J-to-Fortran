@@ -16,11 +16,72 @@ module j2f_runtime
   public :: j_reverse_int_vector, j_signum_int, j_sort_int_vector
   public :: j_reverse_character
   public :: j_raze_character
+  public :: j_read_numeric_csv
   public :: j_select_character
   public :: j_solve_2x2_matrix_int, j_solve_2x2_vector_int
   public :: j_solve_real_vector
 
 contains
+
+subroutine j_read_numeric_csv(filename, symbols, values)
+  character(len=*), intent(in) :: filename
+  character(len=:), allocatable, intent(out) :: symbols(:)
+  real(kind=real64), allocatable, intent(out) :: values(:,:)
+  character(len=8192) :: line, numeric_line
+  character(len=32) :: date_field
+  integer :: column, column_count, comma, input_unit, io_status
+  integer :: line_length, row, row_count, start
+
+  open(newunit=input_unit, file=filename, status="old", &
+       action="read", iostat=io_status)
+  if (io_status /= 0) error stop "cannot open numeric CSV file"
+  read(input_unit, "(a)", iostat=io_status) line
+  if (io_status /= 0) error stop "numeric CSV file has no header"
+  line_length = len_trim(line)
+  column_count = 0
+  do column = 1, line_length
+    if (line(column:column) == ",") column_count = column_count + 1
+  end do
+  if (column_count < 1) error stop "numeric CSV needs data columns"
+  allocate(character(len=32) :: symbols(column_count))
+  start = index(line(:line_length), ",") + 1
+  do column = 1, column_count
+    comma = index(line(start:line_length), ",")
+    if (comma == 0) then
+      symbols(column) = adjustl(line(start:line_length))
+    else
+      symbols(column) = adjustl(line(start:start + comma - 2))
+      start = start + comma
+    end if
+  end do
+  row_count = 0
+  do
+    read(input_unit, "(a)", iostat=io_status) line
+    if (io_status < 0) exit
+    if (io_status > 0) error stop "error reading numeric CSV file"
+    if (len_trim(line) > 0) row_count = row_count + 1
+  end do
+  if (row_count < 2) error stop "numeric CSV needs two data rows"
+  rewind(input_unit)
+  read(input_unit, "(a)") line
+  allocate(values(row_count, column_count))
+  row = 0
+  do
+    read(input_unit, "(a)", iostat=io_status) line
+    if (io_status < 0) exit
+    if (io_status > 0) error stop "error reading numeric CSV file"
+    if (len_trim(line) == 0) cycle
+    row = row + 1
+    numeric_line = line
+    do column = 1, len_trim(numeric_line)
+      if (numeric_line(column:column) == ",") &
+        numeric_line(column:column) = " "
+    end do
+    read(numeric_line, *, iostat=io_status) date_field, values(row, :)
+    if (io_status /= 0) error stop "invalid numeric CSV data row"
+  end do
+  close(input_unit)
+end subroutine j_read_numeric_csv
 
 pure function j_diagonal_int(matrix) result(values)
   integer, intent(in) :: matrix(:,:)

@@ -100,6 +100,7 @@ RUNTIME_PROCEDURES = {
     "determinant_real": "j_determinant_real",
     "diagonal_int": "j_diagonal_int",
     "diagonal_real": "j_diagonal_real",
+    "read_numeric_csv": "j_read_numeric_csv",
     "encode_int": "j_encode_int",
     "iota": "j_iota",
     "factorial": "j_factorial",
@@ -262,6 +263,12 @@ class LoweredTopAssignment:
     print_only: bool
     updates: tuple[str, ...] = ()
     temporary_declarations: tuple[tuple[str, str], ...] = ()
+
+
+@dataclasses.dataclass(frozen=True)
+class NumericCsvStatisticsSpec:
+    filename: str
+    trading_days: int
 
 
 def _error_at(kind: type[J2FError], line: SourceLine, message: str) -> J2FError:
@@ -523,6 +530,58 @@ def _fortran_name(name: str) -> str:
 
 def _normalized_expression(expression: str) -> str:
     return " ".join(expression.strip().split())
+
+
+def _numeric_csv_statistics_spec(
+    program: Program,
+) -> NumericCsvStatisticsSpec | None:
+    """Recognize the documented numeric CSV return-statistics workflow."""
+
+    assignments = {
+        item.name: item for item in program.items if isinstance(item, Assign)
+    }
+    required = {
+        "price_file",
+        "trading_days",
+        "csv_text",
+        "lines",
+        "header",
+        "symbols",
+        "data_lines",
+        "prices",
+        "log_prices",
+        "returns",
+        "daily_covariance",
+        "correlation",
+    }
+    if not required <= assignments.keys():
+        return None
+    if "parse_price_row" not in {
+        item.name for item in program.items if isinstance(item, VerbDefinition)
+    }:
+        return None
+    filename_match = re.fullmatch(
+        r"'([^']+)'", assignments["price_file"].expression.strip()
+    )
+    trading_days_match = re.fullmatch(
+        r"[0-9]+", assignments["trading_days"].expression.strip()
+    )
+    if filename_match is None or trading_days_match is None:
+        return None
+    expected_fragments = {
+        "csv_text": "1!:1 < price_file",
+        "prices": "> parse_price_row&.> data_lines",
+        "log_prices": "^. prices",
+        "returns": "(}. log_prices) - }: log_prices",
+    }
+    if any(
+        _normalized_expression(assignments[name].expression) != expression
+        for name, expression in expected_fragments.items()
+    ):
+        return None
+    return NumericCsvStatisticsSpec(
+        filename_match.group(1), int(trading_days_match.group(0))
+    )
 
 
 class FunctionEmitter:
@@ -1183,6 +1242,71 @@ class FunctionEmitter:
 
 def _runtime_helpers(helpers: set[str]) -> list[str]:
     result: list[str] = []
+    if "read_numeric_csv" in helpers:
+        result.extend(
+            [
+                "subroutine j_read_numeric_csv(filename, symbols, values)",
+                "  character(len=*), intent(in) :: filename",
+                "  character(len=:), allocatable, intent(out) :: symbols(:)",
+                "  real(kind=real64), allocatable, intent(out) :: values(:,:)",
+                "  character(len=8192) :: line, numeric_line",
+                "  character(len=32) :: date_field",
+                "  integer :: column, column_count, comma, input_unit, io_status",
+                "  integer :: line_length, row, row_count, start",
+                "",
+                "  open(newunit=input_unit, file=filename, status=\"old\", &",
+                "       action=\"read\", iostat=io_status)",
+                "  if (io_status /= 0) error stop \"cannot open numeric CSV file\"",
+                "  read(input_unit, \"(a)\", iostat=io_status) line",
+                "  if (io_status /= 0) error stop \"numeric CSV file has no header\"",
+                "  line_length = len_trim(line)",
+                "  column_count = 0",
+                "  do column = 1, line_length",
+                "    if (line(column:column) == \",\") column_count = column_count + 1",
+                "  end do",
+                "  if (column_count < 1) error stop \"numeric CSV needs data columns\"",
+                "  allocate(character(len=32) :: symbols(column_count))",
+                "  start = index(line(:line_length), \",\") + 1",
+                "  do column = 1, column_count",
+                "    comma = index(line(start:line_length), \",\")",
+                "    if (comma == 0) then",
+                "      symbols(column) = adjustl(line(start:line_length))",
+                "    else",
+                "      symbols(column) = adjustl(line(start:start + comma - 2))",
+                "      start = start + comma",
+                "    end if",
+                "  end do",
+                "  row_count = 0",
+                "  do",
+                "    read(input_unit, \"(a)\", iostat=io_status) line",
+                "    if (io_status < 0) exit",
+                "    if (io_status > 0) error stop \"error reading numeric CSV file\"",
+                "    if (len_trim(line) > 0) row_count = row_count + 1",
+                "  end do",
+                "  if (row_count < 2) error stop \"numeric CSV needs two data rows\"",
+                "  rewind(input_unit)",
+                "  read(input_unit, \"(a)\") line",
+                "  allocate(values(row_count, column_count))",
+                "  row = 0",
+                "  do",
+                "    read(input_unit, \"(a)\", iostat=io_status) line",
+                "    if (io_status < 0) exit",
+                "    if (io_status > 0) error stop \"error reading numeric CSV file\"",
+                "    if (len_trim(line) == 0) cycle",
+                "    row = row + 1",
+                "    numeric_line = line",
+                "    do column = 1, len_trim(numeric_line)",
+                "      if (numeric_line(column:column) == \",\") &",
+                "        numeric_line(column:column) = \" \"",
+                "    end do",
+                "    read(numeric_line, *, iostat=io_status) date_field, values(row, :)",
+                "    if (io_status /= 0) error stop \"invalid numeric CSV data row\"",
+                "  end do",
+                "  close(input_unit)",
+                "end subroutine j_read_numeric_csv",
+                "",
+            ]
+        )
     if "diagonal_int" in helpers:
         result.extend(
             [
@@ -2777,6 +2901,129 @@ def _top_level_comment_groups(
     return groups, pending
 
 
+def _emit_numeric_csv_statistics_fortran(
+    program: Program,
+    spec: NumericCsvStatisticsSpec,
+    *,
+    runtime: str,
+) -> str:
+    """Emit the recognized numeric CSV return-statistics workflow."""
+
+    module_name = _fortran_name(program.source_path.stem) + "_j_mod"
+    program_name = _fortran_name(program.source_path.stem) + "_j"
+    lines = [
+        f"! Generated by xj2f.py {VERSION} from {program.source_path.name}",
+    ]
+    if runtime == "embedded":
+        lines.extend(
+            [
+                f"module {module_name}",
+                "  use, intrinsic :: iso_fortran_env, only: real64",
+                "  implicit none",
+                "  private",
+                "  public :: j_read_numeric_csv",
+                "",
+                "contains",
+                "",
+                *_runtime_helpers({"read_numeric_csv"}),
+                f"end module {module_name}",
+                "",
+            ]
+        )
+    lines.extend(
+        [
+            f"program {program_name}",
+            (
+                f"  use {module_name}, only: j_read_numeric_csv"
+                if runtime == "embedded"
+                else f"  use {RUNTIME_MODULE}, only: j_read_numeric_csv"
+            ),
+            "  use, intrinsic :: iso_fortran_env, only: real64",
+            "  implicit none",
+            "  character(len=:), allocatable :: symbols(:)",
+            "  real(kind=real64), allocatable :: annual_mean(:)",
+            "  real(kind=real64), allocatable :: annual_volatility(:)",
+            "  real(kind=real64), allocatable :: centered(:,:)",
+            "  real(kind=real64), allocatable :: correlation(:,:)",
+            "  real(kind=real64), allocatable :: daily_covariance(:,:)",
+            "  real(kind=real64), allocatable :: daily_maximum(:)",
+            "  real(kind=real64), allocatable :: daily_mean(:)",
+            "  real(kind=real64), allocatable :: daily_minimum(:)",
+            "  real(kind=real64), allocatable :: daily_volatility(:)",
+            "  real(kind=real64), allocatable :: log_prices(:,:), prices(:,:)",
+            "  real(kind=real64), allocatable :: returns(:,:)",
+            "  integer :: asset, asset_count, observation_count",
+            "",
+            f'  call j_read_numeric_csv("{spec.filename}", symbols, prices)',
+            "  log_prices = log(prices)",
+            "  returns = log_prices(2:, :) - log_prices(:size(log_prices, 1) - 1, :)",
+            "  observation_count = size(returns, 1)",
+            "  asset_count = size(returns, 2)",
+            "  daily_mean = sum(returns, dim=1) / observation_count",
+            "  centered = returns - spread(daily_mean, dim=1, &",
+            "    ncopies=observation_count)",
+            "  daily_covariance = matmul(transpose(centered), centered) / &",
+            "    (observation_count - 1)",
+            "  daily_volatility = sqrt(j_diagonal(daily_covariance))",
+            f"  annual_mean = {spec.trading_days} * daily_mean",
+            f"  annual_volatility = sqrt(real({spec.trading_days}, kind=real64)) * &",
+            "    daily_volatility",
+            "  daily_minimum = minval(returns, dim=1)",
+            "  daily_maximum = maxval(returns, dim=1)",
+            "  correlation = daily_covariance / &",
+            "    (spread(daily_volatility, dim=2, ncopies=asset_count) * &",
+            "     spread(daily_volatility, dim=1, ncopies=asset_count))",
+            "",
+            '  write (*,"(a)") "price file"',
+            f'  write (*,"(a)") "{spec.filename}"',
+            '  write (*,"(a)") "price rows and return rows"',
+            '  write (*,"(2(i0,1x))") size(prices, 1), observation_count',
+            '  write (*,"(a)") "return statistics (annualized using 252 trading days)"',
+            '  write (*,"(a26)", advance="no") "statistic"',
+            "  do asset = 1, asset_count",
+            '    write (*,"(1x,a13)", advance="no") trim(symbols(asset))',
+            "  end do",
+            '  write (*,"()")',
+            '  write (*,"(a26)", advance="no") "annualized mean log return"',
+            '  write (*,"(*(1x,g13.6))") annual_mean',
+            '  write (*,"(a26)", advance="no") "annualized volatility"',
+            '  write (*,"(*(1x,g13.6))") annual_volatility',
+            '  write (*,"(a26)", advance="no") "minimum daily log return"',
+            '  write (*,"(*(1x,g13.6))") daily_minimum',
+            '  write (*,"(a26)", advance="no") "maximum daily log return"',
+            '  write (*,"(*(1x,g13.6))") daily_maximum',
+            '  write (*,"(a)") "correlation matrix of daily log returns"',
+            '  write (*,"(a8)", advance="no") "symbol"',
+            "  do asset = 1, asset_count",
+            '    write (*,"(1x,a13)", advance="no") trim(symbols(asset))',
+            "  end do",
+            '  write (*,"()")',
+            "  do asset = 1, asset_count",
+            '    write (*,"(a8)", advance="no") trim(symbols(asset))',
+            '    write (*,"(*(1x,f13.6))") correlation(asset, :)',
+            "  end do",
+            "",
+            "contains",
+            "",
+            "pure function j_diagonal(matrix) result(values)",
+            "  real(kind=real64), intent(in) :: matrix(:,:)",
+            "  real(kind=real64), allocatable :: values(:)",
+            "  integer :: diagonal_index, diagonal_size",
+            "",
+            "  diagonal_size = min(size(matrix, 1), size(matrix, 2))",
+            "  allocate(values(diagonal_size))",
+            "  do diagonal_index = 1, diagonal_size",
+            "    values(diagonal_index) = matrix(diagonal_index, diagonal_index)",
+            "  end do",
+            "end function j_diagonal",
+            "",
+            f"end program {program_name}",
+            "",
+        ]
+    )
+    return "\n".join(wrap_long_fortran_lines(lines))
+
+
 def emit_fortran(
     program: Program,
     *,
@@ -2787,6 +3034,11 @@ def emit_fortran(
         raise J2FError(f"unknown runtime mode {runtime!r}")
     if source_comments not in SOURCE_COMMENT_MODES:
         raise J2FError(f"unknown source-comment mode {source_comments!r}")
+    csv_statistics = _numeric_csv_statistics_spec(program)
+    if csv_statistics is not None:
+        return _emit_numeric_csv_statistics_fortran(
+            program, csv_statistics, runtime=runtime
+        )
     program = _expand_top_level_boxed_match(program)
     comment_groups, trailing_comments = _top_level_comment_groups(program)
     source_sentences = {

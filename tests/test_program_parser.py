@@ -233,6 +233,44 @@ def test_american_option_tree_compiles_and_runs(tmp_path: Path) -> None:
 
 
 @pytest.mark.requires_gfortran
+def test_numeric_csv_statistics_compile_and_run(tmp_path: Path) -> None:
+    compiler = shutil.which("gfortran")
+    if compiler is None:
+        pytest.skip("gfortran is not installed")
+    csv_name = "small_prices.csv"
+    (tmp_path / csv_name).write_text(
+        "Date,AAA,BBB\r\n"
+        "2025-01-02,100,50\r\n"
+        "2025-01-03,101,49\r\n"
+        "2025-01-06,102,51\r\n"
+        "2025-01-07,103,52\r\n\r\n",
+        encoding="ascii",
+    )
+    j_source = (ROOT / "price_return_stats.ijs").read_text(encoding="utf-8")
+    j_source = j_source.replace("asset_class_etf_prices.csv", csv_name)
+    source = tmp_path / "price_return_stats_j.f90"
+    executable = tmp_path / "price_return_stats.exe"
+    program = xj2f.parse_j_source(Path("price_return_stats.ijs"), j_source)
+    source.write_text(xj2f.emit_fortran(program), encoding="utf-8")
+
+    compiled = subprocess.run(
+        [compiler, "-std=f2018", str(source), "-o", str(executable)],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert compiled.returncode == 0, compiled.stdout + compiled.stderr
+    completed = subprocess.run(
+        [str(executable)], cwd=tmp_path, capture_output=True, text=True, check=False
+    )
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert "4 3" in completed.stdout
+    assert "AAA" in completed.stdout and "BBB" in completed.stdout
+    assert "correlation matrix of daily log returns" in completed.stdout
+
+
+@pytest.mark.requires_gfortran
 def test_random_component_mask_uses_a_real_temporary(tmp_path: Path) -> None:
     compiler = shutil.which("gfortran")
     if compiler is None:

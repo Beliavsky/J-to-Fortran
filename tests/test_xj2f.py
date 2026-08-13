@@ -548,6 +548,24 @@ def test_external_runtime_uses_only_required_helpers() -> None:
     assert "pure function j_compress_hcat" not in generated
 
 
+def test_numeric_csv_statistics_workflow_supports_both_runtime_modes() -> None:
+    source = (ROOT / "price_return_stats.ijs").read_text(encoding="utf-8")
+    program = xj2f.parse_j_source(Path("price_return_stats.ijs"), source)
+
+    embedded = xj2f.emit_fortran(program)
+    external = xj2f.emit_fortran(program, runtime="external")
+
+    assert "subroutine j_read_numeric_csv" in embedded
+    assert 'call j_read_numeric_csv("asset_class_etf_prices.csv"' in embedded
+    assert "correlation = daily_covariance /" in embedded
+    assert "subroutine j_read_numeric_csv" not in external
+    assert "use j2f_runtime, only: j_read_numeric_csv" in external
+    assert 'error stop "invalid numeric CSV data row"' in embedded
+    assert "public :: j_read_numeric_csv" in (ROOT / "j.f90").read_text(
+        encoding="utf-8"
+    )
+
+
 def test_running_maximum_is_available_in_both_runtime_modes() -> None:
     source = """result =: >./\\ 3 1 4 1 5
 expected =: 3 3 4 4 5

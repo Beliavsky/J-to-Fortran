@@ -226,6 +226,9 @@ The parser currently recognizes:
 - a final noun as an array-valued verb result;
 - top-level `echo` and `smoutput`, including character literals, translated verb
   calls, and assigned nouns, plus `exit 0`.
+- the numeric CSV return-statistics workflow in `price_return_stats.ijs`, with
+  CRLF/blank-line handling, header symbols, annualized statistics, and labeled
+  correlation output; embedded and external runtimes share the same CSV reader.
 
 J uses zero-based indexing and row-major array order; the lowering adjusts
 indices and constructs cartesian-product rows so the generated Fortran retains
