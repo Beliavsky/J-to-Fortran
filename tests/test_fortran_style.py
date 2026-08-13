@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from j2fortran.fortran_style import (
+    coalesce_adjacent_allocate_statements,
     combine_adjacent_row_extension_assignments,
     combine_declarations,
+    coalesce_simple_declaration_lines,
     procedure_prefix,
     safe_fortran_identifier,
     wrap_fortran_comment,
@@ -11,6 +13,7 @@ from j2fortran.fortran_style import (
 
 
 def test_reserved_and_intrinsic_identifiers_are_renamed() -> None:
+    assert safe_fortran_identifier("dimension") == "dimension_j"
     assert safe_fortran_identifier("mask") == "mask_j"
     assert safe_fortran_identifier("result") == "result_j"
     assert safe_fortran_identifier("sum") == "sum_j"
@@ -42,6 +45,103 @@ def test_declarations_combine_only_with_identical_specifications() -> None:
     )
 
     assert declarations == ["integer :: i, j, k(:)", "real :: x"]
+
+
+def test_adjacent_simple_declaration_lines_are_coalesced() -> None:
+    lines = [
+        "  real(kind=real64), allocatable :: annual_mean(:)",
+        "  real(kind=real64), allocatable :: annual_volatility(:)",
+        "  real(kind=real64), allocatable :: centered(:,:)",
+        "  real(kind=real64), allocatable :: correlation(:,:)",
+    ]
+
+    assert coalesce_simple_declaration_lines(lines, max_length=200) == [
+        "  real(kind=real64), allocatable :: annual_mean(:), "
+        "annual_volatility(:), centered(:,:), correlation(:,:)"
+    ]
+
+
+def test_declaration_coalescing_respects_boundaries() -> None:
+    lines = [
+        "  integer :: first",
+        "  integer, allocatable :: values(:)",
+        "  integer :: initialized = 1",
+        "  integer :: commented ! keep this",
+        "  integer :: last",
+    ]
+
+    assert coalesce_simple_declaration_lines(lines) == lines
+
+
+def test_multi_entity_declarations_coalesce_but_result_stays_separate() -> None:
+    lines = [
+        "pure function density_function(x) result(density)",
+        "  real, intent(in) :: x(:)",
+        "  real, allocatable :: density(:)",
+        "  real, allocatable :: centered(:,:), inverse(:,:)",
+        "  real, allocatable :: quadratic(:)",
+        "end function density_function",
+    ]
+
+    assert coalesce_simple_declaration_lines(lines, max_length=200) == [
+        "pure function density_function(x) result(density)",
+        "  real, intent(in) :: x(:)",
+        "  real, allocatable :: density(:)",
+        "  real, allocatable :: centered(:,:), inverse(:,:), quadratic(:)",
+        "end function density_function",
+    ]
+
+
+def test_long_declarations_pack_multiple_entities_per_continuation() -> None:
+    lines = [
+        f"  real(kind=real64), allocatable :: {name}"
+        for name in (
+            "covariances1(:,:,:)",
+            "covariances2(:,:,:)",
+            "covariances3(:,:,:)",
+            "means1(:,:)",
+            "means2(:,:)",
+            "means3(:,:)",
+            "observations(:,:)",
+            "responsibilities(:)",
+            "weights1(:)",
+            "weights2(:)",
+            "weights3(:)",
+        )
+    ]
+
+    wrapped = coalesce_simple_declaration_lines(lines)
+
+    assert len(wrapped) < len(lines)
+    assert all(len(line) <= 100 for line in wrapped)
+    assert any(line.count(",") > 3 for line in wrapped[1:])
+
+
+def test_adjacent_allocate_statements_are_coalesced() -> None:
+    lines = [
+        "  allocate(weighted_density(observation_count, component_count))",
+        "  allocate(total_density(observation_count), new_weights(component_count))",
+        "  allocate(new_means(dimension, component_count))",
+        "  allocate(new_covariances(dimension, dimension, component_count))",
+    ]
+
+    assert coalesce_adjacent_allocate_statements(lines, max_length=300) == [
+        "  allocate(weighted_density(observation_count, component_count), "
+        "total_density(observation_count), new_weights(component_count), "
+        "new_means(dimension, component_count), "
+        "new_covariances(dimension, dimension, component_count))"
+    ]
+
+
+def test_allocate_coalescing_skips_keyword_and_typed_allocations() -> None:
+    lines = [
+        "  allocate(first(n))",
+        "  allocate(second(n), source=0.0)",
+        "  allocate(character(len=32) :: names(n))",
+        "  allocate(last(n))",
+    ]
+
+    assert coalesce_adjacent_allocate_statements(lines) == lines
 
 
 def test_adjacent_row_extension_assignments_are_combined() -> None:

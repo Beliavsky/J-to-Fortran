@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -561,9 +562,18 @@ def test_numeric_csv_statistics_workflow_supports_both_runtime_modes() -> None:
     assert "running_peak = max(running_peak, prices(price_row, asset))" in embedded
     assert "1.0_real64 - prices(price_row, asset) / running_peak" in embedded
     assert '"maximum drawdown"' in embedded
+    assert (
+        "allocatable :: annual_mean(:), annual_volatility(:), centered(:,:), &"
+        in embedded
+    )
+    assert "real(kind=real64), allocatable :: annual_volatility(:)" not in embedded
     assert "subroutine j_read_numeric_csv" not in external
     assert "use j2f_runtime, only: j_read_numeric_csv" in external
     assert 'error stop "invalid numeric CSV data row"' in embedded
+    assert "integer, parameter :: trading_days = 252" in embedded
+    assert "annual_mean = trading_days * daily_mean" in embedded
+    assert "sqrt(real(trading_days, kind=real64))" in embedded
+    assert "annual_mean = 252 * daily_mean" not in embedded
     assert "public :: j_read_numeric_csv" in (ROOT / "j.f90").read_text(
         encoding="utf-8"
     )
@@ -581,6 +591,8 @@ def test_annual_csv_statistics_workflow_supports_both_runtime_modes() -> None:
     assert "count(return_years == years(year_index))" in embedded
     assert "selected_returns(selected_row, :) = returns(return_row, :)" in embedded
     assert 'write (*,"(2(i0,1x))") years(year_index)' in embedded
+    assert "integer, parameter :: trading_days = 252" in embedded
+    assert "annual_mean = trading_days * daily_mean" in embedded
     assert "subroutine j_read_numeric_csv" in embedded
     assert "subroutine j_read_numeric_csv" not in external
     assert "use j2f_runtime, only: j_read_numeric_csv" in external
@@ -596,8 +608,26 @@ def test_return_mixture_workflow_supports_both_runtime_modes() -> None:
     assert "subroutine j_read_numeric_csv" in embedded
     assert "pure subroutine j_fit_em" in embedded
     assert "pure function j_mv_density" in embedded
-    assert "dimension = size(observations, 2)" in embedded
+    assert "log_prices = log(prices)" in embedded
+    assert "observations = log_prices(2:, :)" in embedded
+    assert "log(prices(2:, :))" not in embedded
+    assert "allocatable :: density(:)\n" in embedded
+    assert "allocatable :: centered(:,:), inverse(:,:), quadratic(:)" in embedded
+    assert "density(:), centered" not in embedded
+    assert "dimension_j = size(observations, 2)" in embedded
+    assert "integer, parameter :: trading_days = 252" in embedded
+    assert "symbols, trading_days, weights2(model)" in embedded
+    assert "& weights1(1), &" in embedded
+    assert "allocate(weights2(2)" not in embedded
+    assert "allocate(weights3(3)" not in embedded
+    assert "weights2 = [0.7_real64, 0.3_real64]" in embedded
+    assert "weights3 = [weights2(1), split_weight, split_weight]" in embedded
+    assert re.search(
+        r"(?m)^\s*integer\b[^\n:]*::[^\n]*\bdimension\b", embedded
+    ) is None
     assert "call j_fit_em(observations, 400" in embedded
+    assert "allocate(weighted_density(observation_count, component_count), &" in embedded
+    assert "allocate(total_density(observation_count), new_weights" not in embedded
     assert 'call j_load_returns("asset_class_etf_prices.csv"' in embedded
     assert 'write (*,"(i10,3(1x,f18.6))")' in embedded
     assert 'write (*,"(a6,2(1x,f21.6))")' in embedded

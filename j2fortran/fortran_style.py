@@ -99,6 +99,223 @@ def combine_declarations(
     return [f"{specification} :: {', '.join(entities)}" for specification, entities in grouped.items()]
 
 
+def coalesce_simple_declaration_lines(
+    lines: Iterable[str], *, max_length: int = 100
+) -> list[str]:
+    """Merge adjacent declarations with identical type specifications.
+
+    This is adapted from ``R-to-Fortran/fortran_scan.py``.  It deliberately
+    leaves initialized declarations, comments, and nonadjacent declarations
+    untouched.  Function result entities are hard boundaries and remain on
+    their own lines.  Array specifications remain attached to their entities,
+    so different ranks can safely share one declaration.
+    """
+
+    source = list(lines)
+    result: list[str] = []
+    declaration = re.compile(
+        r"^(\s*)([^:][^:]*)\s*::\s*(.+?)\s*$",
+        re.IGNORECASE,
+    )
+    entity_pattern = re.compile(
+        r"^([a-z][a-z0-9_]*)(?:\s*\([^)]*\))?$", re.IGNORECASE
+    )
+
+    def split_entities(text: str) -> list[str] | None:
+        entities: list[str] = []
+        start = 0
+        depth = 0
+        for position, character in enumerate(text):
+            if character == "(":
+                depth += 1
+            elif character == ")":
+                depth -= 1
+                if depth < 0:
+                    return None
+            elif character == "," and depth == 0:
+                entities.append(text[start:position].strip())
+                start = position + 1
+        if depth != 0:
+            return None
+        entities.append(text[start:].strip())
+        if any(not entity or "=" in entity for entity in entities):
+            return None
+        if any(entity_pattern.fullmatch(entity) is None for entity in entities):
+            return None
+        return entities
+
+    protected_declaration_lines: set[int] = set()
+    for header_index, line in enumerate(source):
+        result_match = re.search(
+            r"\bresult\s*\(\s*([a-z][a-z0-9_]*)\s*\)",
+            line,
+            re.IGNORECASE,
+        )
+        if result_match is None:
+            continue
+        result_name = result_match.group(1).lower()
+        for declaration_index in range(header_index + 1, len(source)):
+            match = declaration.match(source[declaration_index].rstrip())
+            if match is None:
+                continue
+            entities = split_entities(match.group(3))
+            if entities is None:
+                continue
+            entity_names = {
+                entity_pattern.fullmatch(entity).group(1).lower()
+                for entity in entities
+            }
+            if result_name in entity_names:
+                protected_declaration_lines.add(declaration_index)
+                break
+
+    def parsed(
+        line: str, line_index: int
+    ) -> tuple[str, str, list[str], bool] | None:
+        if "!" in line:
+            return None
+        match = declaration.match(line.rstrip())
+        if match is None:
+            return None
+        entities = split_entities(match.group(3))
+        if entities is None:
+            return None
+        contains_result = line_index in protected_declaration_lines
+        return match.group(1), match.group(2).strip(), entities, contains_result
+
+    index = 0
+    while index < len(source):
+        first = parsed(source[index], index)
+        if first is None:
+            result.append(source[index])
+            index += 1
+            continue
+        indent, specification, entities, contains_result = first
+        if contains_result:
+            result.append(source[index])
+            index += 1
+            continue
+        following = index + 1
+        while following < len(source):
+            candidate = parsed(source[following], following)
+            if (
+                candidate is None
+                or candidate[0] != indent
+                or candidate[1].lower() != specification.lower()
+                or candidate[3]
+            ):
+                break
+            entities.extend(candidate[2])
+            following += 1
+        if following == index + 1:
+            result.append(source[index])
+            index += 1
+            continue
+        merged = f"{indent}{specification} :: {', '.join(entities)}"
+        if len(merged) <= max_length:
+            result.append(merged)
+        else:
+            prefixes = [f"{indent}{specification} :: ", f"{indent}   & "]
+            wrapped_entities: list[list[str]] = []
+            current: list[str] = []
+            for entity_index, entity_name in enumerate(entities):
+                prefix = prefixes[0] if not wrapped_entities else prefixes[1]
+                candidate = [*current, entity_name]
+                suffix = "" if entity_index == len(entities) - 1 else ", &"
+                if current and len(prefix + ", ".join(candidate) + suffix) > max_length:
+                    wrapped_entities.append(current)
+                    current = [entity_name]
+                else:
+                    current = candidate
+            wrapped_entities.append(current)
+            for group_index, group in enumerate(wrapped_entities):
+                prefix = prefixes[0] if group_index == 0 else prefixes[1]
+                suffix = "" if group_index == len(wrapped_entities) - 1 else ", &"
+                result.append(prefix + ", ".join(group) + suffix)
+        index = following
+    return result
+
+
+def coalesce_adjacent_allocate_statements(
+    lines: Iterable[str], *, max_length: int = 100
+) -> list[str]:
+    """Merge compatible adjacent ``allocate`` statements.
+
+    Adapted from ``R-to-Fortran/fortran_scan.py``.  This version also accepts
+    statements that already contain several allocation objects.  Statements
+    with comments, type specs, ``source=``, ``mold=``, or ``stat=`` remain
+    untouched.
+    """
+
+    source = list(lines)
+    result: list[str] = []
+    allocation = re.compile(r"^(\s*)allocate\s*\((.*)\)\s*$", re.IGNORECASE)
+
+    def split_objects(text: str) -> list[str] | None:
+        objects: list[str] = []
+        start = 0
+        depth = 0
+        for position, character in enumerate(text):
+            if character == "(":
+                depth += 1
+            elif character == ")":
+                depth -= 1
+                if depth < 0:
+                    return None
+            elif character == "," and depth == 0:
+                objects.append(text[start:position].strip())
+                start = position + 1
+        if depth != 0:
+            return None
+        objects.append(text[start:].strip())
+        if any(not item or "=" in item or "::" in item for item in objects):
+            return None
+        return objects
+
+    def parsed(line: str) -> tuple[str, list[str]] | None:
+        if "!" in line:
+            return None
+        match = allocation.match(line.rstrip())
+        if match is None:
+            return None
+        objects = split_objects(match.group(2))
+        if objects is None:
+            return None
+        return match.group(1), objects
+
+    index = 0
+    while index < len(source):
+        first = parsed(source[index])
+        if first is None:
+            result.append(source[index])
+            index += 1
+            continue
+        indent, objects = first
+        following = index + 1
+        while following < len(source):
+            candidate = parsed(source[following])
+            if candidate is None or candidate[0] != indent:
+                break
+            objects.extend(candidate[1])
+            following += 1
+        if following == index + 1:
+            result.append(source[index])
+            index += 1
+            continue
+        merged = f"{indent}allocate({', '.join(objects)})"
+        if len(merged) <= max_length:
+            result.append(merged)
+        else:
+            result.append(f"{indent}allocate({objects[0]}, &")
+            for object_index, object_name in enumerate(objects[1:], 1):
+                if object_index == len(objects) - 1:
+                    result.append(f"{indent}   & {object_name})")
+                else:
+                    result.append(f"{indent}   & {object_name}, &")
+        index = following
+    return result
+
+
 def wrap_fortran_comment(
     text: str, *, indent: str = "", max_length: int = 100
 ) -> list[str]:
