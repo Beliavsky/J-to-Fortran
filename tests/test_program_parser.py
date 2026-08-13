@@ -440,6 +440,62 @@ exit 0
     assert [float(value) for value in completed.stdout.split()] == [4.0, 4.0]
 
 
+def test_named_monadic_chain_lowers_from_right_to_left() -> None:
+    source = """mean =: +/ % #
+values =: 2.0 4.0 6.0
+demean =: ] - mean
+smoutput mean values
+smoutput demean values
+smoutput mean *: demean values
+smoutput %: mean *: demean values
+exit 0
+"""
+
+    generated = xj2f.emit_fortran(
+        xj2f.parse_j_source(Path("variance.ijs"), source)
+    )
+
+    assert 'write (*,"(g0)") mean(demean(values)**2)' in generated
+    assert 'write (*,"(g0)") sqrt(mean(demean(values)**2))' in generated
+
+
+@pytest.mark.requires_gfortran
+def test_named_monadic_chain_compiles_and_runs(tmp_path: Path) -> None:
+    compiler = shutil.which("gfortran")
+    if compiler is None:
+        pytest.skip("gfortran is not installed")
+    j_source = """mean =: +/ % #
+values =: 2.0 4.0 6.0
+demean =: ] - mean
+smoutput mean values
+smoutput demean values
+smoutput mean *: demean values
+smoutput %: mean *: demean values
+exit 0
+"""
+    source = tmp_path / "variance_j.f90"
+    executable = tmp_path / "variance.exe"
+    program = xj2f.parse_j_source(Path("variance.ijs"), j_source)
+    source.write_text(xj2f.emit_fortran(program), encoding="utf-8")
+
+    compiled = subprocess.run(
+        [compiler, "-std=f2018", str(source), "-o", str(executable)],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert compiled.returncode == 0, compiled.stdout + compiled.stderr
+    completed = subprocess.run(
+        [str(executable)], cwd=tmp_path, capture_output=True, text=True, check=False
+    )
+    assert completed.returncode == 0
+    results = [float(value) for value in completed.stdout.split()]
+    assert results[:4] == pytest.approx([4.0, -2.0, 0.0, 2.0])
+    assert results[4] == pytest.approx(8.0 / 3.0)
+    assert results[5] == pytest.approx((8.0 / 3.0) ** 0.5)
+
+
 def test_ranked_tacit_call_maps_over_rank_three_array_cells() -> None:
     source = """mean =: +/ % #
 cube =: 2 2 3 $ i. 12

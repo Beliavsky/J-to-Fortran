@@ -60,6 +60,64 @@ def ungroup(expression: Expression) -> Expression:
     return expression
 
 
+def _monadic_verb_chain(
+    expression: Expression,
+    named_verbs: Mapping[str, TypeInfo] | None,
+    name_transform: Callable[[str], str],
+) -> MonadicApply | None:
+    """Recover `outer primitive argument` using known J verb names."""
+
+    expression = ungroup(expression)
+    if (
+        not isinstance(expression, DyadicApply)
+        or not isinstance(expression.left, Name)
+        or named_verbs is None
+        or name_transform(expression.left.identifier) not in named_verbs
+    ):
+        return None
+    inner = MonadicApply(expression.verb, expression.right, expression.span)
+    outer = NamedVerb(expression.left.identifier, expression.left.span)
+    return MonadicApply(outer, inner, expression.span)
+
+
+def _normalize_monadic_verb_chains(
+    expression: Expression,
+    named_verbs: Mapping[str, TypeInfo] | None,
+    name_transform: Callable[[str], str],
+) -> Expression:
+    """Resolve parser-ambiguous named verb chains throughout an expression."""
+
+    expression = ungroup(expression)
+    if isinstance(expression, MonadicApply):
+        return MonadicApply(
+            expression.verb,
+            _normalize_monadic_verb_chains(
+                expression.operand, named_verbs, name_transform
+            ),
+            expression.span,
+        )
+    if isinstance(expression, DyadicApply):
+        normalized = DyadicApply(
+            expression.verb,
+            _normalize_monadic_verb_chains(
+                expression.left, named_verbs, name_transform
+            ),
+            _normalize_monadic_verb_chains(
+                expression.right, named_verbs, name_transform
+            ),
+            expression.span,
+        )
+        monadic_chain = _monadic_verb_chain(
+            normalized, named_verbs, name_transform
+        )
+        if monadic_chain is not None:
+            return _normalize_monadic_verb_chains(
+                monadic_chain, named_verbs, name_transform
+            )
+        return normalized
+    return expression
+
+
 def primitive_spelling(verb: Verb) -> str | None:
     return verb.spelling if isinstance(verb, PrimitiveVerb) else None
 
@@ -780,6 +838,16 @@ def infer_type(
             return TypeInfo(AtomType.CHARACTER, Shape.vector(), None, False)
         raise LoweringError(f"cannot infer the result type of monadic {spelling!r}")
     if isinstance(expression, DyadicApply):
+        monadic_chain = _monadic_verb_chain(
+            expression, named_verbs, name_transform
+        )
+        if monadic_chain is not None:
+            return infer_type(
+                monadic_chain,
+                names,
+                name_transform,
+                named_verbs=named_verbs,
+            )
         named_infix = match_named_infix_application(expression)
         if named_infix is not None:
             verb_name, width_expression, values_expression = named_infix
@@ -1765,7 +1833,29 @@ def render_fortran_expression(
         raise LoweringError(
             "amendment currently requires a top-level assignment context"
         )
-    bare_expression = ungroup(expression)
+    bare_expression = _normalize_monadic_verb_chains(
+        expression, named_verbs, name_transform
+    )
+    if (
+        isinstance(bare_expression, MonadicApply)
+        and primitive_spelling(bare_expression.verb) == "%:"
+        and names is not None
+    ):
+        operand_type = infer_type(
+            bare_expression.operand,
+            names,
+            name_transform,
+            named_verbs=named_verbs,
+        )
+        operand = render_fortran_expression(
+            bare_expression.operand,
+            name_transform,
+            names=names,
+            named_verbs=named_verbs,
+        )
+        if operand_type.atom_type is AtomType.REAL:
+            return f"sqrt({operand})"
+        return f"sqrt(real({operand}, kind=real64))"
     decoded = dyad(bare_expression, "#.")
     if decoded is not None and names is not None:
         infer_type(bare_expression, names, name_transform, named_verbs=named_verbs)
@@ -2238,7 +2328,7 @@ def render_fortran_expression(
                 named_verbs=named_verbs,
             )
             return f"pack({values}, {selector})"
-    rendered, _, _ = _render_fortran_expression(expression, name_transform)
+    rendered, _, _ = _render_fortran_expression(bare_expression, name_transform)
     return rendered
 
 
@@ -2290,6 +2380,16 @@ def required_runtime_helpers(
 
     expression = ungroup(expression)
     helpers: set[str] = set()
+    monadic_chain = _monadic_verb_chain(
+        expression, named_verbs, name_transform
+    )
+    if monadic_chain is not None:
+        return required_runtime_helpers(
+            monadic_chain,
+            names,
+            name_transform,
+            named_verbs=named_verbs,
+        )
     if isinstance(expression, MonadicApply):
         spelling = primitive_spelling(expression.verb)
         if reflex_table_spelling(expression.verb) == "+":
