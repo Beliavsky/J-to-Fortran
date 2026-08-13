@@ -2136,6 +2136,7 @@ def _definition_argument_types(
     inferred: dict[tuple[str, int], list[tuple[TypeInfo, ...]]] = {}
     top_types: dict[str, TypeInfo] = {}
     noun_names: set[str] = set()
+    named_verb_types: dict[str, TypeInfo] = {}
 
     def visit(expression, names: dict[str, TypeInfo]) -> None:
         expression = ungroup(expression)
@@ -2155,7 +2156,12 @@ def _definition_argument_types(
         ):
             call_name = _fortran_name(expression.verb.operand.identifier)
             try:
-                operand_type = infer_type(expression.operand, names, _fortran_name)
+                operand_type = infer_type(
+                    expression.operand,
+                    names,
+                    _fortran_name,
+                    named_verbs=named_verb_types,
+                )
             except LoweringError:
                 pass
             else:
@@ -2173,7 +2179,10 @@ def _definition_argument_types(
                 width = integer_value(width_expression)
                 try:
                     values_type = infer_type(
-                        values_expression, names, _fortran_name
+                        values_expression,
+                        names,
+                        _fortran_name,
+                        named_verbs=named_verb_types,
                     )
                 except LoweringError:
                     pass
@@ -2197,7 +2206,12 @@ def _definition_argument_types(
             else:
                 try:
                     argument_types = tuple(
-                        infer_type(argument, names, _fortran_name)
+                        infer_type(
+                            argument,
+                            names,
+                            _fortran_name,
+                            named_verbs=named_verb_types,
+                        )
                         for argument in arguments
                     )
                 except LoweringError:
@@ -2259,7 +2273,10 @@ def _definition_argument_types(
                 visit(expression, names)
                 try:
                     names[_fortran_name(statement.name)] = infer_type(
-                        expression, names, _fortran_name
+                        expression,
+                        names,
+                        _fortran_name,
+                        named_verbs=named_verb_types,
                     )
                 except LoweringError:
                     pass
@@ -2306,27 +2323,33 @@ def _definition_argument_types(
                     branches.append(statement.else_body)
                 visit_statements(tuple(sum((list(branch) for branch in branches), [])), dict(names))
 
-    for item in program.items:
-        if not isinstance(item, (Assign, EchoStatement)):
-            continue
-        try:
-            expression = parse_expression(
-                item.expression, noun_names=noun_names
-            )
-        except (LexerError, ExpressionParseError):
-            continue
-        visit(expression, top_types)
-        if isinstance(item, Assign):
+    def visit_top_level() -> None:
+        for item in program.items:
+            if not isinstance(item, (Assign, EchoStatement)):
+                continue
             try:
-                top_types[_fortran_name(item.name)] = infer_type(
-                    expression, top_types, _fortran_name
+                expression = parse_expression(
+                    item.expression, noun_names=noun_names
                 )
-            except LoweringError:
-                pass
-            noun_names.add(item.name)
+            except (LexerError, ExpressionParseError):
+                continue
+            visit(expression, top_types)
+            if isinstance(item, Assign):
+                try:
+                    top_types[_fortran_name(item.name)] = infer_type(
+                        expression,
+                        top_types,
+                        _fortran_name,
+                        named_verbs=named_verb_types,
+                    )
+                except LoweringError:
+                    pass
+                noun_names.add(item.name)
+
+    visit_top_level()
     definitions = _explicit_definitions(program)
     while True:
-        before = repr(inferred)
+        before = (repr(inferred), repr(named_verb_types), repr(top_types))
         for definition in definitions:
             exported_name = _fortran_name(
                 definition.generic_name or definition.name
@@ -2345,7 +2368,27 @@ def _definition_argument_types(
                     }
                 )
                 visit_statements(definition.body, local_types)
-        if repr(inferred) == before:
+                executable = [
+                    statement
+                    for statement in definition.body
+                    if not isinstance(statement, CommentStatement)
+                ]
+                if executable and isinstance(executable[-1], ExpressionStatement):
+                    try:
+                        result_expression = parse_expression(
+                            executable[-1].expression,
+                            noun_names=set(local_types),
+                        )
+                        named_verb_types[exported_name] = infer_type(
+                            result_expression,
+                            local_types,
+                            _fortran_name,
+                            named_verbs=named_verb_types,
+                        )
+                    except (LexerError, ExpressionParseError, LoweringError):
+                        pass
+        visit_top_level()
+        if (repr(inferred), repr(named_verb_types), repr(top_types)) == before:
             break
     return {key: tuple(signatures) for key, signatures in inferred.items()}
 

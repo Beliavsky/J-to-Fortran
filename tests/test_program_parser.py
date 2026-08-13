@@ -329,6 +329,26 @@ def test_break_exits_the_enclosing_fortran_loop() -> None:
     assert "if (i > 2) then\n      exit\n    end if" in generated
 
 
+def test_verb_result_type_propagates_through_a_top_level_call_chain() -> None:
+    source = """make_vector =: 3 : 0
+  y , y + 1
+)
+vector_sum =: 3 : 0
+  +/ y
+)
+seed =: make_vector 2.0
+smoutput vector_sum seed
+exit 0
+"""
+
+    generated = xj2f.emit_fortran(
+        xj2f.parse_j_source(Path("call_chain.ijs"), source)
+    )
+
+    assert "real(kind=real64), intent(in) :: y(:)" in generated
+    assert "write (*,\"(g0)\") vector_sum(seed)" in generated
+
+
 def test_plain_iota_for_loop_emits_zero_based_values() -> None:
     source = """sumfirst =: 3 : 0
   s =. 0
