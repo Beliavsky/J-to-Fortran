@@ -2188,6 +2188,8 @@ def render_fortran_expression(
                 names=names,
                 named_verbs=named_verbs,
             )
+            if operand_type.atom_type is AtomType.INTEGER:
+                operand = f"real({operand}, kind=real64)"
             intrinsic = "exp" if spelling == "^" else "log"
             return f"{intrinsic}({operand})"
         if spelling == "+" and operand_type.atom_type is AtomType.COMPLEX:

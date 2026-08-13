@@ -394,6 +394,19 @@ def test_negated_vector_selection_can_be_nested_in_exponential() -> None:
     assert render_fortran_expression(expression, names=names) == "exp(-values(1))"
 
 
+@pytest.mark.parametrize(("source", "intrinsic"), [("^ n", "exp"), ("^. n", "log")])
+def test_exponential_functions_convert_integer_operands_to_real(
+    source: str, intrinsic: str
+) -> None:
+    expression = parse_expression(source)
+    names = {"n": TypeInfo(AtomType.INTEGER)}
+
+    assert infer_type(expression, names) == TypeInfo(AtomType.REAL)
+    assert render_fortran_expression(expression, names=names) == (
+        f"{intrinsic}(real(n, kind=real64))"
+    )
+
+
 def test_catenate_promotes_integer_and_real_items() -> None:
     expression = parse_expression("estimate, truth, estimate - truth")
     names = {
