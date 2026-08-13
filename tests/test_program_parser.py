@@ -588,6 +588,34 @@ exit 0
     assert 'write (*,"(*(i0, 1x))")' in generated
 
 
+@pytest.mark.requires_gfortran
+def test_nested_catenate_preserves_logical_to_integer_promotion(
+    tmp_path: Path,
+) -> None:
+    compiler = shutil.which("gfortran")
+    if compiler is None:
+        pytest.skip("gfortran is not installed")
+    j_source = """points =: 3 3 $ 2 3 4 , 1 1 1 , 6 8 0
+smoutput points
+exit 0
+"""
+    source = tmp_path / "nested_catenate_j.f90"
+    executable = tmp_path / "nested_catenate.exe"
+    program = xj2f.parse_j_source(Path("nested_catenate.ijs"), j_source)
+    generated = xj2f.emit_fortran(program)
+    source.write_text(generated, encoding="utf-8")
+
+    assert "merge(1, 0, [.true., .true., .true.])" in generated
+    compiled = subprocess.run(
+        [compiler, "-std=f2018", str(source), "-o", str(executable)],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert compiled.returncode == 0, compiled.stdout + compiled.stderr
+
+
 def test_j_names_that_differ_only_by_case_remain_distinct() -> None:
     source = """a =: 1 2 3
 A =: 4 5 6

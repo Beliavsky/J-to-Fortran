@@ -2009,29 +2009,23 @@ def render_fortran_expression(
         right_type = infer_type(
             catenated[1], names, name_transform, named_verbs=named_verbs
         )
+        left = render_fortran_expression(
+            catenated[0], name_transform, names=names, named_verbs=named_verbs
+        )
+        right = render_fortran_expression(
+            catenated[1], name_transform, names=names, named_verbs=named_verbs
+        )
         if left_type.atom_type is AtomType.CHARACTER:
-            left = render_fortran_expression(
-                catenated[0], name_transform, names=names, named_verbs=named_verbs
-            )
-            right = render_fortran_expression(
-                catenated[1], name_transform, names=names, named_verbs=named_verbs
-            )
             return f"{left} // {right}"
         if {left_type.atom_type, right_type.atom_type} == {
             AtomType.INTEGER,
             AtomType.LOGICAL,
         }:
-            left = render_fortran_expression(
-                catenated[0], name_transform, names=names, named_verbs=named_verbs
-            )
-            right = render_fortran_expression(
-                catenated[1], name_transform, names=names, named_verbs=named_verbs
-            )
             if left_type.atom_type is AtomType.LOGICAL:
                 left = f"merge(1, 0, {left})"
             if right_type.atom_type is AtomType.LOGICAL:
                 right = f"merge(1, 0, {right})"
-            return f"[{left}, {right}]"
+        return f"[{left}, {right}]"
     boxed_list = dyad(bare_expression, ";")
     if boxed_list is not None and names is not None:
         items = _flatten_semicolon_list(bare_expression)
