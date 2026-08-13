@@ -165,6 +165,39 @@ exit 0
 
 
 @pytest.mark.requires_gfortran
+def test_black_scholes_example_compiles_and_runs(tmp_path: Path) -> None:
+    compiler = shutil.which("gfortran")
+    if compiler is None:
+        pytest.skip("gfortran is not installed")
+    source = tmp_path / "black_scholes_j.f90"
+    executable = tmp_path / "black_scholes.exe"
+    program = xj2f.parse_j_source(
+        ROOT / "black_scholes.ijs",
+        (ROOT / "black_scholes.ijs").read_text(encoding="utf-8"),
+    )
+    source.write_text(xj2f.emit_fortran(program), encoding="utf-8")
+
+    compiled = subprocess.run(
+        [compiler, "-std=f2018", str(source), "-o", str(executable)],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert compiled.returncode == 0, compiled.stdout + compiled.stderr
+    completed = subprocess.run(
+        [str(executable)], cwd=tmp_path, capture_output=True, text=True, check=False
+    )
+    assert completed.returncode == 0
+    lines = completed.stdout.splitlines()
+    assert lines[0].startswith("strike, analytic call")
+    rows = [[float(value) for value in line.split()] for line in lines[1:]]
+    assert [row[0] for row in rows] == [70, 80, 90, 100, 110, 120, 130]
+    assert all(abs(row[1] - row[2]) < 0.25 for row in rows)
+    assert all(abs(row[3] - row[4]) < 0.25 for row in rows)
+
+
+@pytest.mark.requires_gfortran
 def test_random_component_mask_uses_a_real_temporary(tmp_path: Path) -> None:
     compiler = shutil.which("gfortran")
     if compiler is None:

@@ -384,6 +384,18 @@ def match_index_selection(expression: Expression) -> IndexSelection | None:
     return IndexSelection(axes, selected[1]) if axes is not None else None
 
 
+def match_matrix_diagonal(expression: Expression) -> Expression | None:
+    """Match J's principal-diagonal idiom ``(<0 1) |: matrix``."""
+
+    transposed = dyad(expression, "|:")
+    if transposed is None:
+        return None
+    axes = _constant_index_axes(transposed[0])
+    if axes != (IndexAxis((0,), True), IndexAxis((1,), True)):
+        return None
+    return transposed[1]
+
+
 def match_amendment(expression: Expression) -> Amendment | None:
     expression = ungroup(expression)
     if not isinstance(expression, DyadicApply) or not isinstance(
@@ -926,6 +938,22 @@ def infer_type(
                 name_transform,
                 named_verbs=named_verbs,
             )
+        diagonal = match_matrix_diagonal(expression)
+        if diagonal is not None:
+            matrix_type = infer_type(
+                diagonal, names, name_transform, named_verbs=named_verbs
+            )
+            if (
+                matrix_type.atom_type not in {AtomType.INTEGER, AtomType.REAL}
+                or matrix_type.rank != 2
+            ):
+                raise LoweringError("diagonal extraction requires a numeric matrix")
+            rows, columns = matrix_type.shape.extents
+            if isinstance(rows, int) and isinstance(columns, int):
+                extent = min(rows, columns)
+            else:
+                extent = rows if rows == columns else None
+            return TypeInfo(matrix_type.atom_type, Shape.vector(extent))
         rank_values = _rank_values(expression.verb)
         ranked_spelling = (
             primitive_spelling(expression.verb.operand)
@@ -1118,18 +1146,19 @@ def infer_type(
                 result_extent = None
             return TypeInfo(AtomType.INTEGER, Shape.vector(result_extent))
         table = table_spelling(expression.verb)
-        if table in {"+", "*", "^", "=", "<"}:
+        if table in {"+", "-", "*", "^", "=", "<"}:
             left_type = infer_type(
                 expression.left, names, name_transform, named_verbs=named_verbs
             )
             right_type = infer_type(
                 expression.right, names, name_transform, named_verbs=named_verbs
             )
-            allowed_types = (
-                {AtomType.INTEGER, AtomType.REAL, AtomType.LOGICAL}
-                if table == "*"
-                else {AtomType.INTEGER}
-            )
+            if table == "*":
+                allowed_types = {AtomType.INTEGER, AtomType.REAL, AtomType.LOGICAL}
+            elif table == "-":
+                allowed_types = {AtomType.INTEGER, AtomType.REAL}
+            else:
+                allowed_types = {AtomType.INTEGER}
             if (
                 left_type.atom_type not in allowed_types
                 or right_type.atom_type not in allowed_types
@@ -1295,9 +1324,10 @@ def infer_type(
             )
         if spelling == ",.":
             if left_type.rank == 2 and right_type.rank == 1:
-                if left_type.atom_type is not right_type.atom_type:
+                atom_types = {left_type.atom_type, right_type.atom_type}
+                if not atom_types <= {AtomType.INTEGER, AtomType.REAL}:
                     raise LoweringError(
-                        "matrix-column stitch requires matching atom types"
+                        "matrix-column stitch requires numeric atom types"
                     )
                 try:
                     rows = agree_shapes(
@@ -1310,20 +1340,23 @@ def infer_type(
                     ) from exc
                 columns = _sum_extents(left_type.shape.extents[1], 1)
                 return TypeInfo(
-                    left_type.atom_type, Shape.matrix(rows, columns)
+                    AtomType.REAL if AtomType.REAL in atom_types else AtomType.INTEGER,
+                    Shape.matrix(rows, columns),
                 )
             if left_type.rank != 1 or right_type.rank != 1:
                 raise LoweringError(
                     "stitch currently requires two vectors or a matrix and column"
                 )
-            if left_type.atom_type is not right_type.atom_type:
-                raise LoweringError("stitch currently requires matching atom types")
+            atom_types = {left_type.atom_type, right_type.atom_type}
+            if not atom_types <= {AtomType.INTEGER, AtomType.REAL}:
+                raise LoweringError("stitch currently requires numeric atom types")
             try:
                 vector_shape = agree_shapes(left_type.shape, right_type.shape)
             except ShapeMismatchError as exc:
                 raise LoweringError(f"length error: stitch {exc}") from exc
             return TypeInfo(
-                left_type.atom_type, Shape.matrix(vector_shape.extents[0], 2)
+                AtomType.REAL if AtomType.REAL in atom_types else AtomType.INTEGER,
+                Shape.matrix(vector_shape.extents[0], 2),
             )
         if spelling in {"{.", "}."}:
             count = integer_value(expression.left)
@@ -2090,6 +2123,55 @@ def render_fortran_expression(
     bare_expression = _normalize_monadic_verb_chains(
         expression, named_verbs, name_transform
     )
+    diagonal = match_matrix_diagonal(bare_expression)
+    if diagonal is not None and names is not None:
+        diagonal_type = infer_type(
+            bare_expression, names, name_transform, named_verbs=named_verbs
+        )
+        matrix = render_fortran_expression(
+            diagonal,
+            name_transform,
+            names=names,
+            named_verbs=named_verbs,
+        )
+        suffix = "real" if diagonal_type.atom_type is AtomType.REAL else "int"
+        return f"j_diagonal_{suffix}({matrix})"
+    if (
+        isinstance(bare_expression, MonadicApply)
+        and isinstance(bare_expression.verb, NamedVerb)
+        and names is not None
+    ):
+        infer_type(
+            bare_expression, names, name_transform, named_verbs=named_verbs
+        )
+        operand = render_fortran_expression(
+            bare_expression.operand,
+            name_transform,
+            names=names,
+            named_verbs=named_verbs,
+        )
+        return f"{name_transform(bare_expression.verb.identifier)}({operand})"
+    if (
+        isinstance(bare_expression, DyadicApply)
+        and isinstance(bare_expression.verb, NamedVerb)
+        and names is not None
+    ):
+        infer_type(
+            bare_expression, names, name_transform, named_verbs=named_verbs
+        )
+        left = render_fortran_expression(
+            bare_expression.left,
+            name_transform,
+            names=names,
+            named_verbs=named_verbs,
+        )
+        right = render_fortran_expression(
+            bare_expression.right,
+            name_transform,
+            names=names,
+            named_verbs=named_verbs,
+        )
+        return f"{name_transform(bare_expression.verb.identifier)}({left}, {right})"
     if (
         isinstance(bare_expression, DyadicApply)
         and isinstance(bare_expression.verb, RankApplication)
@@ -2107,6 +2189,12 @@ def render_fortran_expression(
                 name_transform,
                 named_verbs=named_verbs,
             )
+            right_type = infer_type(
+                bare_expression.right,
+                names,
+                name_transform,
+                named_verbs=named_verbs,
+            )
             left = render_fortran_expression(
                 bare_expression.left,
                 name_transform,
@@ -2119,6 +2207,10 @@ def render_fortran_expression(
                 names=names,
                 named_verbs=named_verbs,
             )
+            if left_type.atom_type is AtomType.LOGICAL:
+                left = f"merge(1, 0, {left})"
+            if right_type.atom_type is AtomType.LOGICAL:
+                right = f"merge(1, 0, {right})"
             operator = _DYADIC_FORTRAN[spelling]
             if rank_values == (1,):
                 if left_type.rank == 1:
@@ -2247,7 +2339,7 @@ def render_fortran_expression(
                     return f"sum(merge(1, 0, {operand}))"
     if isinstance(bare_expression, DyadicApply) and names is not None:
         table = table_spelling(bare_expression.verb)
-        if table in {"+", "*", "=", "<"}:
+        if table in {"+", "-", "*", "=", "<"}:
             infer_type(
                 bare_expression,
                 names,
@@ -2290,7 +2382,7 @@ def render_fortran_expression(
                 left = f"merge(1, 0, {left})"
             if right_type.atom_type is AtomType.LOGICAL:
                 right = f"merge(1, 0, {right})"
-            operator = {"+": "+", "*": "*", "=": "==", "<": "<"}[table]
+            operator = {"+": "+", "-": "-", "*": "*", "=": "==", "<": "<"}[table]
             return (
                 f"spread({left}, dim=2, ncopies=size({right})) {operator} "
                 f"spread({right}, dim=1, ncopies=size({left}))"
@@ -2402,7 +2494,7 @@ def render_fortran_expression(
         right_type = infer_type(
             stitched[1], names, name_transform, named_verbs=named_verbs
         )
-        if left_type.rank == 2 and right_type.rank == 1:
+        if left_type.rank in {1, 2} and right_type.rank == 1:
             infer_type(
                 bare_expression,
                 names,
@@ -2421,8 +2513,13 @@ def render_fortran_expression(
                 names=names,
                 named_verbs=named_verbs,
             )
+            constructor = f"{left}, {right}"
+            if AtomType.REAL in {left_type.atom_type, right_type.atom_type}:
+                constructor = f"real(kind=real64) :: {constructor}"
+            if left_type.rank == 1:
+                return f"reshape([{constructor}], [size({left}), 2])"
             return (
-                f"reshape([{left}, {right}], "
+                f"reshape([{constructor}], "
                 f"[size({left}, 1), size({left}, 2) + 1])"
             )
     boxed_list = dyad(bare_expression, ";")
@@ -3052,6 +3149,13 @@ def required_runtime_helpers(
             )
         )
     elif isinstance(expression, DyadicApply):
+        diagonal = match_matrix_diagonal(expression)
+        if diagonal is not None and names is not None:
+            diagonal_type = infer_type(
+                expression, names, name_transform, named_verbs=named_verbs
+            )
+            suffix = "real" if diagonal_type.atom_type is AtomType.REAL else "int"
+            helpers.add(f"diagonal_{suffix}")
         selection = match_index_selection(expression)
         if selection is not None and names is not None:
             source_type = infer_type(

@@ -98,6 +98,8 @@ RUNTIME_PROCEDURES = {
     "copy_int_vector": "j_copy_int_vector",
     "decode_int": "j_decode_int",
     "determinant_real": "j_determinant_real",
+    "diagonal_int": "j_diagonal_int",
+    "diagonal_real": "j_diagonal_real",
     "encode_int": "j_encode_int",
     "iota": "j_iota",
     "factorial": "j_factorial",
@@ -1181,6 +1183,40 @@ class FunctionEmitter:
 
 def _runtime_helpers(helpers: set[str]) -> list[str]:
     result: list[str] = []
+    if "diagonal_int" in helpers:
+        result.extend(
+            [
+                "pure function j_diagonal_int(matrix) result(values)",
+                "  integer, intent(in) :: matrix(:,:)",
+                "  integer, allocatable :: values(:)",
+                "  integer :: diagonal_index, diagonal_size",
+                "",
+                "  diagonal_size = min(size(matrix, 1), size(matrix, 2))",
+                "  allocate(values(diagonal_size))",
+                "  do diagonal_index = 1, diagonal_size",
+                "    values(diagonal_index) = matrix(diagonal_index, diagonal_index)",
+                "  end do",
+                "end function j_diagonal_int",
+                "",
+            ]
+        )
+    if "diagonal_real" in helpers:
+        result.extend(
+            [
+                "pure function j_diagonal_real(matrix) result(values)",
+                "  real(kind=real64), intent(in) :: matrix(:,:)",
+                "  real(kind=real64), allocatable :: values(:)",
+                "  integer :: diagonal_index, diagonal_size",
+                "",
+                "  diagonal_size = min(size(matrix, 1), size(matrix, 2))",
+                "  allocate(values(diagonal_size))",
+                "  do diagonal_index = 1, diagonal_size",
+                "    values(diagonal_index) = matrix(diagonal_index, diagonal_index)",
+                "  end do",
+                "end function j_diagonal_real",
+                "",
+            ]
+        )
     if "decode_int" in helpers:
         result.extend(
             [

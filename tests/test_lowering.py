@@ -887,6 +887,21 @@ def test_stitch_forms_a_two_column_matrix() -> None:
     )
 
 
+def test_stitch_promotes_integer_column_to_real() -> None:
+    expression = parse_expression("strikes ,. prices")
+    names = {
+        "strikes": TypeInfo(AtomType.INTEGER, Shape.vector(7)),
+        "prices": TypeInfo(AtomType.REAL, Shape.vector(7)),
+    }
+
+    assert infer_type(expression, names) == TypeInfo(
+        AtomType.REAL, Shape.matrix(7, 2)
+    )
+    assert render_fortran_expression(expression, names=names) == (
+        "reshape([real(kind=real64) :: strikes, prices], [size(strikes), 2])"
+    )
+
+
 @pytest.mark.parametrize(
     ("source", "expected_type", "expected_fortran", "helper"),
     [
@@ -922,6 +937,22 @@ def test_integer_tables_use_pure_helpers(
     assert infer_type(expression, names) == expected_type
     assert render_fortran_expression(expression, names=names) == expected_fortran
     assert required_runtime_helpers(expression, names) == {helper}
+
+
+def test_real_subtraction_table_lowers_to_spread() -> None:
+    expression = parse_expression("terminal -/ strikes")
+    names = {
+        "terminal": TypeInfo(AtomType.REAL, Shape.vector("n")),
+        "strikes": TypeInfo(AtomType.INTEGER, Shape.vector(7)),
+    }
+
+    assert infer_type(expression, names) == TypeInfo(
+        AtomType.REAL, Shape.matrix("n", 7)
+    )
+    assert render_fortran_expression(expression, names=names) == (
+        "spread(terminal, dim=2, ncopies=size(strikes)) - "
+        "spread(strikes, dim=1, ncopies=size(terminal))"
+    )
 
 
 def test_real_literals_use_the_declared_fortran_kind() -> None:
@@ -1124,6 +1155,26 @@ def test_transpose_rejects_an_unsupported_rank() -> None:
 
     with pytest.raises(LoweringError, match="rank-2"):
         infer_type(expression, names)
+
+
+@pytest.mark.parametrize(
+    ("atom_type", "helper"),
+    [
+        (AtomType.INTEGER, "j_diagonal_int"),
+        (AtomType.REAL, "j_diagonal_real"),
+    ],
+)
+def test_boxed_axis_transpose_extracts_matrix_diagonal(
+    atom_type: AtomType, helper: str
+) -> None:
+    expression = parse_expression("(<0 1) |: matrix")
+    names = {"matrix": TypeInfo(atom_type, Shape.matrix(3, 5))}
+
+    assert infer_type(expression, names) == TypeInfo(atom_type, Shape.vector(3))
+    assert render_fortran_expression(expression, names=names) == f"{helper}(matrix)"
+    assert required_runtime_helpers(expression, names) == {
+        helper.removeprefix("j_")
+    }
 
 
 def test_integer_grade_up_returns_zero_based_indices() -> None:
@@ -1529,3 +1580,30 @@ def test_logical_arrays_are_converted_when_used_numerically(
     }
 
     assert render_fortran_expression(expression, names=names) == fortran
+
+
+def test_logical_numeric_conversion_is_preserved_in_named_verb_argument() -> None:
+    expression = parse_expression(
+        "component_update 1 + 0 * component1", noun_names={"component1"}
+    )
+    names = {"component1": TypeInfo(AtomType.LOGICAL, Shape.vector("n"))}
+    named_verbs = {
+        "component_update": TypeInfo(AtomType.REAL, Shape.vector())
+    }
+
+    assert render_fortran_expression(
+        expression, names=names, named_verbs=named_verbs
+    ) == "component_update(1 + 0 * merge(1, 0, component1))"
+
+
+def test_ranked_logical_vector_is_converted_before_broadcasting() -> None:
+    expression = parse_expression('component1 *"0 1 sample1')
+    names = {
+        "component1": TypeInfo(AtomType.LOGICAL, Shape.vector("n")),
+        "sample1": TypeInfo(AtomType.REAL, Shape.matrix("n", "dimension")),
+    }
+
+    assert render_fortran_expression(expression, names=names) == (
+        "spread(merge(1, 0, component1), dim=2, "
+        "ncopies=size(sample1, 2)) * sample1"
+    )

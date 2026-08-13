@@ -5,7 +5,8 @@ module j2f_runtime
   public :: j_addition_table_int, j_append_int_row, j_binomial
   public :: j_cartesian_square, j_compress_hcat
   public :: j_copy_int_vector, j_factorial, j_grade_up_int, j_index_of_int
-  public :: j_decode_int, j_determinant_real, j_encode_int
+  public :: j_decode_int, j_determinant_real, j_diagonal_int, j_diagonal_real
+  public :: j_encode_int
   public :: j_infix_max_int, j_infix_subtract_int, j_infix_sum_int
   public :: j_inverse_real, j_iota, j_match_real
   public :: j_membership_int, j_multiplication_table_int, j_nub_int
@@ -20,6 +21,30 @@ module j2f_runtime
   public :: j_solve_real_vector
 
 contains
+
+pure function j_diagonal_int(matrix) result(values)
+  integer, intent(in) :: matrix(:,:)
+  integer, allocatable :: values(:)
+  integer :: diagonal_index, diagonal_size
+
+  diagonal_size = min(size(matrix, 1), size(matrix, 2))
+  allocate(values(diagonal_size))
+  do diagonal_index = 1, diagonal_size
+    values(diagonal_index) = matrix(diagonal_index, diagonal_index)
+  end do
+end function j_diagonal_int
+
+pure function j_diagonal_real(matrix) result(values)
+  real(kind=real64), intent(in) :: matrix(:,:)
+  real(kind=real64), allocatable :: values(:)
+  integer :: diagonal_index, diagonal_size
+
+  diagonal_size = min(size(matrix, 1), size(matrix, 2))
+  allocate(values(diagonal_size))
+  do diagonal_index = 1, diagonal_size
+    values(diagonal_index) = matrix(diagonal_index, diagonal_index)
+  end do
+end function j_diagonal_real
 
 pure function j_decode_int(base, digits) result(value)
   integer, intent(in) :: base, digits(:)
