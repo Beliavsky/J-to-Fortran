@@ -2635,7 +2635,13 @@ def emit_fortran(
         and re.fullmatch(r"[A-Za-z][A-Za-z0-9_]*", expression) is None
     ]
     for index in unknown_echoes:
-        lines.append(f"  integer, allocatable :: j_echo_{index}(:,:)")
+        result_type = echo_calls[index - 1][1]
+        intrinsic = {
+            AtomType.INTEGER: "integer",
+            AtomType.REAL: "real(kind=real64)",
+            AtomType.LOGICAL: "logical",
+        }[result_type.atom_type]
+        lines.append(f"  {intrinsic}, allocatable :: j_echo_{index}(:,:)")
     for index in materialized_rank_three:
         result_type = echo_calls[index - 1][1]
         intrinsic = {
@@ -2739,31 +2745,45 @@ def emit_fortran(
             continue
         if result_type.rank == 1:
             descriptor = "g0" if result_type.atom_type is AtomType.REAL else "i0"
+            output_expression = (
+                f"merge(1, 0, {expression})"
+                if result_type.atom_type is AtomType.LOGICAL
+                else expression
+            )
             lines.append(
-                f'  write (*,"(*({descriptor}, 1x))") {expression}'
+                f'  write (*,"(*({descriptor}, 1x))") {output_expression}'
             )
             continue
         if result_type.rank == 3:
             columns = result_type.shape.extents[2]
             repeat = str(columns) if isinstance(columns, int) else "*"
             descriptor = "g0" if result_type.atom_type is AtomType.REAL else "i0"
+            plane = f"transpose({display_expression}(j_plane, :, :))"
+            if result_type.atom_type is AtomType.LOGICAL:
+                plane = f"merge(1, 0, {plane})"
             lines.append(f"  do j_plane = 1, size({display_expression}, 1)")
             lines.append(
-                f'    write (*,"({repeat}({descriptor}, 1x))") '
-                f"transpose({display_expression}(j_plane, :, :))"
+                f'    write (*,"({repeat}({descriptor}, 1x))") {plane}'
             )
             lines.append("  end do")
             continue
         columns = result_type.shape.extents[1]
         if isinstance(columns, int):
             descriptor = "g0" if result_type.atom_type is AtomType.REAL else "i0"
+            matrix = f"transpose({expression})"
+            if result_type.atom_type is AtomType.LOGICAL:
+                matrix = f"merge(1, 0, {matrix})"
             lines.append(
-                f'  write (*,"({columns}({descriptor}, 1x))") transpose({expression})'
+                f'  write (*,"({columns}({descriptor}, 1x))") {matrix}'
             )
             continue
         lines.append(f"  j_echo_{index} = {expression}")
         lines.append(f"  do j_row = 1, size(j_echo_{index}, 1)")
-        lines.append(f'    write (*,"(*(i0, 1x))") j_echo_{index}(j_row, :)')
+        row = f"j_echo_{index}(j_row, :)"
+        descriptor = "g0" if result_type.atom_type is AtomType.REAL else "i0"
+        if result_type.atom_type is AtomType.LOGICAL:
+            row = f"merge(1, 0, {row})"
+        lines.append(f'    write (*,"(*({descriptor}, 1x))") {row}')
         lines.append("  end do")
     ok_assignment = assignment_by_name.get("ok")
     if not echos and ok_assignment is not None:

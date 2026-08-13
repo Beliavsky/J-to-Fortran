@@ -610,6 +610,37 @@ exit 0
     assert completed.stdout.split() == [str(value) for value in range(12)]
 
 
+@pytest.mark.requires_gfortran
+def test_logical_matrix_prints_as_j_boolean_integers(tmp_path: Path) -> None:
+    compiler = shutil.which("gfortran")
+    if compiler is None:
+        pytest.skip("gfortran is not installed")
+    j_source = """values =: 1 2 3
+smoutput values =/ values
+exit 0
+"""
+    source = tmp_path / "logical_matrix_echo_j.f90"
+    executable = tmp_path / "logical_matrix_echo.exe"
+    program = xj2f.parse_j_source(Path("logical_matrix_echo.ijs"), j_source)
+    generated = xj2f.emit_fortran(program)
+    source.write_text(generated, encoding="utf-8")
+
+    assert "merge(1, 0, transpose(" in generated
+    compiled = subprocess.run(
+        [compiler, "-std=f2018", str(source), "-o", str(executable)],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert compiled.returncode == 0, compiled.stdout + compiled.stderr
+    completed = subprocess.run(
+        [str(executable)], cwd=tmp_path, capture_output=True, text=True, check=False
+    )
+    assert completed.returncode == 0
+    assert completed.stdout.split() == ["1", "0", "0", "0", "1", "0", "0", "0", "1"]
+
+
 def test_catenate_promotes_boolean_valued_integers_to_integer() -> None:
     source = """values =: 1 1 1 , 2 3 4
 smoutput values
