@@ -558,6 +558,9 @@ def test_numeric_csv_statistics_workflow_supports_both_runtime_modes() -> None:
     assert "subroutine j_read_numeric_csv" in embedded
     assert 'call j_read_numeric_csv("asset_class_etf_prices.csv"' in embedded
     assert "correlation = daily_covariance /" in embedded
+    assert "running_peak = max(running_peak, prices(price_row, asset))" in embedded
+    assert "1.0_real64 - prices(price_row, asset) / running_peak" in embedded
+    assert '"maximum drawdown"' in embedded
     assert "subroutine j_read_numeric_csv" not in external
     assert "use j2f_runtime, only: j_read_numeric_csv" in external
     assert 'error stop "invalid numeric CSV data row"' in embedded

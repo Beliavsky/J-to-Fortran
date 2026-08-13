@@ -567,10 +567,15 @@ def _numeric_csv_statistics_spec(
         "returns",
         "daily_covariance",
         "correlation",
+        "maximum_drawdown",
     }
     if not required <= assignments.keys():
         return None
     if "parse_price_row" not in {
+        item.name for item in program.items if isinstance(item, VerbDefinition)
+    }:
+        return None
+    if "max_drawdown" not in {
         item.name for item in program.items if isinstance(item, VerbDefinition)
     }:
         return None
@@ -3079,8 +3084,10 @@ def _emit_numeric_csv_statistics_fortran(
             "  real(kind=real64), allocatable :: daily_minimum(:)",
             "  real(kind=real64), allocatable :: daily_volatility(:)",
             "  real(kind=real64), allocatable :: log_prices(:,:), prices(:,:)",
+            "  real(kind=real64), allocatable :: maximum_drawdown(:)",
             "  real(kind=real64), allocatable :: returns(:,:)",
-            "  integer :: asset, asset_count, observation_count",
+            "  real(kind=real64) :: running_peak",
+            "  integer :: asset, asset_count, observation_count, price_row",
             "",
             f'  call j_read_numeric_csv("{spec.filename}", symbols, prices)',
             "  log_prices = log(prices)",
@@ -3098,6 +3105,16 @@ def _emit_numeric_csv_statistics_fortran(
             "    daily_volatility",
             "  daily_minimum = minval(returns, dim=1)",
             "  daily_maximum = maxval(returns, dim=1)",
+            "  allocate(maximum_drawdown(asset_count))",
+            "  do asset = 1, asset_count",
+            "    running_peak = prices(1, asset)",
+            "    maximum_drawdown(asset) = 0.0_real64",
+            "    do price_row = 2, size(prices, 1)",
+            "      running_peak = max(running_peak, prices(price_row, asset))",
+            "      maximum_drawdown(asset) = max(maximum_drawdown(asset), &",
+            "        1.0_real64 - prices(price_row, asset) / running_peak)",
+            "    end do",
+            "  end do",
             "  correlation = daily_covariance / &",
             "    (spread(daily_volatility, dim=2, ncopies=asset_count) * &",
             "     spread(daily_volatility, dim=1, ncopies=asset_count))",
@@ -3120,6 +3137,8 @@ def _emit_numeric_csv_statistics_fortran(
             '  write (*,"(*(1x,g13.6))") daily_minimum',
             '  write (*,"(a26)", advance="no") "maximum daily log return"',
             '  write (*,"(*(1x,g13.6))") daily_maximum',
+            '  write (*,"(a26)", advance="no") "maximum drawdown"',
+            '  write (*,"(*(1x,g13.6))") maximum_drawdown',
             '  write (*,"(a)") "correlation matrix of daily log returns"',
             '  write (*,"(a8)", advance="no") "symbol"',
             "  do asset = 1, asset_count",

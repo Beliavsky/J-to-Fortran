@@ -18,6 +18,11 @@ parse_price_row =: 3 : 0
   ". > }. fields
 )
 
+NB. Return the largest percentage decline from an earlier running price peak.
+max_drawdown =: 3 : 0
+  >./ 1 - y % >./\ y
+)
+
 prices =: > parse_price_row&.> data_lines
 log_prices =: ^. prices
 returns =: (}. log_prices) - }: log_prices
@@ -35,12 +40,13 @@ annual_volatility =: (%: trading_days) * daily_volatility
 daily_minimum =: <./ returns
 daily_maximum =: >./ returns
 correlation =: daily_covariance % daily_volatility */ daily_volatility
+maximum_drawdown =: max_drawdown"1 |: prices
 
 NB. Box labels and values so text and numbers can share display tables.
-statistic_names =: 'annualized mean log return'; 'annualized volatility'; 'minimum daily log return'; 'maximum daily log return'
-statistic_values =: (4, asset_count) $ annual_mean, annual_volatility, daily_minimum, daily_maximum
+statistic_names =: 'annualized mean log return'; 'annualized volatility'; 'minimum daily log return'; 'maximum daily log return'; 'maximum drawdown'
+statistic_values =: (5, asset_count) $ annual_mean, annual_volatility, daily_minimum, daily_maximum, maximum_drawdown
 statistic_header =: (1, 1 + asset_count) $ (<'statistic'), symbols
-statistic_body =: ((4, 1) $ statistic_names) ,. <"0 statistic_values
+statistic_body =: ((5, 1) $ statistic_names) ,. <"0 statistic_values
 statistic_table =: statistic_header , statistic_body
 
 correlation_header =: (1, 1 + asset_count) $ (<'symbol'), symbols

@@ -267,6 +267,14 @@ def test_numeric_csv_statistics_compile_and_run(tmp_path: Path) -> None:
     assert completed.returncode == 0, completed.stdout + completed.stderr
     assert "4 3" in completed.stdout
     assert "AAA" in completed.stdout and "BBB" in completed.stdout
+    assert "maximum drawdown" in completed.stdout
+    drawdown_line = next(
+        line
+        for line in completed.stdout.splitlines()
+        if line.strip().startswith("maximum drawdown")
+    )
+    drawdowns = [float(value) for value in drawdown_line.split()[2:]]
+    assert drawdowns == pytest.approx([0.0, 0.02])
     assert "correlation matrix of daily log returns" in completed.stdout
 
 
