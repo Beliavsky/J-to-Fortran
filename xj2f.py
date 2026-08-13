@@ -48,11 +48,15 @@ from j2fortran.expression_parser import (
     parse_verb,
 )
 from j2fortran.fortran_style import (
+    collapse_short_fortran_continuations,
     coalesce_adjacent_allocate_statements,
+    combine_adjacent_literal_writes,
+    combine_adjacent_nonadvancing_writes,
     combine_adjacent_row_extension_assignments,
     combine_declarations,
     coalesce_simple_declaration_lines,
     procedure_prefix,
+    replace_nonadvancing_write_loops,
     safe_fortran_identifier,
     wrap_fortran_comment,
     wrap_long_fortran_lines,
@@ -804,7 +808,7 @@ class FunctionEmitter:
         ):
             declaration = {
                 AtomType.INTEGER: "integer, intent(in)",
-                AtomType.REAL: "real(kind=real64), intent(in)",
+                AtomType.REAL: "real(kind=dp), intent(in)",
             }.get(argument_type.atom_type)
             if declaration is None:
                 raise UnsupportedJError(
@@ -828,6 +832,7 @@ class FunctionEmitter:
                 self.definition.line,
                 f"verb {self.definition.name!r} does not produce a result on every path",
             )
+        self._eliminate_final_temporary()
 
         name = _fortran_name(self.definition.name)
         argument_types = [
@@ -876,11 +881,115 @@ class FunctionEmitter:
         helpers.update(self.expression_helpers)
         return result, helpers, self.result_type
 
+    def _eliminate_final_temporary(self) -> None:
+        """Inline a single-use local assigned immediately before its return."""
+
+        executable = [
+            statement
+            for statement in self.definition.body
+            if not isinstance(statement, CommentStatement)
+        ]
+        if len(executable) < 2:
+            return
+        assignment = executable[-2]
+        returned = executable[-1]
+        if (
+            not isinstance(assignment, Assign)
+            or assignment.copula != "=."
+            or not isinstance(returned, ExpressionStatement)
+            or returned.expression.strip() != assignment.name
+            or assignment.name in self.definition.arguments
+        ):
+            return
+        assignments, references = self._name_usage(
+            self.definition.body, assignment.name
+        )
+        if assignments != 1 or references != 1:
+            return
+
+        name = _fortran_name(assignment.name)
+        assignment_pattern = re.compile(
+            rf"^  {re.escape(name)}\s*=\s*(?P<expression>.+)$"
+        )
+        assignment_lines = [
+            (index, match)
+            for index, line in enumerate(self.body)
+            if (match := assignment_pattern.match(line)) is not None
+        ]
+        result_line = f"  j_result = {name}"
+        result_indices = [
+            index for index, line in enumerate(self.body) if line == result_line
+        ]
+        if len(assignment_lines) != 1 or len(result_indices) != 1:
+            return
+        assignment_index, match = assignment_lines[0]
+        result_index = result_indices[0]
+        if assignment_index >= result_index:
+            return
+        self.body[result_index] = f"  j_result = {match.group('expression')}"
+        del self.body[assignment_index]
+        self.declarations.pop(name, None)
+
+    @classmethod
+    def _name_usage(
+        cls, statements: tuple[Statement, ...], name: str
+    ) -> tuple[int, int]:
+        """Count assignments to and expression references of one J name."""
+
+        assignments = 0
+        references = 0
+        pattern = re.compile(
+            rf"(?<![A-Za-z0-9_]){re.escape(name)}(?![A-Za-z0-9_])"
+        )
+
+        def count_expression(expression: str) -> None:
+            nonlocal references
+            references += len(pattern.findall(expression))
+
+        for statement in statements:
+            if isinstance(statement, CommentStatement):
+                continue
+            if isinstance(statement, Assign):
+                assignments += statement.name == name
+                count_expression(statement.expression)
+            elif isinstance(statement, ForLoop):
+                assignments += statement.variable == name
+                count_expression(statement.expression)
+                nested_assignments, nested_references = cls._name_usage(
+                    statement.body, name
+                )
+                assignments += nested_assignments
+                references += nested_references
+            elif isinstance(statement, WhileLoop):
+                count_expression(statement.condition)
+                nested_assignments, nested_references = cls._name_usage(
+                    statement.body, name
+                )
+                assignments += nested_assignments
+                references += nested_references
+            elif isinstance(statement, IfStatement):
+                count_expression(statement.condition)
+                branch_bodies = [statement.body]
+                for branch in statement.elseif_branches:
+                    count_expression(branch.condition)
+                    branch_bodies.append(branch.body)
+                if statement.else_body is not None:
+                    branch_bodies.append(statement.else_body)
+                for body in branch_bodies:
+                    nested_assignments, nested_references = cls._name_usage(
+                        body, name
+                    )
+                    assignments += nested_assignments
+                    references += nested_references
+            else:
+                count_expression(statement.expression)
+        return assignments, references
+
     @staticmethod
     def _result_declaration(type_info: TypeInfo) -> str:
         intrinsic = {
             AtomType.INTEGER: "integer",
-            AtomType.REAL: "real(kind=real64)",
+            AtomType.REAL: "real(kind=dp)",
             AtomType.LOGICAL: "logical",
         }.get(type_info.atom_type)
         if intrinsic is None:
@@ -945,21 +1054,21 @@ class FunctionEmitter:
             "integer, intent(in)-matrix": TypeInfo(
                 AtomType.INTEGER, Shape.matrix()
             ),
-            "real(kind=real64), intent(in)": TypeInfo(AtomType.REAL),
-            "real(kind=real64), intent(in)-vector": TypeInfo(
+            "real(kind=dp), intent(in)": TypeInfo(AtomType.REAL),
+            "real(kind=dp), intent(in)-vector": TypeInfo(
                 AtomType.REAL, Shape.vector()
             ),
-            "real(kind=real64), intent(in)-matrix": TypeInfo(
+            "real(kind=dp), intent(in)-matrix": TypeInfo(
                 AtomType.REAL, Shape.matrix()
             ),
             "integer": TypeInfo(AtomType.INTEGER),
             "integer, allocatable-vector": TypeInfo(AtomType.INTEGER, Shape.vector()),
             "integer, allocatable-matrix": TypeInfo(AtomType.INTEGER, Shape.matrix()),
-            "real(kind=real64)": TypeInfo(AtomType.REAL),
-            "real(kind=real64), allocatable-vector": TypeInfo(
+            "real(kind=dp)": TypeInfo(AtomType.REAL),
+            "real(kind=dp), allocatable-vector": TypeInfo(
                 AtomType.REAL, Shape.vector()
             ),
-            "real(kind=real64), allocatable-matrix": TypeInfo(
+            "real(kind=dp), allocatable-matrix": TypeInfo(
                 AtomType.REAL, Shape.matrix()
             ),
             "logical": TypeInfo(AtomType.LOGICAL),
@@ -1096,7 +1205,7 @@ class FunctionEmitter:
         )
         declaration_base = {
             AtomType.INTEGER: "integer",
-            AtomType.REAL: "real(kind=real64)",
+            AtomType.REAL: "real(kind=dp)",
             AtomType.LOGICAL: "logical",
         }.get(value_type.atom_type)
         if declaration_base is not None and value_type.rank in {0, 1, 2}:
@@ -1383,7 +1492,7 @@ def _runtime_helpers(helpers: set[str]) -> list[str]:
                 "subroutine j_read_numeric_csv(filename, symbols, values)",
                 "  character(len=*), intent(in) :: filename",
                 "  character(len=:), allocatable, intent(out) :: symbols(:)",
-                "  real(kind=real64), allocatable, intent(out) :: values(:,:)",
+                "  real(kind=dp), allocatable, intent(out) :: values(:,:)",
                 "  character(len=8192) :: line, numeric_line",
                 "  character(len=32) :: date_field",
                 "  integer :: column, column_count, comma, input_unit, io_status",
@@ -1463,8 +1572,8 @@ def _runtime_helpers(helpers: set[str]) -> list[str]:
         result.extend(
             [
                 "pure function j_diagonal_real(matrix) result(values)",
-                "  real(kind=real64), intent(in) :: matrix(:,:)",
-                "  real(kind=real64), allocatable :: values(:)",
+                "  real(kind=dp), intent(in) :: matrix(:,:)",
+                "  real(kind=dp), allocatable :: values(:)",
                 "  integer :: diagonal_index, diagonal_size",
                 "",
                 "  diagonal_size = min(size(matrix, 1), size(matrix, 2))",
@@ -1937,17 +2046,17 @@ def _runtime_helpers(helpers: set[str]) -> list[str]:
             [
                 "pure function j_solve_2x2_vector_int(rhs, coefficients) result(solution)",
                 "  integer, intent(in) :: rhs(2), coefficients(2,2)",
-                "  real(kind=real64) :: solution(2)",
-                "  real(kind=real64) :: determinant",
+                "  real(kind=dp) :: solution(2)",
+                "  real(kind=dp) :: determinant",
                 "",
-                "  determinant = real(coefficients(1, 1), kind=real64) * &",
-                "    coefficients(2, 2) - real(coefficients(1, 2), kind=real64) * &",
+                "  determinant = real(coefficients(1, 1), kind=dp) * &",
+                "    coefficients(2, 2) - real(coefficients(1, 2), kind=dp) * &",
                 "    coefficients(2, 1)",
-                '  if (determinant == 0.0_real64) error stop "singular 2 by 2 matrix"',
-                "  solution(1) = (real(coefficients(2, 2), kind=real64) * rhs(1) - &",
-                "    real(coefficients(1, 2), kind=real64) * rhs(2)) / determinant",
-                "  solution(2) = (real(coefficients(1, 1), kind=real64) * rhs(2) - &",
-                "    real(coefficients(2, 1), kind=real64) * rhs(1)) / determinant",
+                '  if (determinant == 0.0_dp) error stop "singular 2 by 2 matrix"',
+                "  solution(1) = (real(coefficients(2, 2), kind=dp) * rhs(1) - &",
+                "    real(coefficients(1, 2), kind=dp) * rhs(2)) / determinant",
+                "  solution(2) = (real(coefficients(1, 1), kind=dp) * rhs(2) - &",
+                "    real(coefficients(2, 1), kind=dp) * rhs(1)) / determinant",
                 "end function j_solve_2x2_vector_int",
                 "",
             ]
@@ -1957,19 +2066,19 @@ def _runtime_helpers(helpers: set[str]) -> list[str]:
             [
                 "pure function j_solve_2x2_matrix_int(rhs, coefficients) result(solution)",
                 "  integer, intent(in) :: rhs(:,:), coefficients(2,2)",
-                "  real(kind=real64), allocatable :: solution(:,:)",
-                "  real(kind=real64) :: determinant",
+                "  real(kind=dp), allocatable :: solution(:,:)",
+                "  real(kind=dp) :: determinant",
                 "",
                 '  if (size(rhs, 1) /= 2) error stop "2 by 2 solve shape mismatch"',
-                "  determinant = real(coefficients(1, 1), kind=real64) * &",
-                "    coefficients(2, 2) - real(coefficients(1, 2), kind=real64) * &",
+                "  determinant = real(coefficients(1, 1), kind=dp) * &",
+                "    coefficients(2, 2) - real(coefficients(1, 2), kind=dp) * &",
                 "    coefficients(2, 1)",
-                '  if (determinant == 0.0_real64) error stop "singular 2 by 2 matrix"',
+                '  if (determinant == 0.0_dp) error stop "singular 2 by 2 matrix"',
                 "  allocate(solution(2, size(rhs, 2)))",
-                "  solution(1, :) = (real(coefficients(2, 2), kind=real64) * rhs(1, :) - &",
-                "    real(coefficients(1, 2), kind=real64) * rhs(2, :)) / determinant",
-                "  solution(2, :) = (real(coefficients(1, 1), kind=real64) * rhs(2, :) - &",
-                "    real(coefficients(2, 1), kind=real64) * rhs(1, :)) / determinant",
+                "  solution(1, :) = (real(coefficients(2, 2), kind=dp) * rhs(1, :) - &",
+                "    real(coefficients(1, 2), kind=dp) * rhs(2, :)) / determinant",
+                "  solution(2, :) = (real(coefficients(1, 1), kind=dp) * rhs(2, :) - &",
+                "    real(coefficients(2, 1), kind=dp) * rhs(1, :)) / determinant",
                 "end function j_solve_2x2_matrix_int",
                 "",
             ]
@@ -1978,10 +2087,10 @@ def _runtime_helpers(helpers: set[str]) -> list[str]:
         result.extend(
             [
                 "pure function j_solve_real_vector(rhs, coefficients) result(solution)",
-                "  real(kind=real64), intent(in) :: rhs(:), coefficients(:,:)",
-                "  real(kind=real64), allocatable :: solution(:)",
-                "  real(kind=real64), allocatable :: work(:,:), work_rhs(:), row_buffer(:)",
-                "  real(kind=real64) :: factor, scalar_buffer",
+                "  real(kind=dp), intent(in) :: rhs(:), coefficients(:,:)",
+                "  real(kind=dp), allocatable :: solution(:)",
+                "  real(kind=dp), allocatable :: work(:,:), work_rhs(:), row_buffer(:)",
+                "  real(kind=dp) :: factor, scalar_buffer",
                 "  integer :: column, row, pivot_row, system_size",
                 "",
                 "  system_size = size(rhs)",
@@ -1994,7 +2103,7 @@ def _runtime_helpers(helpers: set[str]) -> list[str]:
                 "  do column = 1, system_size",
                 "    pivot_row = column - 1 + &",
                 "      maxloc(abs(work(column:system_size, column)), dim=1)",
-                "    if (abs(work(pivot_row, column)) <= tiny(1.0_real64)) &",
+                "    if (abs(work(pivot_row, column)) <= tiny(1.0_dp)) &",
                 '      error stop "singular matrix"',
                 "    if (pivot_row /= column) then",
                 "      row_buffer = work(column, :)",
@@ -2026,10 +2135,10 @@ def _runtime_helpers(helpers: set[str]) -> list[str]:
         result.extend(
             [
                 "pure function j_inverse_real(matrix) result(inverse)",
-                "  real(kind=real64), intent(in) :: matrix(:,:)",
-                "  real(kind=real64), allocatable :: inverse(:,:)",
-                "  real(kind=real64), allocatable :: work(:,:), row_buffer(:)",
-                "  real(kind=real64) :: factor, pivot",
+                "  real(kind=dp), intent(in) :: matrix(:,:)",
+                "  real(kind=dp), allocatable :: inverse(:,:)",
+                "  real(kind=dp), allocatable :: work(:,:), row_buffer(:)",
+                "  real(kind=dp) :: factor, pivot",
                 "  integer :: column, matrix_size, pivot_row, row",
                 "",
                 "  matrix_size = size(matrix, 1)",
@@ -2037,15 +2146,15 @@ def _runtime_helpers(helpers: set[str]) -> list[str]:
                 '    error stop "matrix inverse requires a square matrix"',
                 "  work = matrix",
                 "  allocate(inverse(matrix_size, matrix_size), row_buffer(matrix_size))",
-                "  inverse = 0.0_real64",
+                "  inverse = 0.0_dp",
                 "  do row = 1, matrix_size",
-                "    inverse(row, row) = 1.0_real64",
+                "    inverse(row, row) = 1.0_dp",
                 "  end do",
                 "  do column = 1, matrix_size",
                 "    pivot_row = column - 1 + &",
                 "      maxloc(abs(work(column:matrix_size, column)), dim=1)",
                 "    pivot = work(pivot_row, column)",
-                "    if (abs(pivot) <= tiny(1.0_real64)) error stop \"singular matrix\"",
+                "    if (abs(pivot) <= tiny(1.0_dp)) error stop \"singular matrix\"",
                 "    if (pivot_row /= column) then",
                 "      row_buffer = work(column, :)",
                 "      work(column, :) = work(pivot_row, :)",
@@ -2072,10 +2181,10 @@ def _runtime_helpers(helpers: set[str]) -> list[str]:
         result.extend(
             [
                 "pure function j_determinant_real(matrix) result(determinant)",
-                "  real(kind=real64), intent(in) :: matrix(:,:)",
-                "  real(kind=real64) :: determinant",
-                "  real(kind=real64), allocatable :: work(:,:), row_buffer(:)",
-                "  real(kind=real64) :: factor",
+                "  real(kind=dp), intent(in) :: matrix(:,:)",
+                "  real(kind=dp) :: determinant",
+                "  real(kind=dp), allocatable :: work(:,:), row_buffer(:)",
+                "  real(kind=dp) :: factor",
                 "  integer :: column, matrix_size, pivot_row, row, sign_factor",
                 "",
                 "  matrix_size = size(matrix, 1)",
@@ -2087,8 +2196,8 @@ def _runtime_helpers(helpers: set[str]) -> list[str]:
                 "  do column = 1, matrix_size",
                 "    pivot_row = column - 1 + &",
                 "      maxloc(abs(work(column:matrix_size, column)), dim=1)",
-                "    if (abs(work(pivot_row, column)) <= tiny(1.0_real64)) then",
-                "      determinant = 0.0_real64",
+                "    if (abs(work(pivot_row, column)) <= tiny(1.0_dp)) then",
+                "      determinant = 0.0_dp",
                 "      return",
                 "    end if",
                 "    if (pivot_row /= column) then",
@@ -2104,7 +2213,7 @@ def _runtime_helpers(helpers: set[str]) -> list[str]:
                 "        factor * work(column, column:matrix_size)",
                 "    end do",
                 "  end do",
-                "  determinant = real(sign_factor, kind=real64)",
+                "  determinant = real(sign_factor, kind=dp)",
                 "  do column = 1, matrix_size",
                 "    determinant = determinant * work(column, column)",
                 "  end do",
@@ -2116,11 +2225,11 @@ def _runtime_helpers(helpers: set[str]) -> list[str]:
         result.extend(
             [
                 "pure elemental function j_match_real(left, right) result(matches)",
-                "  real(kind=real64), intent(in) :: left, right",
+                "  real(kind=dp), intent(in) :: left, right",
                 "  logical :: matches",
                 "",
                 "  matches = abs(left - right) <= &",
-                "    2.0_real64**(-44) * max(abs(left), abs(right))",
+                "    2.0_dp**(-44) * max(abs(left), abs(right))",
                 "end function j_match_real",
                 "",
             ]
@@ -2340,7 +2449,7 @@ def _lower_top_assignments(
                     dimensions = ",".join(":" for _ in extents)
                     temporary_declarations = (
                         (
-                            "real(kind=real64), allocatable",
+                            "real(kind=dp), allocatable",
                             f"{random_target}({dimensions})",
                         ),
                     )
@@ -2428,8 +2537,8 @@ def _lower_top_assignments(
 def _main_entity_declaration(assignment: LoweredTopAssignment) -> tuple[str, str]:
     intrinsic = {
         AtomType.INTEGER: "integer",
-        AtomType.REAL: "real(kind=real64)",
-        AtomType.COMPLEX: "complex(kind=real64)",
+        AtomType.REAL: "real(kind=dp)",
+        AtomType.COMPLEX: "complex(kind=dp)",
         AtomType.LOGICAL: "logical",
         AtomType.CHARACTER: "character(len=:)",
     }[assignment.type_info.atom_type]
@@ -3053,7 +3162,7 @@ def _emit_numeric_csv_statistics_fortran(
         lines.extend(
             [
                 f"module {module_name}",
-                "  use, intrinsic :: iso_fortran_env, only: real64",
+                "  use, intrinsic :: iso_fortran_env, only: dp => real64",
                 "  implicit none",
                 "  private",
                 "  public :: j_read_numeric_csv",
@@ -3073,22 +3182,22 @@ def _emit_numeric_csv_statistics_fortran(
                 if runtime == "embedded"
                 else f"  use {RUNTIME_MODULE}, only: j_read_numeric_csv"
             ),
-            "  use, intrinsic :: iso_fortran_env, only: real64",
+            "  use, intrinsic :: iso_fortran_env, only: dp => real64",
             "  implicit none",
             "  character(len=:), allocatable :: symbols(:)",
-            "  real(kind=real64), allocatable :: annual_mean(:)",
-            "  real(kind=real64), allocatable :: annual_volatility(:)",
-            "  real(kind=real64), allocatable :: centered(:,:)",
-            "  real(kind=real64), allocatable :: correlation(:,:)",
-            "  real(kind=real64), allocatable :: daily_covariance(:,:)",
-            "  real(kind=real64), allocatable :: daily_maximum(:)",
-            "  real(kind=real64), allocatable :: daily_mean(:)",
-            "  real(kind=real64), allocatable :: daily_minimum(:)",
-            "  real(kind=real64), allocatable :: daily_volatility(:)",
-            "  real(kind=real64), allocatable :: log_prices(:,:), prices(:,:)",
-            "  real(kind=real64), allocatable :: maximum_drawdown(:)",
-            "  real(kind=real64), allocatable :: returns(:,:)",
-            "  real(kind=real64) :: running_peak",
+            "  real(kind=dp), allocatable :: annual_mean(:)",
+            "  real(kind=dp), allocatable :: annual_volatility(:)",
+            "  real(kind=dp), allocatable :: centered(:,:)",
+            "  real(kind=dp), allocatable :: correlation(:,:)",
+            "  real(kind=dp), allocatable :: daily_covariance(:,:)",
+            "  real(kind=dp), allocatable :: daily_maximum(:)",
+            "  real(kind=dp), allocatable :: daily_mean(:)",
+            "  real(kind=dp), allocatable :: daily_minimum(:)",
+            "  real(kind=dp), allocatable :: daily_volatility(:)",
+            "  real(kind=dp), allocatable :: log_prices(:,:), prices(:,:)",
+            "  real(kind=dp), allocatable :: maximum_drawdown(:)",
+            "  real(kind=dp), allocatable :: returns(:,:)",
+            "  real(kind=dp) :: running_peak",
             f"  integer, parameter :: trading_days = {spec.trading_days}",
             "  integer :: asset, asset_count, observation_count, price_row",
             "",
@@ -3104,18 +3213,18 @@ def _emit_numeric_csv_statistics_fortran(
             "    (observation_count - 1)",
             "  daily_volatility = sqrt(j_diagonal(daily_covariance))",
             "  annual_mean = trading_days * daily_mean",
-            "  annual_volatility = sqrt(real(trading_days, kind=real64)) * &",
+            "  annual_volatility = sqrt(real(trading_days, kind=dp)) * &",
             "    daily_volatility",
             "  daily_minimum = minval(returns, dim=1)",
             "  daily_maximum = maxval(returns, dim=1)",
             "  allocate(maximum_drawdown(asset_count))",
             "  do asset = 1, asset_count",
             "    running_peak = prices(1, asset)",
-            "    maximum_drawdown(asset) = 0.0_real64",
+            "    maximum_drawdown(asset) = 0.0_dp",
             "    do price_row = 2, size(prices, 1)",
             "      running_peak = max(running_peak, prices(price_row, asset))",
             "      maximum_drawdown(asset) = max(maximum_drawdown(asset), &",
-            "        1.0_real64 - prices(price_row, asset) / running_peak)",
+            "        1.0_dp - prices(price_row, asset) / running_peak)",
             "    end do",
             "  end do",
             "  correlation = daily_covariance / &",
@@ -3157,8 +3266,8 @@ def _emit_numeric_csv_statistics_fortran(
             "contains",
             "",
             "pure function j_diagonal(matrix) result(values)",
-            "  real(kind=real64), intent(in) :: matrix(:,:)",
-            "  real(kind=real64), allocatable :: values(:)",
+            "  real(kind=dp), intent(in) :: matrix(:,:)",
+            "  real(kind=dp), allocatable :: values(:)",
             "  integer :: diagonal_index, diagonal_size",
             "",
             "  diagonal_size = min(size(matrix, 1), size(matrix, 2))",
@@ -3174,6 +3283,10 @@ def _emit_numeric_csv_statistics_fortran(
     )
     lines = coalesce_simple_declaration_lines(lines)
     lines = coalesce_adjacent_allocate_statements(lines)
+    lines = combine_adjacent_literal_writes(lines)
+    lines = replace_nonadvancing_write_loops(lines)
+    lines = combine_adjacent_nonadvancing_writes(lines)
+    lines = collapse_short_fortran_continuations(lines)
     return "\n".join(wrap_long_fortran_lines(lines))
 
 
@@ -3195,7 +3308,7 @@ def _emit_annual_csv_statistics_fortran(
         lines.append(f"  use {RUNTIME_MODULE}, only: j_read_numeric_csv")
     lines.extend(
         [
-            "  use, intrinsic :: iso_fortran_env, only: real64",
+            "  use, intrinsic :: iso_fortran_env, only: dp => real64",
             "  implicit none",
             "  private",
             "  public :: j_read_numeric_csv, j_read_price_years",
@@ -3240,16 +3353,16 @@ def _emit_annual_csv_statistics_fortran(
             "",
             f"program {program_name}",
             f"  use {module_name}, only: j_read_numeric_csv, j_read_price_years",
-            "  use, intrinsic :: iso_fortran_env, only: real64",
+            "  use, intrinsic :: iso_fortran_env, only: dp => real64",
             "  implicit none",
             "  character(len=:), allocatable :: symbols(:)",
-            "  real(kind=real64), allocatable :: annual_mean(:), annual_volatility(:)",
-            "  real(kind=real64), allocatable :: centered(:,:), correlation(:,:)",
-            "  real(kind=real64), allocatable :: daily_covariance(:,:)",
-            "  real(kind=real64), allocatable :: daily_maximum(:), daily_mean(:)",
-            "  real(kind=real64), allocatable :: daily_minimum(:), daily_volatility(:)",
-            "  real(kind=real64), allocatable :: log_prices(:,:), prices(:,:) ",
-            "  real(kind=real64), allocatable :: returns(:,:), selected_returns(:,:)",
+            "  real(kind=dp), allocatable :: annual_mean(:), annual_volatility(:)",
+            "  real(kind=dp), allocatable :: centered(:,:), correlation(:,:)",
+            "  real(kind=dp), allocatable :: daily_covariance(:,:)",
+            "  real(kind=dp), allocatable :: daily_maximum(:), daily_mean(:)",
+            "  real(kind=dp), allocatable :: daily_minimum(:), daily_volatility(:)",
+            "  real(kind=dp), allocatable :: log_prices(:,:), prices(:,:) ",
+            "  real(kind=dp), allocatable :: returns(:,:), selected_returns(:,:)",
             "  integer, allocatable :: price_years(:), return_years(:), years(:)",
             f"  integer, parameter :: trading_days = {spec.trading_days}",
             "  integer :: asset, asset_count, observation_count, return_row",
@@ -3303,7 +3416,7 @@ def _emit_annual_csv_statistics_fortran(
             "      (observation_count - 1)",
             "    daily_volatility = sqrt(j_diagonal(daily_covariance))",
             "    annual_mean = trading_days * daily_mean",
-            "    annual_volatility = sqrt(real(trading_days, kind=real64)) * &",
+            "    annual_volatility = sqrt(real(trading_days, kind=dp)) * &",
             "      daily_volatility",
             "    daily_minimum = minval(selected_returns, dim=1)",
             "    daily_maximum = maxval(selected_returns, dim=1)",
@@ -3343,8 +3456,8 @@ def _emit_annual_csv_statistics_fortran(
             "contains",
             "",
             "pure function j_diagonal(matrix) result(values)",
-            "  real(kind=real64), intent(in) :: matrix(:,:)",
-            "  real(kind=real64), allocatable :: values(:)",
+            "  real(kind=dp), intent(in) :: matrix(:,:)",
+            "  real(kind=dp), allocatable :: values(:)",
             "  integer :: diagonal_index, diagonal_size",
             "",
             "  diagonal_size = min(size(matrix, 1), size(matrix, 2))",
@@ -3360,6 +3473,10 @@ def _emit_annual_csv_statistics_fortran(
     )
     lines = coalesce_simple_declaration_lines(lines)
     lines = coalesce_adjacent_allocate_statements(lines)
+    lines = combine_adjacent_literal_writes(lines)
+    lines = replace_nonadvancing_write_loops(lines)
+    lines = combine_adjacent_nonadvancing_writes(lines)
+    lines = collapse_short_fortran_continuations(lines)
     return "\n".join(wrap_long_fortran_lines(lines))
 
 
@@ -3370,8 +3487,8 @@ def _return_mixture_procedures() -> list[str]:
         "subroutine j_load_returns(filename, symbols, observations)",
         "  character(len=*), intent(in) :: filename",
         "  character(len=:), allocatable, intent(out) :: symbols(:)",
-        "  real(kind=real64), allocatable, intent(out) :: observations(:,:)",
-        "  real(kind=real64), allocatable :: log_prices(:,:), prices(:,:)",
+        "  real(kind=dp), allocatable, intent(out) :: observations(:,:)",
+        "  real(kind=dp), allocatable :: log_prices(:,:), prices(:,:)",
         "",
         "  call j_read_numeric_csv(filename, symbols, prices)",
         "  log_prices = log(prices)",
@@ -3381,12 +3498,12 @@ def _return_mixture_procedures() -> list[str]:
         "",
         "pure function j_mv_density(observations, mean_vector, covariance) &",
         "    result(density)",
-        "  real(kind=real64), intent(in) :: observations(:,:), mean_vector(:)",
-        "  real(kind=real64), intent(in) :: covariance(:,:)",
-        "  real(kind=real64), allocatable :: density(:)",
-        "  real(kind=real64), allocatable :: centered(:,:), inverse(:,:)",
-        "  real(kind=real64), allocatable :: quadratic(:)",
-        "  real(kind=real64) :: determinant, normalizer",
+        "  real(kind=dp), intent(in) :: observations(:,:), mean_vector(:)",
+        "  real(kind=dp), intent(in) :: covariance(:,:)",
+        "  real(kind=dp), allocatable :: density(:)",
+        "  real(kind=dp), allocatable :: centered(:,:), inverse(:,:)",
+        "  real(kind=dp), allocatable :: quadratic(:)",
+        "  real(kind=dp) :: determinant, normalizer",
         "  integer :: dimension_j",
         "",
         "  dimension_j = size(observations, 2)",
@@ -3394,26 +3511,26 @@ def _return_mixture_procedures() -> list[str]:
         "    ncopies=size(observations, 1))",
         "  inverse = j_inverse_real(covariance)",
         "  quadratic = sum(matmul(centered, inverse) * centered, dim=2)",
-        "  determinant = max(1.0e-300_real64, &",
+        "  determinant = max(1.0e-300_dp, &",
         "    j_determinant_real(covariance))",
-        "  normalizer = (2.0_real64 * acos(-1.0_real64))** &",
-        "    (0.5_real64 * dimension_j) * sqrt(determinant)",
-        "  density = max(1.0e-300_real64, &",
-        "    exp(-0.5_real64 * quadratic) / normalizer)",
+        "  normalizer = (2.0_dp * acos(-1.0_dp))** &",
+        "    (0.5_dp * dimension_j) * sqrt(determinant)",
+        "  density = max(1.0e-300_dp, &",
+        "    exp(-0.5_dp * quadratic) / normalizer)",
         "end function j_mv_density",
         "",
         "pure subroutine j_component_update(observations, responsibilities, &",
         "    component_weight, mean_vector, covariance)",
-        "  real(kind=real64), intent(in) :: observations(:,:), responsibilities(:)",
-        "  real(kind=real64), intent(out) :: component_weight, mean_vector(:)",
-        "  real(kind=real64), intent(out) :: covariance(:,:)",
-        "  real(kind=real64), allocatable :: centered(:,:), weighted_centered(:,:)",
-        "  real(kind=real64) :: average_variance, ridge, weight_sum",
+        "  real(kind=dp), intent(in) :: observations(:,:), responsibilities(:)",
+        "  real(kind=dp), intent(out) :: component_weight, mean_vector(:)",
+        "  real(kind=dp), intent(out) :: covariance(:,:)",
+        "  real(kind=dp), allocatable :: centered(:,:), weighted_centered(:,:)",
+        "  real(kind=dp) :: average_variance, ridge, weight_sum",
         "  integer :: asset, dimension_j, observation_count",
         "",
         "  observation_count = size(observations, 1)",
         "  dimension_j = size(observations, 2)",
-        "  weight_sum = max(1.0e-12_real64, sum(responsibilities))",
+        "  weight_sum = max(1.0e-12_dp, sum(responsibilities))",
         "  component_weight = weight_sum / observation_count",
         "  mean_vector = matmul(responsibilities, observations) / weight_sum",
         "  centered = observations - spread(mean_vector, dim=1, &",
@@ -3421,12 +3538,12 @@ def _return_mixture_procedures() -> list[str]:
         "  weighted_centered = centered * spread(responsibilities, dim=2, &",
         "    ncopies=dimension_j)",
         "  covariance = matmul(transpose(centered), weighted_centered) / weight_sum",
-        "  average_variance = 0.0_real64",
+        "  average_variance = 0.0_dp",
         "  do asset = 1, dimension_j",
         "    average_variance = average_variance + covariance(asset, asset)",
         "  end do",
         "  average_variance = average_variance / dimension_j",
-        "  ridge = max(1.0e-10_real64, 1.0e-6_real64 * average_variance)",
+        "  ridge = max(1.0e-10_dp, 1.0e-6_dp * average_variance)",
         "  do asset = 1, dimension_j",
         "    covariance(asset, asset) = covariance(asset, asset) + ridge",
         "  end do",
@@ -3434,14 +3551,14 @@ def _return_mixture_procedures() -> list[str]:
         "",
         "pure subroutine j_fit_em(observations, max_iterations, weights, means, &",
         "    covariances)",
-        "  real(kind=real64), intent(in) :: observations(:,:)",
+        "  real(kind=dp), intent(in) :: observations(:,:)",
         "  integer, intent(in) :: max_iterations",
-        "  real(kind=real64), intent(inout) :: weights(:), means(:,:), &",
+        "  real(kind=dp), intent(inout) :: weights(:), means(:,:), &",
         "    covariances(:,:,:)",
-        "  real(kind=real64), parameter :: convergence_tolerance = 1.0e-9_real64",
-        "  real(kind=real64), allocatable :: total_density(:)",
-        "  real(kind=real64), allocatable :: weighted_density(:,:)",
-        "  real(kind=real64) :: current_log_likelihood, previous_log_likelihood",
+        "  real(kind=dp), parameter :: convergence_tolerance = 1.0e-9_dp",
+        "  real(kind=dp), allocatable :: total_density(:)",
+        "  real(kind=dp), allocatable :: weighted_density(:,:)",
+        "  real(kind=dp) :: current_log_likelihood, previous_log_likelihood",
         "  integer :: component, component_count, dimension_j, iteration",
         "  integer :: observation_count",
         "",
@@ -3458,7 +3575,7 @@ def _return_mixture_procedures() -> list[str]:
         "        j_mv_density(observations, means(:, component), &",
         "                     covariances(:, :, component))",
         "    end do",
-        "    total_density = max(1.0e-300_real64, sum(weighted_density, dim=2))",
+        "    total_density = max(1.0e-300_dp, sum(weighted_density, dim=2))",
         "    do component = 1, component_count",
         "      call j_component_update(observations, &",
         "        weighted_density(:, component) / total_density, &",
@@ -3469,35 +3586,35 @@ def _return_mixture_procedures() -> list[str]:
         "      j_log_likelihood(observations, weights, means, covariances)",
         "    if (abs(current_log_likelihood - previous_log_likelihood) <= &",
         "        convergence_tolerance * &",
-        "        (1.0_real64 + abs(previous_log_likelihood))) exit",
+        "        (1.0_dp + abs(previous_log_likelihood))) exit",
         "    previous_log_likelihood = current_log_likelihood",
         "  end do",
         "end subroutine j_fit_em",
         "",
         "pure function j_log_likelihood(observations, weights, means, covariances) &",
         "    result(log_likelihood)",
-        "  real(kind=real64), intent(in) :: observations(:,:), weights(:)",
-        "  real(kind=real64), intent(in) :: means(:,:), covariances(:,:,:)",
-        "  real(kind=real64) :: log_likelihood",
-        "  real(kind=real64), allocatable :: total_density(:)",
+        "  real(kind=dp), intent(in) :: observations(:,:), weights(:)",
+        "  real(kind=dp), intent(in) :: means(:,:), covariances(:,:,:)",
+        "  real(kind=dp) :: log_likelihood",
+        "  real(kind=dp), allocatable :: total_density(:)",
         "  integer :: component",
         "",
         "  allocate(total_density(size(observations, 1)))",
-        "  total_density = 0.0_real64",
+        "  total_density = 0.0_dp",
         "  do component = 1, size(weights)",
         "    total_density = total_density + weights(component) * &",
         "      j_mv_density(observations, means(:, component), &",
         "                   covariances(:, :, component))",
         "  end do",
-        "  log_likelihood = sum(log(max(1.0e-300_real64, total_density)))",
+        "  log_likelihood = sum(log(max(1.0e-300_dp, total_density)))",
         "end function j_log_likelihood",
         "",
         "subroutine j_print_component(component, symbols, trading_days, weight, &",
         "    mean_vector, covariance)",
         "  integer, intent(in) :: component, trading_days",
         "  character(len=*), intent(in) :: symbols(:)",
-        "  real(kind=real64), intent(in) :: weight, mean_vector(:), covariance(:,:)",
-        "  real(kind=real64) :: annual_mean, annual_volatility",
+        "  real(kind=dp), intent(in) :: weight, mean_vector(:), covariance(:,:)",
+        "  real(kind=dp) :: annual_mean, annual_volatility",
         "  integer :: asset",
         "",
         "  write (*,\"(a,i0,a)\") \"component \", component, \" weight\"",
@@ -3506,7 +3623,7 @@ def _return_mixture_procedures() -> list[str]:
         "    \"annualized volatility\"",
         "  do asset = 1, size(symbols)",
         "    annual_mean = trading_days * mean_vector(asset)",
-        "    annual_volatility = sqrt(real(trading_days, kind=real64)) * &",
+        "    annual_volatility = sqrt(real(trading_days, kind=dp)) * &",
         "      sqrt(covariance(asset, asset))",
         "    write (*,\"(a6,2(1x,f21.6))\") trim(symbols(asset)), &",
         "      annual_mean, annual_volatility",
@@ -3537,7 +3654,7 @@ def _emit_return_mixture_fortran(
         )
     lines.extend(
         [
-            "  use, intrinsic :: iso_fortran_env, only: real64",
+            "  use, intrinsic :: iso_fortran_env, only: dp => real64",
             "  implicit none",
             "  private",
             "  public :: j_component_update, j_fit_em, j_load_returns",
@@ -3561,17 +3678,17 @@ def _emit_return_mixture_fortran(
             f"program {program_name}",
             f"  use {module_name}, only: j_component_update, j_fit_em, &",
             "    j_load_returns, j_log_likelihood, j_print_component",
-            "  use, intrinsic :: iso_fortran_env, only: real64",
+            "  use, intrinsic :: iso_fortran_env, only: dp => real64",
             "  implicit none",
             "  character(len=:), allocatable :: symbols(:)",
-            "  real(kind=real64), allocatable :: covariances1(:,:,:)",
-            "  real(kind=real64), allocatable :: covariances2(:,:,:)",
-            "  real(kind=real64), allocatable :: covariances3(:,:,:)",
-            "  real(kind=real64), allocatable :: means1(:,:), means2(:,:), means3(:,:)",
-            "  real(kind=real64), allocatable :: observations(:,:), responsibilities(:)",
-            "  real(kind=real64), allocatable :: weights1(:), weights2(:), weights3(:)",
-            "  real(kind=real64) :: aic(3), bic(3), log_likelihoods(3)",
-            "  real(kind=real64) :: split_weight",
+            "  real(kind=dp), allocatable :: covariances1(:,:,:)",
+            "  real(kind=dp), allocatable :: covariances2(:,:,:)",
+            "  real(kind=dp), allocatable :: covariances3(:,:,:)",
+            "  real(kind=dp), allocatable :: means1(:,:), means2(:,:), means3(:,:)",
+            "  real(kind=dp), allocatable :: observations(:,:), responsibilities(:)",
+            "  real(kind=dp), allocatable :: weights1(:), weights2(:), weights3(:)",
+            "  real(kind=dp) :: aic(3), bic(3), log_likelihoods(3)",
+            "  real(kind=dp) :: split_weight",
             f"  integer, parameter :: trading_days = {spec.trading_days}",
             "  integer :: aic_components, asset, bic_components, dimension_j",
             "  integer :: model, observation_count, parameter_counts(3)",
@@ -3583,29 +3700,29 @@ def _emit_return_mixture_fortran(
             "  allocate(responsibilities(observation_count))",
             "  allocate(weights1(1), means1(dimension_j, 1))",
             "  allocate(covariances1(dimension_j, dimension_j, 1))",
-            "  responsibilities = 1.0_real64",
+            "  responsibilities = 1.0_dp",
             "  call j_component_update(observations, responsibilities, weights1(1), &",
             "    means1(:, 1), covariances1(:, :, 1))",
             "",
             "  allocate(means2(dimension_j, 2))",
             "  allocate(covariances2(dimension_j, dimension_j, 2))",
-            "  weights2 = [0.7_real64, 0.3_real64]",
+            "  weights2 = [0.7_dp, 0.3_dp]",
             "  means2(:, 1) = means1(:, 1)",
             "  means2(:, 2) = means1(:, 1)",
-            "  covariances2(:, :, 1) = 0.6_real64 * covariances1(:, :, 1)",
-            "  covariances2(:, :, 2) = 2.0_real64 * covariances1(:, :, 1)",
+            "  covariances2(:, :, 1) = 0.6_dp * covariances1(:, :, 1)",
+            "  covariances2(:, :, 2) = 2.0_dp * covariances1(:, :, 1)",
             "  call j_fit_em(observations, 300, weights2, means2, covariances2)",
             "",
             "  allocate(means3(dimension_j, 3))",
             "  allocate(covariances3(dimension_j, dimension_j, 3))",
-            "  split_weight = 0.5_real64 * weights2(2)",
+            "  split_weight = 0.5_dp * weights2(2)",
             "  weights3 = [weights2(1), split_weight, split_weight]",
             "  means3(:, 1) = means2(:, 1)",
             "  means3(:, 2) = means2(:, 2)",
             "  means3(:, 3) = means2(:, 2)",
             "  covariances3(:, :, 1) = covariances2(:, :, 1)",
-            "  covariances3(:, :, 2) = 0.7_real64 * covariances2(:, :, 2)",
-            "  covariances3(:, :, 3) = 1.3_real64 * covariances2(:, :, 2)",
+            "  covariances3(:, :, 2) = 0.7_dp * covariances2(:, :, 2)",
+            "  covariances3(:, :, 3) = 1.3_dp * covariances2(:, :, 2)",
             "  call j_fit_em(observations, 400, weights3, means3, covariances3)",
             "",
             "  log_likelihoods(1) = j_log_likelihood(observations, weights1, &",
@@ -3619,9 +3736,9 @@ def _emit_return_mixture_fortran(
             "  do model = 1, 3",
             "    parameter_counts(model) = model * parameters_per_component + model - 1",
             "  end do",
-            "  aic = 2.0_real64 * parameter_counts - 2.0_real64 * log_likelihoods",
-            "  bic = log(real(observation_count, kind=real64)) * parameter_counts - &",
-            "    2.0_real64 * log_likelihoods",
+            "  aic = 2.0_dp * parameter_counts - 2.0_dp * log_likelihoods",
+            "  bic = log(real(observation_count, kind=dp)) * parameter_counts - &",
+            "    2.0_dp * log_likelihoods",
             "  aic_components = minloc(aic, dim=1)",
             "  bic_components = minloc(bic, dim=1)",
             "",
@@ -3640,11 +3757,9 @@ def _emit_return_mixture_fortran(
             '    write (*,"(i10,3(1x,f18.6))") model, log_likelihoods(model), &',
             "      aic(model), bic(model)",
             "  end do",
-            '  write (*,"(a)") "components chosen by AIC"',
-            '  write (*,"(i0)") aic_components',
-            '  write (*,"(a)") "components chosen by BIC"',
-            '  write (*,"(i0)") bic_components',
-            '  write (*,"(a)") "two-component fit"',
+            '  write (*,"(a,i0)") "components chosen by AIC: ", aic_components, &',
+            '                     "components chosen by BIC: ", bic_components, &',
+            '                     "two-component fit"',
             f"  do model = 1, 2",
             "    call j_print_component(model, symbols, trading_days, weights2(model), &",
             "      means2(:, model), covariances2(:, :, model))",
@@ -3660,6 +3775,10 @@ def _emit_return_mixture_fortran(
     )
     lines = coalesce_simple_declaration_lines(lines)
     lines = coalesce_adjacent_allocate_statements(lines)
+    lines = combine_adjacent_literal_writes(lines)
+    lines = replace_nonadvancing_write_loops(lines)
+    lines = combine_adjacent_nonadvancing_writes(lines)
+    lines = collapse_short_fortran_continuations(lines)
     return "\n".join(wrap_long_fortran_lines(lines))
 
 
@@ -3765,7 +3884,7 @@ def emit_fortran(
     lines = [
         f"! Generated by xj2f.py {VERSION} from {program.source_path.name}",
         f"module {module_name}",
-        "  use, intrinsic :: iso_fortran_env, only: real64",
+        "  use, intrinsic :: iso_fortran_env, only: dp => real64",
         "  implicit none",
         "  private",
     ]
@@ -3903,13 +4022,13 @@ def emit_fortran(
         lines.append(f"  use {module_name}, only: {', '.join(main_imports)}")
     if any(
         assignment.type_info.atom_type in {AtomType.REAL, AtomType.COMPLEX}
-        or "real64" in assignment.expression
+        or "dp" in assignment.expression
         for assignment in top_assignments
     ) or any(
         result_type.atom_type in {AtomType.REAL, AtomType.COMPLEX}
         for result_type in function_types.values()
     ):
-        lines.append("  use, intrinsic :: iso_fortran_env, only: real64")
+        lines.append("  use, intrinsic :: iso_fortran_env, only: dp => real64")
     lines.append("  implicit none")
     declarations = [
         declaration
@@ -4070,7 +4189,7 @@ def emit_fortran(
         result_type = echo_calls[index - 1][1]
         intrinsic = {
             AtomType.INTEGER: "integer",
-            AtomType.REAL: "real(kind=real64)",
+            AtomType.REAL: "real(kind=dp)",
             AtomType.LOGICAL: "logical",
         }[result_type.atom_type]
         lines.append(f"  {intrinsic}, allocatable :: j_echo_{index}(:,:)")
@@ -4078,7 +4197,7 @@ def emit_fortran(
         result_type = echo_calls[index - 1][1]
         intrinsic = {
             AtomType.INTEGER: "integer",
-            AtomType.REAL: "real(kind=real64)",
+            AtomType.REAL: "real(kind=dp)",
             AtomType.LOGICAL: "logical",
         }[result_type.atom_type]
         lines.append(f"  {intrinsic}, allocatable :: j_echo_{index}(:,:,:)")
@@ -4092,7 +4211,7 @@ def emit_fortran(
     for _, expression, result_type, _ in mapped_echoes:
         intrinsic = {
             AtomType.INTEGER: "integer",
-            AtomType.REAL: "real(kind=real64)",
+            AtomType.REAL: "real(kind=dp)",
             AtomType.LOGICAL: "logical",
         }[result_type.atom_type]
         dimensions = ",".join(":" for _ in range(result_type.rank))
@@ -4239,6 +4358,10 @@ def emit_fortran(
     lines.append("")
     lines = combine_adjacent_row_extension_assignments(lines)
     lines = coalesce_adjacent_allocate_statements(lines)
+    lines = combine_adjacent_literal_writes(lines)
+    lines = replace_nonadvancing_write_loops(lines)
+    lines = combine_adjacent_nonadvancing_writes(lines)
+    lines = collapse_short_fortran_continuations(lines)
     lines = wrap_long_fortran_lines(lines)
     return "\n".join(lines)
 

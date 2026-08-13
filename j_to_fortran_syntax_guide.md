@@ -109,10 +109,8 @@ count = 10
 pure elemental function square(y) result(j_result)
   integer, intent(in) :: y
   integer :: j_result
-  integer :: result_j
 
-  result_j = y**2
-  j_result = result_j
+  j_result = y**2
 end function square
 ```
 

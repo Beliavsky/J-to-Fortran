@@ -393,6 +393,236 @@ def combine_adjacent_row_extension_assignments(lines: Iterable[str]) -> list[str
     return combined
 
 
+def combine_adjacent_literal_writes(lines: Iterable[str]) -> list[str]:
+    """Combine adjacent character-literal writes using record separators.
+
+    For example, three consecutive ``write (*,"(a)")`` statements become
+    one ``write (*,"(a,2(/,a))")`` statement.  The rule is deliberately
+    limited to literal-only writes so format reversion and expression
+    evaluation cannot change program behavior.
+    """
+
+    source = list(lines)
+    combined: list[str] = []
+    literal_write = re.compile(
+        r'^(?P<indent>\s*)write\s*\(\s*\*\s*,\s*"\(a\)"\s*\)\s*'
+        r'(?P<literal>"(?:[^"]|"")*"|\'(?:[^\']|\'\')*\')\s*$',
+        re.IGNORECASE,
+    )
+    index = 0
+    while index < len(source):
+        first = literal_write.match(source[index])
+        if first is None:
+            combined.append(source[index])
+            index += 1
+            continue
+        indent = first.group("indent")
+        literals = [first.group("literal")]
+        following = index + 1
+        while following < len(source):
+            candidate = literal_write.match(source[following])
+            if candidate is None or candidate.group("indent") != indent:
+                break
+            literals.append(candidate.group("literal"))
+            following += 1
+        if len(literals) == 1:
+            combined.append(source[index])
+        else:
+            repeats = len(literals) - 1
+            combined.append(
+                f'{indent}write (*,"(a,{repeats}(/,a))") '
+                + ", ".join(literals)
+            )
+        index = following
+    return combined
+
+
+def replace_nonadvancing_write_loops(lines: Iterable[str]) -> list[str]:
+    """Replace a one-write output loop and explicit newline with an implied DO.
+
+    Only loops whose entire body is one nonadvancing write followed immediately
+    by an empty advancing write are eligible.  An unlimited format group keeps
+    every implied-DO item on the current output record.
+    """
+
+    source = list(lines)
+    replaced: list[str] = []
+    loop = re.compile(
+        r"^(?P<indent>\s*)do\s+(?P<variable>[a-z][a-z0-9_]*)\s*=\s*"
+        r"(?P<bounds>.+?)\s*$",
+        re.IGNORECASE,
+    )
+    output = re.compile(
+        r'^(?P<indent>\s+)write\s*\(\s*\*\s*,\s*"\('
+        r'(?P<format>[^()/]+)\)"\s*,\s*advance\s*=\s*"no"\s*\)\s*'
+        r'(?P<expression>.+?)\s*$',
+        re.IGNORECASE,
+    )
+    end_do = re.compile(r"^(?P<indent>\s*)end\s*do\s*$", re.IGNORECASE)
+    newline = re.compile(
+        r'^(?P<indent>\s*)write\s*\(\s*\*\s*,\s*"\(\)"\s*\)\s*$',
+        re.IGNORECASE,
+    )
+    index = 0
+    while index < len(source):
+        if index + 3 >= len(source):
+            replaced.extend(source[index:])
+            break
+        loop_match = loop.match(source[index])
+        output_match = output.match(source[index + 1])
+        end_match = end_do.match(source[index + 2])
+        newline_match = newline.match(source[index + 3])
+        if (
+            loop_match is None
+            or output_match is None
+            or end_match is None
+            or newline_match is None
+            or len(output_match.group("indent")) <= len(loop_match.group("indent"))
+            or end_match.group("indent") != loop_match.group("indent")
+            or newline_match.group("indent") != loop_match.group("indent")
+        ):
+            replaced.append(source[index])
+            index += 1
+            continue
+        indent = loop_match.group("indent")
+        variable = loop_match.group("variable")
+        replaced.append(
+            f'{indent}write (*,"(*({output_match.group("format")}))") '
+            f'({output_match.group("expression")}, {variable} = '
+            f'{loop_match.group("bounds")})'
+        )
+        index += 4
+    return replaced
+
+
+def combine_adjacent_nonadvancing_writes(lines: Iterable[str]) -> list[str]:
+    """Merge a nonadvancing write with the following advancing write.
+
+    Both statements must use the default output unit and explicit character
+    formats.  Concatenating their edit descriptors and output lists preserves
+    the current record while removing ``advance="no"``.
+    """
+
+    source = list(lines)
+    combined: list[str] = []
+    nonadvancing = re.compile(
+        r'^(?P<indent>\s*)write\s*\(\s*\*\s*,\s*"(?P<format>\(.*\))"\s*,'
+        r'\s*advance\s*=\s*"no"\s*\)\s*(?P<items>.+?)\s*$',
+        re.IGNORECASE,
+    )
+    advancing = re.compile(
+        r'^(?P<indent>\s*)write\s*\(\s*\*\s*,\s*"(?P<format>\(.*\))"\s*\)'
+        r'\s*(?P<items>.+?)\s*$',
+        re.IGNORECASE,
+    )
+    index = 0
+    while index < len(source):
+        if index + 1 >= len(source):
+            combined.append(source[index])
+            break
+        first = nonadvancing.match(source[index])
+        second = advancing.match(source[index + 1])
+        if (
+            first is None
+            or second is None
+            or first.group("indent") != second.group("indent")
+        ):
+            combined.append(source[index])
+            index += 1
+            continue
+        first_format = first.group("format")[1:-1].strip()
+        second_format = second.group("format")[1:-1].strip()
+        if not first_format or not second_format:
+            combined.append(source[index])
+            index += 1
+            continue
+        combined.append(
+            f'{first.group("indent")}write (*,"({first_format},{second_format})") '
+            f'{first.group("items")}, {second.group("items")}'
+        )
+        index += 2
+    return combined
+
+
+def collapse_short_fortran_continuations(
+    lines: Iterable[str], *, max_length: int = 100
+) -> list[str]:
+    """Rejoin a continued statement when it fits on one physical line.
+
+    Character-literal continuations and lines containing comments are left
+    untouched.  Longer logical statements remain available to the normal
+    wrapping pass in their original form.
+    """
+
+    source = list(lines)
+    collapsed: list[str] = []
+
+    def quotes_are_balanced(text: str) -> bool:
+        in_single = False
+        in_double = False
+        index = 0
+        while index < len(text):
+            character = text[index]
+            if character == "'" and not in_double:
+                if in_single and index + 1 < len(text) and text[index + 1] == "'":
+                    index += 2
+                    continue
+                in_single = not in_single
+            elif character == '"' and not in_single:
+                if in_double and index + 1 < len(text) and text[index + 1] == '"':
+                    index += 2
+                    continue
+                in_double = not in_double
+            index += 1
+        return not in_single and not in_double
+
+    def continued(line: str) -> bool:
+        stripped = line.rstrip()
+        return (
+            stripped.endswith("&")
+            and "!" not in line
+            and quotes_are_balanced(stripped[:-1])
+        )
+
+    index = 0
+    while index < len(source):
+        if not continued(source[index]):
+            collapsed.append(source[index])
+            index += 1
+            continue
+        end = index
+        pieces = [source[index].rstrip()[:-1].rstrip()]
+        safe = True
+        while end + 1 < len(source):
+            end += 1
+            next_line = source[end]
+            if "!" in next_line or not quotes_are_balanced(next_line):
+                safe = False
+                break
+            piece = next_line.lstrip()
+            if piece.startswith("&"):
+                piece = piece[1:].lstrip()
+            if continued(next_line):
+                piece = piece.rstrip()[:-1].rstrip()
+                pieces.append(piece)
+                continue
+            pieces.append(piece.rstrip())
+            break
+        else:
+            safe = False
+        candidate = pieces[0]
+        for piece in pieces[1:]:
+            separator = "" if candidate.endswith(("**", "//", "(")) else " "
+            candidate += separator + piece
+        if safe and len(candidate) <= max_length:
+            collapsed.append(candidate)
+            index = end + 1
+        else:
+            collapsed.extend(source[index : end + 1])
+            index = end + 1
+    return collapsed
+
+
 def _break_candidates_for_wrap(body: str, start: int, end: int) -> list[int]:
     """Return conservative split points outside quoted strings."""
 

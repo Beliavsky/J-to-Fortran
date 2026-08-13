@@ -1645,9 +1645,9 @@ def _fortran_number(spelling: str) -> str:
         coefficient, exponent = spelling.split("p", 1)
         coefficient = coefficient.replace("_", "-")
         exponent_value = int(exponent.replace("_", "-"))
-        pi_value = "acos(-1.0_real64)"
+        pi_value = "acos(-1.0_dp)"
         if exponent_value == 0:
-            power = "1.0_real64"
+            power = "1.0_dp"
         elif exponent_value == 1:
             power = pi_value
         else:
@@ -1656,14 +1656,14 @@ def _fortran_number(spelling: str) -> str:
             return power
         if not any(character in coefficient for character in ".eE"):
             coefficient += ".0"
-        return f"{coefficient}_real64 * {power}"
+        return f"{coefficient}_dp * {power}"
     if "r" in spelling:
         numerator, denominator = spelling.split("r", 1)
         numerator = numerator.replace("_", "-")
         denominator = denominator.replace("_", "-")
         if denominator in {"0", "-0"}:
             raise LoweringError("rational literal denominator must not be zero")
-        return f"real({numerator}, kind=real64) / {denominator}"
+        return f"real({numerator}, kind=dp) / {denominator}"
     if "j" in spelling:
         real_part, imaginary_part = spelling.split("j", 1)
 
@@ -1672,15 +1672,15 @@ def _fortran_number(spelling: str) -> str:
             rendered_value = rendered_value.replace("_", "-")
             if not any(character in value for character in ".eE"):
                 rendered_value += ".0"
-            return rendered_value + "_real64"
+            return rendered_value + "_dp"
 
         return (
             f"cmplx({component(real_part)}, {component(imaginary_part)}, "
-            "kind=real64)"
+            "kind=dp)"
         )
     rendered = spelling.replace("e_", "e-").replace("E_", "E-").replace("_", "-")
     if any(character in spelling for character in ".eE"):
-        rendered += "_real64"
+        rendered += "_dp"
     return rendered
 
 
@@ -1742,8 +1742,8 @@ def _render_fortran_expression(
             item_types = {_number_atom_type(item) for item in expression.items}
             if len(item_types) > 1:
                 type_spec = {
-                    AtomType.REAL: "real(kind=real64)",
-                    AtomType.COMPLEX: "complex(kind=real64)",
+                    AtomType.REAL: "real(kind=dp)",
+                    AtomType.COMPLEX: "complex(kind=dp)",
                 }[_strand_atom_type(expression)]
                 values = f"{type_spec} :: {values}"
         return f"[{values}]", _ATOM_PRECEDENCE, None
@@ -1863,7 +1863,7 @@ def _render_fortran_expression(
             return f"j_iota({operand})", _ATOM_PRECEDENCE, "call"
         if spelling == "%:":
             return (
-                f"sqrt(real({operand}, kind=real64))",
+                f"sqrt(real({operand}, kind=dp))",
                 _ATOM_PRECEDENCE,
                 "call",
             )
@@ -2242,7 +2242,7 @@ def render_fortran_expression(
         )
         if operand_type.atom_type is AtomType.REAL:
             return f"sqrt({operand})"
-        return f"sqrt(real({operand}, kind=real64))"
+        return f"sqrt(real({operand}, kind=dp))"
     decoded = dyad(bare_expression, "#.")
     if decoded is not None and names is not None:
         infer_type(bare_expression, names, name_transform, named_verbs=named_verbs)
@@ -2424,7 +2424,7 @@ def render_fortran_expression(
                 named_verbs=named_verbs,
             )
             if operand_type.atom_type is AtomType.INTEGER:
-                operand = f"real({operand}, kind=real64)"
+                operand = f"real({operand}, kind=dp)"
             intrinsic = "exp" if spelling == "^" else "log"
             return f"{intrinsic}({operand})"
         if spelling == "+" and operand_type.atom_type is AtomType.COMPLEX:
@@ -2476,10 +2476,10 @@ def render_fortran_expression(
             return f"{left} // {right}"
         if AtomType.REAL in {left_type.atom_type, right_type.atom_type}:
             if left_type.atom_type is AtomType.LOGICAL:
-                left = f"merge(1.0_real64, 0.0_real64, {left})"
+                left = f"merge(1.0_dp, 0.0_dp, {left})"
             if right_type.atom_type is AtomType.LOGICAL:
-                right = f"merge(1.0_real64, 0.0_real64, {right})"
-            return f"[real(kind=real64) :: {left}, {right}]"
+                right = f"merge(1.0_dp, 0.0_dp, {right})"
+            return f"[real(kind=dp) :: {left}, {right}]"
         if {left_type.atom_type, right_type.atom_type} == {
             AtomType.INTEGER,
             AtomType.LOGICAL,
@@ -2518,7 +2518,7 @@ def render_fortran_expression(
             )
             constructor = f"{left}, {right}"
             if AtomType.REAL in {left_type.atom_type, right_type.atom_type}:
-                constructor = f"real(kind=real64) :: {constructor}"
+                constructor = f"real(kind=dp) :: {constructor}"
             if left_type.rank == 1:
                 return f"reshape([{constructor}], [size({left}), 2])"
             return (
@@ -2606,7 +2606,7 @@ def render_fortran_expression(
             named_verbs=named_verbs,
         )
         if operand_type.atom_type is AtomType.INTEGER:
-            matrix = f"real({matrix}, kind=real64)"
+            matrix = f"real({matrix}, kind=dp)"
         return f"j_inverse_real({matrix})"
     if (
         isinstance(bare_expression, MonadicApply)
@@ -2633,7 +2633,7 @@ def render_fortran_expression(
         )
         if operand_type.shape != Shape.matrix(2, 2):
             if operand_type.atom_type is AtomType.INTEGER:
-                matrix = f"real({matrix}, kind=real64)"
+                matrix = f"real({matrix}, kind=dp)"
             return f"j_determinant_real({matrix})"
         if name_value(bare_expression.operand) is None:
             raise LoweringError("2 by 2 determinant currently requires a named matrix")
@@ -2686,7 +2686,7 @@ def render_fortran_expression(
         if isinstance(ungroup(divided[1]), DyadicApply):
             right = f"({right})"
         if left_type.atom_type is AtomType.INTEGER:
-            left = f"real({left}, kind=real64)"
+            left = f"real({left}, kind=dp)"
         elif isinstance(ungroup(divided[0]), DyadicApply):
             left = f"({left})"
         return f"{left} / {right}"
@@ -2842,9 +2842,9 @@ def render_fortran_expression(
         )
         if AtomType.REAL in {left_type.atom_type, right_type.atom_type}:
             if left_type.atom_type is AtomType.INTEGER:
-                left = f"real({left}, kind=real64)"
+                left = f"real({left}, kind=dp)"
             if right_type.atom_type is AtomType.INTEGER:
-                right = f"real({right}, kind=real64)"
+                right = f"real({right}, kind=dp)"
             comparison = f"j_match_real({left}, {right})"
         elif left_type.atom_type is AtomType.LOGICAL:
             if right_type.atom_type is AtomType.LOGICAL:
@@ -2937,9 +2937,9 @@ def render_fortran_expression(
             )
             if AtomType.REAL in {left_type.atom_type, right_type.atom_type}:
                 if left_type.atom_type is AtomType.INTEGER:
-                    left = f"real({left}, kind=real64)"
+                    left = f"real({left}, kind=dp)"
                 if right_type.atom_type is AtomType.INTEGER:
-                    right = f"real({right}, kind=real64)"
+                    right = f"real({right}, kind=dp)"
             intrinsic = "min" if spelling == "<." else "max"
             return f"{intrinsic}({left}, {right})"
         if spelling in _DYADIC_FORTRAN:

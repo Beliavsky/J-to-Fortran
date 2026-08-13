@@ -402,15 +402,15 @@ ok =: result -: expected
     assert "result_j = b" in generated
 
 
-def test_complex_literals_emit_real64_complex_values() -> None:
+def test_complex_literals_emit_dp_complex_values() -> None:
     source = "result =: 3j4 + 1j2\nexpected =: 4j6\nok =: result -: expected\n"
     generated = xj2f.emit_fortran(
         xj2f.parse_j_source(Path("complex_add.ijs"), source)
     )
 
-    assert "use, intrinsic :: iso_fortran_env, only: real64" in generated
-    assert "complex(kind=real64) :: result_j, expected" in generated
-    assert "cmplx(3.0_real64, 4.0_real64, kind=real64)" in generated
+    assert "use, intrinsic :: iso_fortran_env, only: dp => real64" in generated
+    assert "complex(kind=dp) :: result_j, expected" in generated
+    assert "cmplx(3.0_dp, 4.0_dp, kind=dp)" in generated
 
 
 def test_complex_vector_arithmetic_emits_complex_arrays() -> None:
@@ -418,7 +418,7 @@ def test_complex_vector_arithmetic_emits_complex_arrays() -> None:
         xj2f.parse_j_source(Path("complex_vector.ijs"), COMPLEX_VECTOR_TEST_PROGRAM)
     )
 
-    assert "complex(kind=real64), allocatable :: result_j(:), expected(:)" in generated
+    assert "complex(kind=dp), allocatable :: result_j(:), expected(:)" in generated
     assert "conjugated = conjg(result_j)" in generated
     assert "negated = -result_j" in generated
     assert "squared = result_j**2" in generated
@@ -452,9 +452,9 @@ def test_float_match_emits_j_tolerance_helper() -> None:
     main = generated.split("program float_match_j", 1)[1]
 
     assert "pure elemental function j_match_real(left, right) result(matches)" in generated
-    assert "2.0_real64**(-44) * max(abs(left), abs(right))" in generated
+    assert "2.0_dp**(-44) * max(abs(left), abs(right))" in generated
     assert "ok = all(j_match_real(result_j, expected))" in main
-    assert "1.001_real64" in main
+    assert "1.001_dp" in main
 
 
 def test_ambivalent_verb_emits_a_generic_interface() -> None:
@@ -470,7 +470,7 @@ def test_ambivalent_verb_emits_a_generic_interface() -> None:
     assert "result_j = [f(5), f(3, 4)]" in generated
 
 
-def test_integer_result_with_real_input_imports_real64() -> None:
+def test_integer_result_with_real_input_imports_dp() -> None:
     program = xj2f.parse_j_source(
         Path("floor.ijs"),
         "result =: <. 1.2 _2.9\nexpected =: 1 _3\nok =: result -: expected\n",
@@ -478,8 +478,8 @@ def test_integer_result_with_real_input_imports_real64() -> None:
     generated = xj2f.emit_fortran(program)
     main = generated.split("program floor_j", 1)[1]
 
-    assert "use, intrinsic :: iso_fortran_env, only: real64" in main
-    assert "result_j = floor([1.2_real64, -2.9_real64])" in main
+    assert "use, intrinsic :: iso_fortran_env, only: dp => real64" in main
+    assert "result_j = floor([1.2_dp, -2.9_dp])" in main
 
 
 def test_top_level_reshape_declares_rank_two_and_three_arrays() -> None:
@@ -529,7 +529,7 @@ def test_array_example_lowers_supported_primitives() -> None:
     assert "ab = j_cartesian_square(y)" in generated
     assert "a = ab(:, 1)" in generated
     assert "b = ab(:, 2)" in generated
-    assert "c = floor(sqrt(real(sumsq, kind=real64)))" in generated
+    assert "c = floor(sqrt(real(sumsq, kind=dp)))" in generated
     assert "int(floor(" not in generated
     assert "sumsq = a**2 + b**2" in generated
     assert "j_result = j_compress_hcat(ab, c, keep)" in generated
@@ -558,21 +558,35 @@ def test_numeric_csv_statistics_workflow_supports_both_runtime_modes() -> None:
 
     assert "subroutine j_read_numeric_csv" in embedded
     assert 'call j_read_numeric_csv("asset_class_etf_prices.csv"' in embedded
+    assert (
+        'write (*,"(a,2(/,a))") "price file", "asset_class_etf_prices.csv", '
+        '"price rows and return rows"'
+        in embedded
+    )
     assert "correlation = daily_covariance /" in embedded
     assert "running_peak = max(running_peak, prices(price_row, asset))" in embedded
-    assert "1.0_real64 - prices(price_row, asset) / running_peak" in embedded
+    assert "1.0_dp - prices(price_row, asset) / running_peak" in embedded
+    assert (
+        'write (*,"(a26,*(1x,a13))") "statistic", '
+        "(trim(symbols(asset)), asset = 1, asset_count)" in embedded
+    )
+    assert (
+        'write (*,"(a26,*(1x,g13.6))") '
+        '"annualized mean log return", annual_mean' in embedded
+    )
+    assert 'advance="no"' not in embedded
     assert '"maximum drawdown"' in embedded
     assert (
         "allocatable :: annual_mean(:), annual_volatility(:), centered(:,:), &"
         in embedded
     )
-    assert "real(kind=real64), allocatable :: annual_volatility(:)" not in embedded
+    assert "real(kind=dp), allocatable :: annual_volatility(:)" not in embedded
     assert "subroutine j_read_numeric_csv" not in external
     assert "use j2f_runtime, only: j_read_numeric_csv" in external
     assert 'error stop "invalid numeric CSV data row"' in embedded
     assert "integer, parameter :: trading_days = 252" in embedded
     assert "annual_mean = trading_days * daily_mean" in embedded
-    assert "sqrt(real(trading_days, kind=real64))" in embedded
+    assert "sqrt(real(trading_days, kind=dp))" in embedded
     assert "annual_mean = 252 * daily_mean" not in embedded
     assert "public :: j_read_numeric_csv" in (ROOT / "j.f90").read_text(
         encoding="utf-8"
@@ -587,9 +601,18 @@ def test_annual_csv_statistics_workflow_supports_both_runtime_modes() -> None:
     external = xj2f.emit_fortran(program, runtime="external")
 
     assert "subroutine j_read_price_years" in embedded
+    assert (
+        'write (*,"(a,2(/,a))") "price file", '
+        '"asset_class_etf_prices.csv", "assets"'
+        in embedded
+    )
     assert "return_years = price_years(2:)" in embedded
     assert "count(return_years == years(year_index))" in embedded
     assert "selected_returns(selected_row, :) = returns(return_row, :)" in embedded
+    assert (
+        'write (*,"(*(a,1x))") '
+        "(trim(symbols(asset)), asset = 1, asset_count)" in embedded
+    )
     assert 'write (*,"(2(i0,1x))") years(year_index)' in embedded
     assert "integer, parameter :: trading_days = 252" in embedded
     assert "annual_mean = trading_days * daily_mean" in embedded
@@ -620,7 +643,7 @@ def test_return_mixture_workflow_supports_both_runtime_modes() -> None:
     assert "& weights1(1), &" in embedded
     assert "allocate(weights2(2)" not in embedded
     assert "allocate(weights3(3)" not in embedded
-    assert "weights2 = [0.7_real64, 0.3_real64]" in embedded
+    assert "weights2 = [0.7_dp, 0.3_dp]" in embedded
     assert "weights3 = [weights2(1), split_weight, split_weight]" in embedded
     assert re.search(
         r"(?m)^\s*integer\b[^\n:]*::[^\n]*\bdimension\b", embedded
@@ -636,7 +659,24 @@ def test_return_mixture_workflow_supports_both_runtime_modes() -> None:
     assert "weights(component), means(:, component)" in embedded
     assert "previous_log_likelihood" in embedded
     assert 'call j_load_returns("asset_class_etf_prices.csv"' in embedded
+    assert (
+        'write (*,"(*(a,1x))") '
+        "(trim(symbols(asset)), asset = 1, dimension_j)" in embedded
+    )
+    assert (
+        'write (*,"(a,2(/,a))") "price file", '
+        '"asset_class_etf_prices.csv", "assets"'
+        in embedded
+    )
     assert 'write (*,"(i10,3(1x,f18.6))")' in embedded
+    assert (
+        '  write (*,"(a,i0)") "components chosen by AIC: ", aic_components, &\n'
+        '                     "components chosen by BIC: ", bic_components, &\n'
+        '                     "two-component fit"'
+        in embedded
+    )
+    assert 'write (*,"(i0)") aic_components' not in embedded
+    assert 'write (*,"(i0)") bic_components' not in embedded
     assert 'write (*,"(a6,2(1x,f21.6))")' in embedded
     assert 'write (*,"(f8.6)") weight' in embedded
     assert "subroutine j_read_numeric_csv" not in external

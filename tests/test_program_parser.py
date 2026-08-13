@@ -63,13 +63,13 @@ def test_monte_carlo_pi_uses_symbolic_random_array_extent() -> None:
     program = xj2f.parse_j_source(Path("pi.ijs"), MONTE_CARLO_PI)
     generated = xj2f.emit_fortran(program)
 
-    assert "real(kind=real64), allocatable :: x(:), y(:)" in generated
+    assert "real(kind=dp), allocatable :: x(:), y(:)" in generated
     assert "allocate(x(n))" in generated
     assert "call random_number(x)" in generated
     assert "allocate(y(n))" in generated
     assert "call random_number(y)" in generated
     assert "sum(merge(1, 0, inside))" in generated
-    assert "acos(-1.0_real64)" in generated
+    assert "acos(-1.0_dp)" in generated
 
 
 def test_guarded_random_array_is_materialized_and_updated_in_place() -> None:
@@ -83,7 +83,7 @@ exit 0
 
     assert "allocate(values(n))" in generated
     assert "call random_number(values)" in generated
-    assert "values = max(1e-12_real64, values)" in generated
+    assert "values = max(1e-12_dp, values)" in generated
 
 
 @pytest.mark.requires_gfortran
@@ -106,7 +106,7 @@ exit 0
     )
     source.write_text(generated, encoding="utf-8")
 
-    assert "real(kind=real64), allocatable :: values(:,:)" in generated
+    assert "real(kind=dp), allocatable :: values(:,:)" in generated
     assert "allocate(values(rows, columns))" in generated
     assert "call random_number(values)" in generated
     compiled = subprocess.run(
@@ -401,7 +401,7 @@ exit 0
     generated = xj2f.emit_fortran(program)
     source.write_text(generated, encoding="utf-8")
 
-    assert "real(kind=real64), allocatable :: j_random_1(:)" in generated
+    assert "real(kind=dp), allocatable :: j_random_1(:)" in generated
     assert "call random_number(j_random_1)" in generated
     assert "selected = j_random_1 < p" in generated
     assert "merge(1, 0, selected)" in generated
@@ -462,7 +462,7 @@ def test_normal_moments_compile_and_run(tmp_path: Path) -> None:
 
     assert "radius = sqrt(-2 * log(u1))" in generated
     assert "z = radius * cos(angle)" in generated
-    assert "real(kind=real64), intent(in) :: y(:)" in generated
+    assert "real(kind=dp), intent(in) :: y(:)" in generated
     compiled = subprocess.run(
         [compiler, "-std=f2018", str(source), "-o", str(executable)],
         cwd=tmp_path,
@@ -625,6 +625,74 @@ def test_break_exits_the_enclosing_fortran_loop() -> None:
     assert "if (i > 2) then\n      exit\n    end if" in generated
 
 
+def test_single_use_final_local_is_inlined_into_function_result() -> None:
+    source = """square =: 3 : 0
+  result =. y * y
+  result
+)
+"""
+
+    generated = xj2f.emit_fortran(
+        xj2f.parse_j_source(Path("square.ijs"), source)
+    )
+
+    assert "j_result = y**2" in generated
+    assert "result_j" not in generated
+
+
+def test_single_use_array_local_is_inlined_and_comments_are_preserved() -> None:
+    source = """duplicate =: 3 : 0
+  NB. Form the returned vector.
+  result =. y , y
+  NB. Return it.
+  result
+)
+"""
+
+    generated = xj2f.emit_fortran(
+        xj2f.parse_j_source(Path("duplicate.ijs"), source)
+    )
+
+    assert "integer, allocatable :: j_result(:)" in generated
+    assert "j_result = [y, y]" in generated
+    assert "result_j" not in generated
+    assert "! Form the returned vector." in generated
+    assert "! Return it." in generated
+
+
+def test_final_local_with_other_uses_is_not_inlined() -> None:
+    source = """square =: 3 : 0
+  result =. y * y
+  copy =. result
+  result
+)
+"""
+
+    generated = xj2f.emit_fortran(
+        xj2f.parse_j_source(Path("square_copy.ijs"), source)
+    )
+
+    assert "integer :: result_j, copy" in generated
+    assert "result_j = y**2" in generated
+    assert "j_result = result_j" in generated
+
+
+def test_reassigned_final_local_is_not_inlined() -> None:
+    source = """increment =: 3 : 0
+  result =. y
+  result =. result + 1
+  result
+)
+"""
+
+    generated = xj2f.emit_fortran(
+        xj2f.parse_j_source(Path("increment.ijs"), source)
+    )
+
+    assert "integer :: result_j" in generated
+    assert "j_result = result_j" in generated
+
+
 def test_verb_result_type_propagates_through_a_top_level_call_chain() -> None:
     source = """make_vector =: 3 : 0
   y , y + 1
@@ -641,7 +709,7 @@ exit 0
         xj2f.parse_j_source(Path("call_chain.ijs"), source)
     )
 
-    assert "real(kind=real64), intent(in) :: y(:)" in generated
+    assert "real(kind=dp), intent(in) :: y(:)" in generated
     assert "write (*,\"(g0)\") vector_sum(seed)" in generated
 
 
@@ -785,8 +853,8 @@ ok =: result -: expected
 
     assert isinstance(program.items[0], xj2f.TacitVerbDefinition)
     assert "pure function mean(y) result(j_result)" in generated
-    assert "real(kind=real64) :: j_result" in generated
-    assert "j_result = real(sum(y), kind=real64) / size(y, 1)" in generated
+    assert "real(kind=dp) :: j_result" in generated
+    assert "j_result = real(sum(y), kind=dp) / size(y, 1)" in generated
 
 
 def test_tacit_argument_rank_is_inferred_from_smoutput_call() -> None:
@@ -799,7 +867,7 @@ exit 0
     generated = xj2f.emit_fortran(xj2f.parse_j_source(Path("mean_output.ijs"), source))
 
     assert "integer, intent(in) :: y(:)" in generated
-    assert "j_result = real(sum(y), kind=real64) / size(y, 1)" in generated
+    assert "j_result = real(sum(y), kind=dp) / size(y, 1)" in generated
     assert 'write (*,"(g0)") mean(x)' in generated
 
 
@@ -832,9 +900,9 @@ exit 0
     )
 
     assert "pure function scale01(y) result(j_result)" in generated
-    assert "real(kind=real64), allocatable :: j_result(:)" in generated
+    assert "real(kind=dp), allocatable :: j_result(:)" in generated
     assert (
-        "j_result = real(y - minval(y), kind=real64) / (maxval(y) - minval(y))"
+        "j_result = real(y - minval(y), kind=dp) / (maxval(y) - minval(y))"
         in generated
     )
 
@@ -887,7 +955,7 @@ exit 0
     )
 
     assert "pure function length(y) result(j_result)" in generated
-    assert "j_result = sqrt(real(sum(y**2), kind=real64))" in generated
+    assert "j_result = sqrt(real(sum(y**2), kind=dp))" in generated
 
 
 def test_ranked_tacit_call_infers_a_vector_dummy() -> None:
@@ -908,7 +976,7 @@ exit 0
     }
     generated = xj2f.emit_fortran(program)
 
-    assert "real(kind=real64), allocatable :: j_ranked_echo_1(:)" in generated
+    assert "real(kind=dp), allocatable :: j_ranked_echo_1(:)" in generated
     assert "integer :: j_cell_1" in generated
     assert "j_cell_2" not in generated
     assert "do j_cell_1 = 1, size(points, 1)" in generated
@@ -937,9 +1005,9 @@ exit 0
     )
     assert "pure function mean_integer_rank1(y) result(j_result)" in generated
     assert "integer, intent(in) :: y(:)" in generated
-    assert "j_result = real(sum(y), kind=real64) / size(y, 1)" in generated
+    assert "j_result = real(sum(y), kind=dp) / size(y, 1)" in generated
     assert "pure function mean_real_rank1(y) result(j_result)" in generated
-    assert "real(kind=real64), intent(in) :: y(:)" in generated
+    assert "real(kind=dp), intent(in) :: y(:)" in generated
     assert "j_result = sum(y) / size(y, 1)" in generated
     assert 'write (*,"(g0)") mean(ints)' in generated
     assert 'write (*,"(g0)") mean(reals)' in generated
@@ -1115,7 +1183,7 @@ exit 0
         xj2f.parse_j_source(Path("cube_mean.ijs"), source)
     )
 
-    assert "real(kind=real64), allocatable :: j_ranked_echo_1(:,:)" in generated
+    assert "real(kind=dp), allocatable :: j_ranked_echo_1(:,:)" in generated
     assert "integer :: j_cell_1, j_cell_2" in generated
     assert "do j_cell_1 = 1, size(cube, 1)" in generated
     assert "do j_cell_2 = 1, size(cube, 2)" in generated
@@ -1324,7 +1392,7 @@ exit 0
         xj2f.parse_j_source(Path("moving_mean.ijs"), source)
     )
 
-    assert "real(kind=real64), allocatable :: j_infix_echo_1(:)" in generated
+    assert "real(kind=dp), allocatable :: j_infix_echo_1(:)" in generated
     assert "integer :: j_window" in generated
     assert "allocate(j_infix_echo_1(size(data_j) - 2))" in generated
     assert "do j_window = 1, size(j_infix_echo_1)" in generated
@@ -1440,7 +1508,7 @@ def test_isprime_body_lowers_to_intrinsics_and_iota_helper() -> None:
     assert "logical :: j_result" in generated
     assert "j_result = .false." in generated
     assert "j_result = .true." in generated
-    assert "limit = floor(sqrt(real(y, kind=real64)))" in generated
+    assert "limit = floor(sqrt(real(y, kind=dp)))" in generated
     assert "divisors = 2 + j_iota(limit - 1)" in generated
     assert "j_result = .not. any(0 == modulo(y, divisors))" in generated
     assert "pure function j_iota(n) result(values)" in generated

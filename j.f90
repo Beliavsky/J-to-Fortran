@@ -1,5 +1,5 @@
 module j2f_runtime
-  use, intrinsic :: iso_fortran_env, only: real64
+  use, intrinsic :: iso_fortran_env, only: dp => real64
   implicit none
   private
   public :: j_addition_table_int, j_append_int_row, j_binomial
@@ -26,7 +26,7 @@ contains
 subroutine j_read_numeric_csv(filename, symbols, values)
   character(len=*), intent(in) :: filename
   character(len=:), allocatable, intent(out) :: symbols(:)
-  real(kind=real64), allocatable, intent(out) :: values(:,:)
+  real(kind=dp), allocatable, intent(out) :: values(:,:)
   character(len=8192) :: line, numeric_line
   character(len=32) :: date_field
   integer :: column, column_count, comma, input_unit, io_status
@@ -96,8 +96,8 @@ pure function j_diagonal_int(matrix) result(values)
 end function j_diagonal_int
 
 pure function j_diagonal_real(matrix) result(values)
-  real(kind=real64), intent(in) :: matrix(:,:)
-  real(kind=real64), allocatable :: values(:)
+  real(kind=dp), intent(in) :: matrix(:,:)
+  real(kind=dp), allocatable :: values(:)
   integer :: diagonal_index, diagonal_size
 
   diagonal_size = min(size(matrix, 1), size(matrix, 2))
@@ -445,41 +445,41 @@ end function j_signum_int
 
 pure function j_solve_2x2_vector_int(rhs, coefficients) result(solution)
   integer, intent(in) :: rhs(2), coefficients(2,2)
-  real(kind=real64) :: solution(2)
-  real(kind=real64) :: determinant
+  real(kind=dp) :: solution(2)
+  real(kind=dp) :: determinant
 
-  determinant = real(coefficients(1, 1), kind=real64) * &
-    coefficients(2, 2) - real(coefficients(1, 2), kind=real64) * &
+  determinant = real(coefficients(1, 1), kind=dp) * &
+    coefficients(2, 2) - real(coefficients(1, 2), kind=dp) * &
     coefficients(2, 1)
-  if (determinant == 0.0_real64) error stop "singular 2 by 2 matrix"
-  solution(1) = (real(coefficients(2, 2), kind=real64) * rhs(1) - &
-    real(coefficients(1, 2), kind=real64) * rhs(2)) / determinant
-  solution(2) = (real(coefficients(1, 1), kind=real64) * rhs(2) - &
-    real(coefficients(2, 1), kind=real64) * rhs(1)) / determinant
+  if (determinant == 0.0_dp) error stop "singular 2 by 2 matrix"
+  solution(1) = (real(coefficients(2, 2), kind=dp) * rhs(1) - &
+    real(coefficients(1, 2), kind=dp) * rhs(2)) / determinant
+  solution(2) = (real(coefficients(1, 1), kind=dp) * rhs(2) - &
+    real(coefficients(2, 1), kind=dp) * rhs(1)) / determinant
 end function j_solve_2x2_vector_int
 
 pure function j_solve_2x2_matrix_int(rhs, coefficients) result(solution)
   integer, intent(in) :: rhs(:,:), coefficients(2,2)
-  real(kind=real64), allocatable :: solution(:,:)
-  real(kind=real64) :: determinant
+  real(kind=dp), allocatable :: solution(:,:)
+  real(kind=dp) :: determinant
 
   if (size(rhs, 1) /= 2) error stop "2 by 2 solve shape mismatch"
-  determinant = real(coefficients(1, 1), kind=real64) * &
-    coefficients(2, 2) - real(coefficients(1, 2), kind=real64) * &
+  determinant = real(coefficients(1, 1), kind=dp) * &
+    coefficients(2, 2) - real(coefficients(1, 2), kind=dp) * &
     coefficients(2, 1)
-  if (determinant == 0.0_real64) error stop "singular 2 by 2 matrix"
+  if (determinant == 0.0_dp) error stop "singular 2 by 2 matrix"
   allocate(solution(2, size(rhs, 2)))
-  solution(1, :) = (real(coefficients(2, 2), kind=real64) * rhs(1, :) - &
-    real(coefficients(1, 2), kind=real64) * rhs(2, :)) / determinant
-  solution(2, :) = (real(coefficients(1, 1), kind=real64) * rhs(2, :) - &
-    real(coefficients(2, 1), kind=real64) * rhs(1, :)) / determinant
+  solution(1, :) = (real(coefficients(2, 2), kind=dp) * rhs(1, :) - &
+    real(coefficients(1, 2), kind=dp) * rhs(2, :)) / determinant
+  solution(2, :) = (real(coefficients(1, 1), kind=dp) * rhs(2, :) - &
+    real(coefficients(2, 1), kind=dp) * rhs(1, :)) / determinant
 end function j_solve_2x2_matrix_int
 
 pure function j_solve_real_vector(rhs, coefficients) result(solution)
-  real(kind=real64), intent(in) :: rhs(:), coefficients(:,:)
-  real(kind=real64), allocatable :: solution(:)
-  real(kind=real64), allocatable :: work(:,:), work_rhs(:), row_buffer(:)
-  real(kind=real64) :: factor, scalar_buffer
+  real(kind=dp), intent(in) :: rhs(:), coefficients(:,:)
+  real(kind=dp), allocatable :: solution(:)
+  real(kind=dp), allocatable :: work(:,:), work_rhs(:), row_buffer(:)
+  real(kind=dp) :: factor, scalar_buffer
   integer :: column, row, pivot_row, system_size
 
   system_size = size(rhs)
@@ -492,7 +492,7 @@ pure function j_solve_real_vector(rhs, coefficients) result(solution)
   do column = 1, system_size
     pivot_row = column - 1 + &
       maxloc(abs(work(column:system_size, column)), dim=1)
-    if (abs(work(pivot_row, column)) <= tiny(1.0_real64)) &
+    if (abs(work(pivot_row, column)) <= tiny(1.0_dp)) &
       error stop "singular matrix"
     if (pivot_row /= column) then
       row_buffer = work(column, :)
@@ -519,10 +519,10 @@ pure function j_solve_real_vector(rhs, coefficients) result(solution)
 end function j_solve_real_vector
 
 pure function j_inverse_real(matrix) result(inverse)
-  real(kind=real64), intent(in) :: matrix(:,:)
-  real(kind=real64), allocatable :: inverse(:,:)
-  real(kind=real64), allocatable :: work(:,:), row_buffer(:)
-  real(kind=real64) :: factor, pivot
+  real(kind=dp), intent(in) :: matrix(:,:)
+  real(kind=dp), allocatable :: inverse(:,:)
+  real(kind=dp), allocatable :: work(:,:), row_buffer(:)
+  real(kind=dp) :: factor, pivot
   integer :: column, matrix_size, pivot_row, row
 
   matrix_size = size(matrix, 1)
@@ -530,15 +530,15 @@ pure function j_inverse_real(matrix) result(inverse)
     error stop "matrix inverse requires a square matrix"
   work = matrix
   allocate(inverse(matrix_size, matrix_size), row_buffer(matrix_size))
-  inverse = 0.0_real64
+  inverse = 0.0_dp
   do row = 1, matrix_size
-    inverse(row, row) = 1.0_real64
+    inverse(row, row) = 1.0_dp
   end do
   do column = 1, matrix_size
     pivot_row = column - 1 + &
       maxloc(abs(work(column:matrix_size, column)), dim=1)
     pivot = work(pivot_row, column)
-    if (abs(pivot) <= tiny(1.0_real64)) error stop "singular matrix"
+    if (abs(pivot) <= tiny(1.0_dp)) error stop "singular matrix"
     if (pivot_row /= column) then
       row_buffer = work(column, :)
       work(column, :) = work(pivot_row, :)
@@ -560,10 +560,10 @@ pure function j_inverse_real(matrix) result(inverse)
 end function j_inverse_real
 
 pure function j_determinant_real(matrix) result(determinant)
-  real(kind=real64), intent(in) :: matrix(:,:)
-  real(kind=real64) :: determinant
-  real(kind=real64), allocatable :: work(:,:), row_buffer(:)
-  real(kind=real64) :: factor
+  real(kind=dp), intent(in) :: matrix(:,:)
+  real(kind=dp) :: determinant
+  real(kind=dp), allocatable :: work(:,:), row_buffer(:)
+  real(kind=dp) :: factor
   integer :: column, matrix_size, pivot_row, row, sign_factor
 
   matrix_size = size(matrix, 1)
@@ -575,8 +575,8 @@ pure function j_determinant_real(matrix) result(determinant)
   do column = 1, matrix_size
     pivot_row = column - 1 + &
       maxloc(abs(work(column:matrix_size, column)), dim=1)
-    if (abs(work(pivot_row, column)) <= tiny(1.0_real64)) then
-      determinant = 0.0_real64
+    if (abs(work(pivot_row, column)) <= tiny(1.0_dp)) then
+      determinant = 0.0_dp
       return
     end if
     if (pivot_row /= column) then
@@ -592,18 +592,18 @@ pure function j_determinant_real(matrix) result(determinant)
         factor * work(column, column:matrix_size)
     end do
   end do
-  determinant = real(sign_factor, kind=real64)
+  determinant = real(sign_factor, kind=dp)
   do column = 1, matrix_size
     determinant = determinant * work(column, column)
   end do
 end function j_determinant_real
 
 pure elemental function j_match_real(left, right) result(matches)
-  real(kind=real64), intent(in) :: left, right
+  real(kind=dp), intent(in) :: left, right
   logical :: matches
 
   matches = abs(left - right) <= &
-    2.0_real64**(-44) * max(abs(left), abs(right))
+    2.0_dp**(-44) * max(abs(left), abs(right))
 end function j_match_real
 
 pure function j_iota(n) result(values)

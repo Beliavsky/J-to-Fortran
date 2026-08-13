@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 from j2fortran.fortran_style import (
+    collapse_short_fortran_continuations,
     coalesce_adjacent_allocate_statements,
+    combine_adjacent_literal_writes,
+    combine_adjacent_nonadvancing_writes,
     combine_adjacent_row_extension_assignments,
     combine_declarations,
     coalesce_simple_declaration_lines,
     procedure_prefix,
+    replace_nonadvancing_write_loops,
     safe_fortran_identifier,
     wrap_fortran_comment,
     wrap_long_fortran_lines,
@@ -49,14 +53,14 @@ def test_declarations_combine_only_with_identical_specifications() -> None:
 
 def test_adjacent_simple_declaration_lines_are_coalesced() -> None:
     lines = [
-        "  real(kind=real64), allocatable :: annual_mean(:)",
-        "  real(kind=real64), allocatable :: annual_volatility(:)",
-        "  real(kind=real64), allocatable :: centered(:,:)",
-        "  real(kind=real64), allocatable :: correlation(:,:)",
+        "  real(kind=dp), allocatable :: annual_mean(:)",
+        "  real(kind=dp), allocatable :: annual_volatility(:)",
+        "  real(kind=dp), allocatable :: centered(:,:)",
+        "  real(kind=dp), allocatable :: correlation(:,:)",
     ]
 
     assert coalesce_simple_declaration_lines(lines, max_length=200) == [
-        "  real(kind=real64), allocatable :: annual_mean(:), "
+        "  real(kind=dp), allocatable :: annual_mean(:), "
         "annual_volatility(:), centered(:,:), correlation(:,:)"
     ]
 
@@ -94,7 +98,7 @@ def test_multi_entity_declarations_coalesce_but_result_stays_separate() -> None:
 
 def test_long_declarations_pack_multiple_entities_per_continuation() -> None:
     lines = [
-        f"  real(kind=real64), allocatable :: {name}"
+        f"  real(kind=dp), allocatable :: {name}"
         for name in (
             "covariances1(:,:,:)",
             "covariances2(:,:,:)",
@@ -167,7 +171,7 @@ def test_row_extension_rewrite_requires_matching_destination_and_extent() -> Non
 
 
 def test_long_fortran_statements_wrap_outside_literals() -> None:
-    line = "  result = [" + ", ".join(f"cmplx({value}, 0, kind=real64)" for value in range(8)) + "]"
+    line = "  result = [" + ", ".join(f"cmplx({value}, 0, kind=dp)" for value in range(8)) + "]"
     wrapped = wrap_long_fortran_lines([line], max_length=80)
 
     assert len(wrapped) > 1
@@ -175,6 +179,106 @@ def test_long_fortran_statements_wrap_outside_literals() -> None:
     assert all(part.endswith(" &") for part in wrapped[:-1])
     assert all(part.lstrip().startswith("& ") for part in wrapped[1:])
     assert all("kind &" not in part for part in wrapped)
+
+
+def test_short_fortran_continuations_are_collapsed() -> None:
+    lines = [
+        "  determinant = max(1.0e-300_dp, &",
+        "    j_determinant_real(covariance))",
+        "  normalizer = (2.0_dp * acos(-1.0_dp))** &",
+        "    (0.5_dp * dimension_j) * sqrt(determinant)",
+    ]
+
+    assert collapse_short_fortran_continuations(lines) == [
+        "  determinant = max(1.0e-300_dp, j_determinant_real(covariance))",
+        "  normalizer = (2.0_dp * acos(-1.0_dp))**(0.5_dp * dimension_j) * "
+        "sqrt(determinant)",
+    ]
+
+
+def test_adjacent_literal_writes_are_combined() -> None:
+    lines = [
+        '  write (*,"(a)") "price file"',
+        '  write (*,"(a)") "prices.csv"',
+        '  write (*,"(a)") "assets"',
+    ]
+
+    assert combine_adjacent_literal_writes(lines) == [
+        '  write (*,"(a,2(/,a))") "price file", "prices.csv", "assets"'
+    ]
+
+    assert combine_adjacent_literal_writes(
+        ['  write (*,"(a)") \'first\'', '  write (*,"(a)") \'second\'']
+    ) == ['  write (*,"(a,1(/,a))") \'first\', \'second\'']
+
+
+def test_literal_write_combining_respects_boundaries() -> None:
+    lines = [
+        '  write (*,"(a)") "before"',
+        '  write (*,"(i0)") value',
+        '  write (*,"(a)") "after"',
+    ]
+
+    assert combine_adjacent_literal_writes(lines) == lines
+
+
+def test_nonadvancing_write_loop_becomes_implied_do() -> None:
+    lines = [
+        "  do asset = 1, dimension_j",
+        '    write (*,"(a,1x)", advance="no") trim(symbols(asset))',
+        "  end do",
+        '  write (*,"()")',
+    ]
+
+    assert replace_nonadvancing_write_loops(lines) == [
+        '  write (*,"(*(a,1x))") '
+        "(trim(symbols(asset)), asset = 1, dimension_j)"
+    ]
+
+
+def test_nonadvancing_write_loop_rewrite_requires_an_empty_write() -> None:
+    lines = [
+        "  do asset = 1, dimension_j",
+        '    write (*,"(a,1x)", advance="no") trim(symbols(asset))',
+        "  end do",
+    ]
+
+    assert replace_nonadvancing_write_loops(lines) == lines
+
+
+def test_nonadvancing_write_is_combined_with_following_write() -> None:
+    lines = [
+        '    write (*,"(a26)", advance="no") "annualized mean log return"',
+        '    write (*,"(*(1x,f13.6))") annual_mean',
+    ]
+
+    assert combine_adjacent_nonadvancing_writes(lines) == [
+        '    write (*,"(a26,*(1x,f13.6))") '
+        '"annualized mean log return", annual_mean'
+    ]
+
+
+def test_nonadvancing_write_combining_requires_matching_indentation() -> None:
+    lines = [
+        '  write (*,"(a)", advance="no") "label"',
+        '    write (*,"(i0)") value',
+    ]
+
+    assert combine_adjacent_nonadvancing_writes(lines) == lines
+
+
+def test_long_and_character_literal_continuations_are_preserved() -> None:
+    long_lines = [
+        "  result = first_really_long_expression + second_really_long_expression + &",
+        "    third_really_long_expression + fourth_really_long_expression",
+    ]
+    character_lines = [
+        "  message = 'continued character &",
+        "    &literal'",
+    ]
+
+    assert collapse_short_fortran_continuations(long_lines, max_length=60) == long_lines
+    assert collapse_short_fortran_continuations(character_lines) == character_lines
 
 
 def test_j_comment_text_wraps_as_indented_fortran_comments() -> None:

@@ -67,7 +67,7 @@ def test_j_division_converts_integer_numerator_to_real() -> None:
     assert infer_type(expression, names) == TypeInfo(AtomType.REAL)
     assert (
         render_fortran_expression(expression, names=names)
-        == "real(total, kind=real64) / count"
+        == "real(total, kind=dp) / count"
     )
 
 
@@ -171,7 +171,7 @@ def test_complex_literals_arithmetic_and_match() -> None:
     assert infer_type(literal, {}) == complex_scalar
     assert (
         render_fortran_expression(literal, names={})
-        == "cmplx(3.0_real64, 4.0_real64, kind=real64)"
+        == "cmplx(3.0_dp, 4.0_dp, kind=dp)"
     )
     assert infer_type(addition, {}) == complex_scalar
     assert infer_type(matched, names) == TypeInfo(AtomType.LOGICAL)
@@ -189,8 +189,8 @@ def test_numeric_strands_promote_to_the_widest_atom_type() -> None:
         AtomType.COMPLEX, Shape.vector(3)
     )
     assert render_fortran_expression(mixed_values) == (
-        "[complex(kind=real64) :: 1, 2.5_real64, "
-        "cmplx(3.0_real64, 4.0_real64, kind=real64)]"
+        "[complex(kind=dp) :: 1, 2.5_dp, "
+        "cmplx(3.0_dp, 4.0_dp, kind=dp)]"
     )
 
 
@@ -225,17 +225,17 @@ def test_complex_magnitude_lowers_to_real_abs() -> None:
     assert infer_type(expression, {}) == TypeInfo(AtomType.REAL)
     assert (
         render_fortran_expression(expression, names={})
-        == "abs(cmplx(3.0_real64, 4.0_real64, kind=real64))"
+        == "abs(cmplx(3.0_dp, 4.0_dp, kind=dp))"
     )
 
 
-def test_rational_literals_lower_to_real64_quotients() -> None:
+def test_rational_literals_lower_to_dp_quotients() -> None:
     expression = parse_expression("1r3 + 1r6")
 
     assert infer_type(expression, {}) == TypeInfo(AtomType.REAL)
     assert (
         render_fortran_expression(expression, names={})
-        == "real(1, kind=real64) / 3 + real(1, kind=real64) / 6"
+        == "real(1, kind=dp) / 3 + real(1, kind=dp) / 6"
     )
 
 
@@ -424,7 +424,7 @@ def test_integer_matrix_inverse_converts_argument_to_real() -> None:
 
     assert (
         render_fortran_expression(expression, names=names)
-        == "j_inverse_real(real(matrix, kind=real64))"
+        == "j_inverse_real(real(matrix, kind=dp))"
     )
 
 
@@ -445,7 +445,7 @@ def test_exponential_functions_convert_integer_operands_to_real(
 
     assert infer_type(expression, names) == TypeInfo(AtomType.REAL)
     assert render_fortran_expression(expression, names=names) == (
-        f"{intrinsic}(real(n, kind=real64))"
+        f"{intrinsic}(real(n, kind=dp))"
     )
 
 
@@ -459,7 +459,7 @@ def test_catenate_promotes_integer_and_real_items() -> None:
     assert infer_type(expression, names) == TypeInfo(
         AtomType.REAL, Shape.vector(3)
     )
-    assert "real(kind=real64)" in render_fortran_expression(expression, names=names)
+    assert "real(kind=dp)" in render_fortran_expression(expression, names=names)
 
 
 def test_division_parenthesizes_composite_numerator_and_denominator() -> None:
@@ -640,7 +640,7 @@ def test_mixed_integer_real_match_converts_only_the_integer_operand() -> None:
 
     assert infer_type(expression, names) == TypeInfo(AtomType.LOGICAL)
     assert render_fortran_expression(expression, names=names) == (
-        "j_match_real(real(integer_value, kind=real64), real_value)"
+        "j_match_real(real(integer_value, kind=dp), real_value)"
     )
 
 
@@ -898,7 +898,7 @@ def test_stitch_promotes_integer_column_to_real() -> None:
         AtomType.REAL, Shape.matrix(7, 2)
     )
     assert render_fortran_expression(expression, names=names) == (
-        "reshape([real(kind=real64) :: strikes, prices], [size(strikes), 2])"
+        "reshape([real(kind=dp) :: strikes, prices], [size(strikes), 2])"
     )
 
 
@@ -957,7 +957,7 @@ def test_real_subtraction_table_lowers_to_spread() -> None:
 
 def test_real_literals_use_the_declared_fortran_kind() -> None:
     assert render_fortran_expression(parse_expression("1.5 2e_3")) == (
-        "[1.5_real64, 2e-3_real64]"
+        "[1.5_dp, 2e-3_dp]"
     )
 
 
@@ -1503,9 +1503,9 @@ def test_unsupported_special_number_is_explicit() -> None:
 @pytest.mark.parametrize(
     ("j_source", "fortran"),
     [
-        ("1p1", "acos(-1.0_real64)"),
-        ("2p1", "2.0_real64 * acos(-1.0_real64)"),
-        ("1p2", "acos(-1.0_real64)**2"),
+        ("1p1", "acos(-1.0_dp)"),
+        ("2p1", "2.0_dp * acos(-1.0_dp)"),
+        ("1p2", "acos(-1.0_dp)**2"),
     ],
 )
 def test_pi_numeric_constants(j_source: str, fortran: str) -> None:
@@ -1559,7 +1559,7 @@ def test_real_scalar_power_accepts_real_exponent() -> None:
     assert infer_type(expression, names) == TypeInfo(AtomType.REAL)
     assert (
         render_fortran_expression(expression, names=names)
-        == "base**(0.5_real64 * dimension)"
+        == "base**(0.5_dp * dimension)"
     )
 
 
