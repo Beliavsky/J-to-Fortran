@@ -342,6 +342,18 @@ def test_two_by_two_determinant_lowers_to_direct_expression() -> None:
     )
 
 
+def test_general_real_determinant_uses_runtime_helper() -> None:
+    expression = parse_expression("-/ . * covariance")
+    names = {"covariance": TypeInfo(AtomType.REAL, Shape.matrix(4, 4))}
+
+    assert infer_type(expression, names) == TypeInfo(AtomType.REAL)
+    assert (
+        render_fortran_expression(expression, names=names)
+        == "j_determinant_real(covariance)"
+    )
+    assert required_runtime_helpers(expression, names) == {"determinant_real"}
+
+
 @pytest.mark.parametrize(
     ("dividend", "expected_type", "helper"),
     [
@@ -384,6 +396,36 @@ def test_real_matrix_division_uses_general_runtime_solver() -> None:
         == "j_solve_real_vector(b, a)"
     )
     assert required_runtime_helpers(expression, names) == {"solve_real_vector"}
+
+
+def test_general_real_matrix_inverse_uses_runtime_helper() -> None:
+    expression = parse_expression("%. covariance")
+    names = {"covariance": TypeInfo(AtomType.REAL, Shape.matrix(4, 4))}
+
+    assert infer_type(expression, names) == names["covariance"]
+    assert (
+        render_fortran_expression(expression, names=names)
+        == "j_inverse_real(covariance)"
+    )
+    assert required_runtime_helpers(expression, names) == {"inverse_real"}
+
+
+def test_matrix_inverse_rejects_statically_nonsquare_matrix() -> None:
+    expression = parse_expression("%. matrix")
+    names = {"matrix": TypeInfo(AtomType.REAL, Shape.matrix(3, 4))}
+
+    with pytest.raises(LoweringError, match="requires a square matrix"):
+        infer_type(expression, names)
+
+
+def test_integer_matrix_inverse_converts_argument_to_real() -> None:
+    expression = parse_expression("%. matrix")
+    names = {"matrix": TypeInfo(AtomType.INTEGER, Shape.matrix(3, 3))}
+
+    assert (
+        render_fortran_expression(expression, names=names)
+        == "j_inverse_real(real(matrix, kind=real64))"
+    )
 
 
 def test_negated_vector_selection_can_be_nested_in_exponential() -> None:
@@ -447,6 +489,33 @@ def test_computed_integer_vector_selects_from_vector() -> None:
     assert render_fortran_expression(expression, names=names) == (
         "values(indices + 1)"
     )
+
+
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    [
+        (
+            'matrix -"1 means',
+            "matrix - spread(means, dim=1, ncopies=size(matrix, 1))",
+        ),
+        (
+            'weights *"0 1 matrix',
+            "spread(weights, dim=2, ncopies=size(matrix, 2)) * matrix",
+        ),
+    ],
+)
+def test_ranked_row_broadcasting_lowers_to_spread(
+    source: str, expected: str
+) -> None:
+    expression = parse_expression(source)
+    names = {
+        "matrix": TypeInfo(AtomType.REAL, Shape.matrix(20, 4)),
+        "means": TypeInfo(AtomType.REAL, Shape.vector(4)),
+        "weights": TypeInfo(AtomType.REAL, Shape.vector(20)),
+    }
+
+    assert infer_type(expression, names) == names["matrix"]
+    assert render_fortran_expression(expression, names=names) == expected
 
 
 def test_prime_expression_primitives_lower_generically() -> None:
@@ -1427,6 +1496,20 @@ def test_real_vector_integer_power_is_elemental() -> None:
         AtomType.REAL, Shape.vector("n")
     )
     assert render_fortran_expression(expression, names=names) == "values**4"
+
+
+def test_real_scalar_power_accepts_real_exponent() -> None:
+    expression = parse_expression("base ^ (0.5 * dimension)")
+    names = {
+        "base": TypeInfo(AtomType.REAL),
+        "dimension": TypeInfo(AtomType.INTEGER),
+    }
+
+    assert infer_type(expression, names) == TypeInfo(AtomType.REAL)
+    assert (
+        render_fortran_expression(expression, names=names)
+        == "base**(0.5_real64 * dimension)"
+    )
 
 
 @pytest.mark.parametrize(

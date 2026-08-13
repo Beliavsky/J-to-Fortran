@@ -241,8 +241,24 @@ class ExpressionParser:
                 self._take()
                 if self.index >= len(self.tokens) or self._peek().kind is not TokenKind.NUMBER:
                     raise ExpressionParseError("rank conjunction requires a numeric rank", modifier)
-                rank_token = self._take()
-                rank = NumberLiteral(rank_token.value, _token_span(rank_token))
+                rank_tokens = []
+                while (
+                    self.index < len(self.tokens)
+                    and self._peek().kind is TokenKind.NUMBER
+                ):
+                    rank_tokens.append(self._take())
+                rank_items = tuple(
+                    NumberLiteral(token.value, _token_span(token))
+                    for token in rank_tokens
+                )
+                rank = (
+                    rank_items[0]
+                    if len(rank_items) == 1
+                    else Strand(
+                        rank_items,
+                        _cover(rank_items[0].span, rank_items[-1].span),
+                    )
+                )
                 verb = RankApplication(verb, rank, _cover(verb.span, rank.span))
                 continue
             break

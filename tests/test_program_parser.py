@@ -87,6 +87,84 @@ exit 0
 
 
 @pytest.mark.requires_gfortran
+def test_symbolically_shaped_random_matrix_compiles_and_runs(
+    tmp_path: Path,
+) -> None:
+    compiler = shutil.which("gfortran")
+    if compiler is None:
+        pytest.skip("gfortran is not installed")
+    j_source = """rows =: 20
+columns =: 4
+values =: ? (rows, columns) $ 0
+smoutput $ values
+exit 0
+"""
+    source = tmp_path / "random_matrix_j.f90"
+    executable = tmp_path / "random_matrix.exe"
+    generated = xj2f.emit_fortran(
+        xj2f.parse_j_source(Path("random_matrix.ijs"), j_source)
+    )
+    source.write_text(generated, encoding="utf-8")
+
+    assert "real(kind=real64), allocatable :: values(:,:)" in generated
+    assert "allocate(values(rows, columns))" in generated
+    assert "call random_number(values)" in generated
+    compiled = subprocess.run(
+        [compiler, "-std=f2018", str(source), "-o", str(executable)],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert compiled.returncode == 0, compiled.stdout + compiled.stderr
+    completed = subprocess.run(
+        [str(executable)], cwd=tmp_path, capture_output=True, text=True, check=False
+    )
+    assert completed.returncode == 0
+    assert completed.stdout.split() == ["20", "4"]
+
+
+@pytest.mark.requires_gfortran
+def test_general_inverse_and_determinant_helpers_compile_and_run(
+    tmp_path: Path,
+) -> None:
+    compiler = shutil.which("gfortran")
+    if compiler is None:
+        pytest.skip("gfortran is not installed")
+    j_source = """matrix =: (3 3) $ 4.0 7.0 2.0 3.0 6.0 1.0 2.0 5.0 3.0
+inverse =: %. matrix
+determinant =: -/ . * matrix
+smoutput determinant
+smoutput inverse
+exit 0
+"""
+    source = tmp_path / "matrix_helpers_j.f90"
+    executable = tmp_path / "matrix_helpers.exe"
+    generated = xj2f.emit_fortran(
+        xj2f.parse_j_source(Path("matrix_helpers.ijs"), j_source)
+    )
+    source.write_text(generated, encoding="utf-8")
+
+    assert "j_inverse_real(matrix)" in generated
+    assert "j_determinant_real(matrix)" in generated
+    compiled = subprocess.run(
+        [compiler, "-std=f2018", str(source), "-o", str(executable)],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert compiled.returncode == 0, compiled.stdout + compiled.stderr
+    completed = subprocess.run(
+        [str(executable)], cwd=tmp_path, capture_output=True, text=True, check=False
+    )
+    assert completed.returncode == 0
+    values = [float(value) for value in completed.stdout.split()]
+    assert values[0] == pytest.approx(9.0)
+    assert len(values) == 10
+
+
+@pytest.mark.requires_gfortran
 def test_random_component_mask_uses_a_real_temporary(tmp_path: Path) -> None:
     compiler = shutil.which("gfortran")
     if compiler is None:

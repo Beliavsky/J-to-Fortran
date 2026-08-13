@@ -202,6 +202,15 @@ def test_rank_conjunction_derives_a_verb() -> None:
     assert expression.verb.rank.text == "1"
 
 
+def test_dyadic_rank_vector_is_preserved() -> None:
+    expression = parse_expression('weights *"0 1 matrix')
+
+    assert isinstance(expression, DyadicApply)
+    assert isinstance(expression.verb, RankApplication)
+    assert isinstance(expression.verb.rank, Strand)
+    assert [item.text for item in expression.verb.rank.items] == ["0", "1"]
+
+
 def test_insert_adverb_can_then_receive_rank() -> None:
     expression = parse_expression('+/"1 matrix')
 

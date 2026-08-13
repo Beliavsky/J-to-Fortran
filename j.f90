@@ -5,9 +5,9 @@ module j2f_runtime
   public :: j_addition_table_int, j_append_int_row, j_binomial
   public :: j_cartesian_square, j_compress_hcat
   public :: j_copy_int_vector, j_factorial, j_grade_up_int, j_index_of_int
-  public :: j_decode_int, j_encode_int
+  public :: j_decode_int, j_determinant_real, j_encode_int
   public :: j_infix_max_int, j_infix_subtract_int, j_infix_sum_int
-  public :: j_iota, j_match_real
+  public :: j_inverse_real, j_iota, j_match_real
   public :: j_membership_int, j_multiplication_table_int, j_nub_int
   public :: j_power_table_int, j_prefix_max_int, j_prefix_product_int
   public :: j_prefix_sum_int
@@ -431,6 +431,86 @@ pure function j_solve_real_vector(rhs, coefficients) result(solution)
     solution(row) = solution(row) / work(row, row)
   end do
 end function j_solve_real_vector
+
+pure function j_inverse_real(matrix) result(inverse)
+  real(kind=real64), intent(in) :: matrix(:,:)
+  real(kind=real64), allocatable :: inverse(:,:)
+  real(kind=real64), allocatable :: work(:,:), row_buffer(:)
+  real(kind=real64) :: factor, pivot
+  integer :: column, matrix_size, pivot_row, row
+
+  matrix_size = size(matrix, 1)
+  if (size(matrix, 2) /= matrix_size) &
+    error stop "matrix inverse requires a square matrix"
+  work = matrix
+  allocate(inverse(matrix_size, matrix_size), row_buffer(matrix_size))
+  inverse = 0.0_real64
+  do row = 1, matrix_size
+    inverse(row, row) = 1.0_real64
+  end do
+  do column = 1, matrix_size
+    pivot_row = column - 1 + &
+      maxloc(abs(work(column:matrix_size, column)), dim=1)
+    pivot = work(pivot_row, column)
+    if (abs(pivot) <= tiny(1.0_real64)) error stop "singular matrix"
+    if (pivot_row /= column) then
+      row_buffer = work(column, :)
+      work(column, :) = work(pivot_row, :)
+      work(pivot_row, :) = row_buffer
+      row_buffer = inverse(column, :)
+      inverse(column, :) = inverse(pivot_row, :)
+      inverse(pivot_row, :) = row_buffer
+    end if
+    pivot = work(column, column)
+    work(column, :) = work(column, :) / pivot
+    inverse(column, :) = inverse(column, :) / pivot
+    do row = 1, matrix_size
+      if (row == column) cycle
+      factor = work(row, column)
+      work(row, :) = work(row, :) - factor * work(column, :)
+      inverse(row, :) = inverse(row, :) - factor * inverse(column, :)
+    end do
+  end do
+end function j_inverse_real
+
+pure function j_determinant_real(matrix) result(determinant)
+  real(kind=real64), intent(in) :: matrix(:,:)
+  real(kind=real64) :: determinant
+  real(kind=real64), allocatable :: work(:,:), row_buffer(:)
+  real(kind=real64) :: factor
+  integer :: column, matrix_size, pivot_row, row, sign_factor
+
+  matrix_size = size(matrix, 1)
+  if (size(matrix, 2) /= matrix_size) &
+    error stop "determinant requires a square matrix"
+  work = matrix
+  allocate(row_buffer(matrix_size))
+  sign_factor = 1
+  do column = 1, matrix_size
+    pivot_row = column - 1 + &
+      maxloc(abs(work(column:matrix_size, column)), dim=1)
+    if (abs(work(pivot_row, column)) <= tiny(1.0_real64)) then
+      determinant = 0.0_real64
+      return
+    end if
+    if (pivot_row /= column) then
+      row_buffer = work(column, :)
+      work(column, :) = work(pivot_row, :)
+      work(pivot_row, :) = row_buffer
+      sign_factor = -sign_factor
+    end if
+    do row = column + 1, matrix_size
+      factor = work(row, column) / work(column, column)
+      work(row, column:matrix_size) = &
+        work(row, column:matrix_size) - &
+        factor * work(column, column:matrix_size)
+    end do
+  end do
+  determinant = real(sign_factor, kind=real64)
+  do column = 1, matrix_size
+    determinant = determinant * work(column, column)
+  end do
+end function j_determinant_real
 
 pure elemental function j_match_real(left, right) result(matches)
   real(kind=real64), intent(in) :: left, right

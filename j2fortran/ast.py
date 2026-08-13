@@ -74,7 +74,7 @@ class AdverbApplication:
 @dataclass(frozen=True, slots=True)
 class RankApplication:
     operand: Verb
-    rank: NumberLiteral
+    rank: NumberLiteral | Strand
     span: SourceSpan
 
 

@@ -122,6 +122,18 @@ def primitive_spelling(verb: Verb) -> str | None:
     return verb.spelling if isinstance(verb, PrimitiveVerb) else None
 
 
+def _rank_values(verb: Verb) -> tuple[int, ...] | None:
+    if not isinstance(verb, RankApplication):
+        return None
+    if isinstance(verb.rank, NumberLiteral):
+        value = integer_value(verb.rank)
+        return (value,) if value is not None else None
+    values = tuple(integer_value(item) for item in verb.rank.items)
+    if any(value is None for value in values):
+        return None
+    return tuple(value for value in values if value is not None)
+
+
 def insert_scan_spelling(verb: Verb) -> str | None:
     if not isinstance(verb, AdverbApplication) or verb.adverb != "\\":
         return None
@@ -280,6 +292,13 @@ def constant_shape_extents(
     name_transform: Callable[[str], str] = str.lower,
 ) -> tuple[int | str, ...] | None:
     expression = ungroup(expression)
+    catenated = dyad(expression, ",")
+    if catenated is not None:
+        left = constant_shape_extents(catenated[0], names, name_transform)
+        right = constant_shape_extents(catenated[1], names, name_transform)
+        if left is None or right is None:
+            return None
+        return (*left, *right)
     if isinstance(expression, NumberLiteral):
         values = (integer_value(expression),)
     elif isinstance(expression, Strand):
@@ -575,14 +594,31 @@ def infer_type(
         operand_type = infer_type(
             expression.operand, names, name_transform, named_verbs=named_verbs
         )
+        if primitive_spelling(expression.verb) == "%.":
+            if (
+                operand_type.atom_type not in {AtomType.INTEGER, AtomType.REAL}
+                or operand_type.rank != 2
+            ):
+                raise LoweringError("matrix inverse requires a numeric matrix")
+            rows, columns = operand_type.shape.extents
+            if rows is not None and columns is not None and rows != columns:
+                raise LoweringError("matrix inverse requires a square matrix")
+            return TypeInfo(AtomType.REAL, operand_type.shape)
         if is_determinant(expression.verb):
-            if operand_type.atom_type not in {AtomType.INTEGER, AtomType.REAL}:
+            if (
+                operand_type.atom_type not in {AtomType.INTEGER, AtomType.REAL}
+                or operand_type.rank != 2
+            ):
                 raise LoweringError("determinant requires a numeric matrix")
-            if operand_type.shape != Shape.matrix(2, 2):
-                raise LoweringError(
-                    "determinant currently requires a statically known 2 by 2 matrix"
-                )
-            return TypeInfo(operand_type.atom_type)
+            rows, columns = operand_type.shape.extents
+            if rows is not None and columns is not None and rows != columns:
+                raise LoweringError("determinant requires a square matrix")
+            atom_type = (
+                operand_type.atom_type
+                if operand_type.shape == Shape.matrix(2, 2)
+                else AtomType.REAL
+            )
+            return TypeInfo(atom_type)
         if isinstance(expression.verb, NamedVerb):
             if named_verbs is None:
                 raise LoweringError(
@@ -890,6 +926,44 @@ def infer_type(
                 name_transform,
                 named_verbs=named_verbs,
             )
+        rank_values = _rank_values(expression.verb)
+        ranked_spelling = (
+            primitive_spelling(expression.verb.operand)
+            if isinstance(expression.verb, RankApplication)
+            else None
+        )
+        if rank_values in {(1,), (0, 1)} and ranked_spelling in {"+", "-", "*"}:
+            left_type = infer_type(
+                expression.left, names, name_transform, named_verbs=named_verbs
+            )
+            right_type = infer_type(
+                expression.right, names, name_transform, named_verbs=named_verbs
+            )
+            if rank_values == (1,):
+                valid_ranks = {left_type.rank, right_type.rank} == {1, 2}
+                vector_type = left_type if left_type.rank == 1 else right_type
+                matrix_type = left_type if left_type.rank == 2 else right_type
+                conforming = (
+                    vector_type.shape.extents[0] == matrix_type.shape.extents[1]
+                    or vector_type.shape.extents[0] is None
+                    or matrix_type.shape.extents[1] is None
+                )
+            else:
+                valid_ranks = left_type.rank == 1 and right_type.rank == 2
+                vector_type, matrix_type = left_type, right_type
+                conforming = (
+                    vector_type.shape.extents[0] == matrix_type.shape.extents[0]
+                    or vector_type.shape.extents[0] is None
+                    or matrix_type.shape.extents[0] is None
+                )
+            if not valid_ranks or not conforming:
+                raise LoweringError("ranked row operation shape mismatch")
+            atom_type = (
+                AtomType.REAL
+                if AtomType.REAL in {left_type.atom_type, right_type.atom_type}
+                else AtomType.INTEGER
+            )
+            return TypeInfo(atom_type, matrix_type.shape)
         named_infix = match_named_infix_application(expression)
         if named_infix is not None:
             verb_name, width_expression, values_expression = named_infix
@@ -1421,17 +1495,21 @@ def infer_type(
                     AtomType.REAL,
                     AtomType.COMPLEX,
                 }
-                or right_type.atom_type is not AtomType.INTEGER
+                or right_type.atom_type not in {AtomType.INTEGER, AtomType.REAL}
             ):
                 raise LoweringError(
-                    "power currently requires a numeric base and integer exponent"
+                    "power currently requires numeric base and exponent"
                 )
-            exponents = _integer_values(expression.right)
-            if exponents is None or any(exponent < 0 for exponent in exponents):
-                raise LoweringError(
-                    "integer power currently requires constant nonnegative exponents"
-                )
-            return TypeInfo(left_type.atom_type, shape)
+            if right_type.atom_type is AtomType.INTEGER:
+                exponents = _integer_values(expression.right)
+                if exponents is None or any(exponent < 0 for exponent in exponents):
+                    raise LoweringError(
+                        "integer power currently requires constant nonnegative exponents"
+                    )
+                return TypeInfo(left_type.atom_type, shape)
+            if left_type.atom_type is AtomType.COMPLEX:
+                return TypeInfo(AtomType.COMPLEX, shape)
+            return TypeInfo(AtomType.REAL, shape)
         if spelling == "o.":
             if integer_value(expression.left) != 2:
                 raise LoweringError(
@@ -2013,6 +2091,44 @@ def render_fortran_expression(
         expression, named_verbs, name_transform
     )
     if (
+        isinstance(bare_expression, DyadicApply)
+        and isinstance(bare_expression.verb, RankApplication)
+        and names is not None
+    ):
+        rank_values = _rank_values(bare_expression.verb)
+        spelling = primitive_spelling(bare_expression.verb.operand)
+        if rank_values in {(1,), (0, 1)} and spelling in {"+", "-", "*"}:
+            infer_type(
+                bare_expression, names, name_transform, named_verbs=named_verbs
+            )
+            left_type = infer_type(
+                bare_expression.left,
+                names,
+                name_transform,
+                named_verbs=named_verbs,
+            )
+            left = render_fortran_expression(
+                bare_expression.left,
+                name_transform,
+                names=names,
+                named_verbs=named_verbs,
+            )
+            right = render_fortran_expression(
+                bare_expression.right,
+                name_transform,
+                names=names,
+                named_verbs=named_verbs,
+            )
+            operator = _DYADIC_FORTRAN[spelling]
+            if rank_values == (1,):
+                if left_type.rank == 1:
+                    left = f"spread({left}, dim=1, ncopies=size({right}, 1))"
+                else:
+                    right = f"spread({right}, dim=1, ncopies=size({left}, 1))"
+            else:
+                left = f"spread({left}, dim=2, ncopies=size({right}, 2))"
+            return f"{left} {operator} {right}"
+    if (
         isinstance(bare_expression, MonadicApply)
         and primitive_spelling(bare_expression.verb) == "%:"
         and names is not None
@@ -2368,6 +2484,32 @@ def render_fortran_expression(
         return f"{helper}({dividend}, {divisor})"
     if (
         isinstance(bare_expression, MonadicApply)
+        and primitive_spelling(bare_expression.verb) == "%."
+        and names is not None
+    ):
+        infer_type(
+            bare_expression,
+            names,
+            name_transform,
+            named_verbs=named_verbs,
+        )
+        matrix = render_fortran_expression(
+            bare_expression.operand,
+            name_transform,
+            names=names,
+            named_verbs=named_verbs,
+        )
+        operand_type = infer_type(
+            bare_expression.operand,
+            names,
+            name_transform,
+            named_verbs=named_verbs,
+        )
+        if operand_type.atom_type is AtomType.INTEGER:
+            matrix = f"real({matrix}, kind=real64)"
+        return f"j_inverse_real({matrix})"
+    if (
+        isinstance(bare_expression, MonadicApply)
         and is_determinant(bare_expression.verb)
         and names is not None
     ):
@@ -2377,10 +2519,24 @@ def render_fortran_expression(
             name_transform,
             named_verbs=named_verbs,
         )
-        matrix = name_value(bare_expression.operand)
-        if matrix is None:
+        operand_type = infer_type(
+            bare_expression.operand,
+            names,
+            name_transform,
+            named_verbs=named_verbs,
+        )
+        matrix = render_fortran_expression(
+            bare_expression.operand,
+            name_transform,
+            names=names,
+            named_verbs=named_verbs,
+        )
+        if operand_type.shape != Shape.matrix(2, 2):
+            if operand_type.atom_type is AtomType.INTEGER:
+                matrix = f"real({matrix}, kind=real64)"
+            return f"j_determinant_real({matrix})"
+        if name_value(bare_expression.operand) is None:
             raise LoweringError("2 by 2 determinant currently requires a named matrix")
-        matrix = name_transform(matrix)
         return (
             f"{matrix}(1, 1) * {matrix}(2, 2)"
             f" - {matrix}(1, 2) * {matrix}(2, 1)"
@@ -2827,6 +2983,17 @@ def required_runtime_helpers(
         )
     if isinstance(expression, MonadicApply):
         spelling = primitive_spelling(expression.verb)
+        if is_determinant(expression.verb) and names is not None:
+            operand_type = infer_type(
+                expression.operand,
+                names,
+                name_transform,
+                named_verbs=named_verbs,
+            )
+            if operand_type.shape != Shape.matrix(2, 2):
+                helpers.add("determinant_real")
+        if spelling == "%.":
+            helpers.add("inverse_real")
         if reflex_table_spelling(expression.verb) == "+":
             helpers.add("addition_table_int")
         scan = insert_scan_spelling(expression.verb)
