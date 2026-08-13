@@ -3444,6 +3444,13 @@ def _normalized_output(text: str) -> list[str]:
     return text.split()
 
 
+_DISPLAY_NUMBER_RE = re.compile(
+    r"(?<![A-Za-z0-9_])"
+    r"([+-]?_?(?:\d+\.\d*|\.\d+|\d+)(?:[eEdD](?:_|[+-])?\d+)?)"
+    r"(?![A-Za-z0-9_])"
+)
+
+
 def _numeric_output_token(
     token: str, *, j_syntax: bool
 ) -> tuple[int | float, bool] | None:
@@ -3464,6 +3471,31 @@ def _numeric_output_token(
         return float(normalized), False
     except ValueError:
         return None
+
+
+def _normalize_j_numeric_output(text: str) -> str:
+    """Render J negative signs in conventional notation without changing prose."""
+
+    def normalize(match: re.Match[str]) -> str:
+        token = match.group(1)
+        if token.startswith("_"):
+            token = "-" + token[1:]
+        return re.sub(r"([eE])_", r"\1-", token)
+
+    return _DISPLAY_NUMBER_RE.sub(normalize, text)
+
+
+def _round_numeric_output(text: str, digits: int, *, j_syntax: bool = False) -> str:
+    """Round floating-point tokens while leaving integers and prose unchanged."""
+
+    def rounded(match: re.Match[str]) -> str:
+        token = match.group(1)
+        parsed = _numeric_output_token(token, j_syntax=j_syntax)
+        if parsed is None or parsed[1]:
+            return token
+        return f"{float(parsed[0]):.{digits}f}"
+
+    return _DISPLAY_NUMBER_RE.sub(rounded, text)
 
 
 def _output_tokens_equal(
@@ -3497,6 +3529,13 @@ def _nonnegative_float(value: str) -> float:
     parsed = float(value)
     if not math.isfinite(parsed) or parsed < 0.0:
         raise argparse.ArgumentTypeError("must be a finite nonnegative number")
+    return parsed
+
+
+def _nonnegative_int(value: str) -> int:
+    parsed = int(value)
+    if parsed < 0:
+        raise argparse.ArgumentTypeError("must be a nonnegative integer")
     return parsed
 
 
@@ -3543,6 +3582,19 @@ def build_argument_parser() -> argparse.ArgumentParser:
     parser.add_argument("--run", action="store_true", help="compile and run generated Fortran")
     parser.add_argument("--run-j", action="store_true", help="run the original J script")
     parser.add_argument("--run-both", action="store_true", help="run original J and generated Fortran")
+    rounding = parser.add_mutually_exclusive_group()
+    rounding.add_argument(
+        "--round",
+        type=_nonnegative_int,
+        metavar="N",
+        help="round floating-point data in displayed Fortran runtime output to N decimal places",
+    )
+    rounding.add_argument(
+        "--round-both",
+        type=_nonnegative_int,
+        metavar="N",
+        help="round floating-point data in displayed J and Fortran runtime output to N decimal places",
+    )
     parser.add_argument(
         "--run-diff",
         action="store_true",
@@ -3638,6 +3690,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                     args.run_j,
                     args.run_both,
                     args.run_diff,
+                    args.round is not None,
+                    args.round_both is not None,
                     args.time,
                     args.time_both,
                     args.tee,
@@ -3663,7 +3717,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(generated, end="")
 
         compare = args.run_diff or args.time_both
-        run_both = args.run_both or compare
+        run_both = args.run_both or compare or args.round_both is not None
         run_fortran = args.run or args.time or run_both
         run_j = args.run_j or run_both
         compile_requested = args.compile or run_fortran
@@ -3690,13 +3744,31 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
 
         if run_both:
-            _print_output("J output", j_output, True)
+            displayed_j_output = _normalize_j_numeric_output(j_output)
+            if args.round_both is not None:
+                displayed_j_output = _round_numeric_output(
+                    displayed_j_output, args.round_both
+                )
+            displayed_fortran_output = fortran_output
+            fortran_round_digits = (
+                args.round if args.round is not None else args.round_both
+            )
+            if fortran_round_digits is not None:
+                displayed_fortran_output = _round_numeric_output(
+                    displayed_fortran_output, fortran_round_digits
+                )
+            _print_output("J output", displayed_j_output, True)
             print()
-            _print_output("Fortran output", fortran_output, True)
+            _print_output("Fortran output", displayed_fortran_output, True)
         elif run_j:
             _print_output("J output", j_output, False)
         elif run_fortran:
-            _print_output("Fortran output", fortran_output, False)
+            displayed_fortran_output = (
+                _round_numeric_output(fortran_output, args.round)
+                if args.round is not None
+                else fortran_output
+            )
+            _print_output("Fortran output", displayed_fortran_output, False)
         elif not args.tee and not args.tee_both and args.emit_ast != "-":
             print(output_path)
 

@@ -116,6 +116,74 @@ def test_diff_tolerances_are_configurable() -> None:
     assert args.diff_atol == pytest.approx(1e-9)
 
 
+def test_j_display_normalization_changes_only_numeric_tokens() -> None:
+    text = "_1.25 1e_3 _2e_4 7 label_with_underscore _\n"
+
+    assert xj2f._normalize_j_numeric_output(text) == (
+        "-1.25 1e-3 -2e-4 7 label_with_underscore _\n"
+    )
+
+
+def test_runtime_rounding_changes_floats_but_not_integers_or_prose() -> None:
+    text = "value 2 0.333333 -2.3456 1.25E-3\n"
+
+    assert xj2f._round_numeric_output(text, 2) == (
+        "value 2 0.33 -2.35 0.00\n"
+    )
+
+
+def test_rounding_options_are_mutually_exclusive() -> None:
+    parser = xj2f.build_argument_parser()
+
+    with pytest.raises(SystemExit):
+        parser.parse_args(["demo.ijs", "--round", "2", "--round-both", "2"])
+
+
+def test_round_both_formats_display_and_implies_run_both(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    source = tmp_path / "rounded.ijs"
+    source.write_text("smoutput 1.0\nexit 0\n", encoding="utf-8")
+    monkeypatch.setattr(xj2f, "compile_fortran", lambda *args: None)
+    monkeypatch.setattr(xj2f, "_j_command", lambda *args: ["jconsole"])
+
+    def execute(*args, label: str, **kwargs) -> tuple[str, float]:
+        return ("_1.23456 2\n", 0.1) if label == "J" else ("-1.2345599 2\n", 0.1)
+
+    monkeypatch.setattr(xj2f, "_execute_repeated", execute)
+
+    assert xj2f.main([str(source), "--round-both", "3"]) == 0
+    assert capsys.readouterr().out == (
+        "--- J output ---\n-1.235 2\n\n"
+        "--- Fortran output ---\n-1.235 2\n"
+    )
+
+
+def test_rounding_does_not_hide_a_raw_output_mismatch(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    source = tmp_path / "mismatch.ijs"
+    source.write_text("smoutput 1.0\nexit 0\n", encoding="utf-8")
+    monkeypatch.setattr(xj2f, "compile_fortran", lambda *args: None)
+    monkeypatch.setattr(xj2f, "_j_command", lambda *args: ["jconsole"])
+
+    def execute(*args, label: str, **kwargs) -> tuple[str, float]:
+        return ("1.2344\n", 0.1) if label == "J" else ("1.23449\n", 0.1)
+
+    monkeypatch.setattr(xj2f, "_execute_repeated", execute)
+
+    assert xj2f.main(
+        [str(source), "--run-diff", "--round-both", "3"]
+    ) == 1
+    captured = capsys.readouterr()
+    assert captured.out.count("1.234\n") == 2
+    assert "output mismatch at token 1" in captured.err
+
+
 def test_time_both_prints_timings_after_output_mismatch(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
