@@ -87,6 +87,46 @@ exit 0
 
 
 @pytest.mark.requires_gfortran
+def test_random_component_mask_uses_a_real_temporary(tmp_path: Path) -> None:
+    compiler = shutil.which("gfortran")
+    if compiler is None:
+        pytest.skip("gfortran is not installed")
+    j_source = """n =: 10000
+p =: 0.35
+selected =: (? n $ 0) < p
+values =: (selected * 2.0) + (1 - selected) * _1.0
+smoutput +/ selected
+smoutput +/ values
+exit 0
+"""
+    source = tmp_path / "random_component_j.f90"
+    executable = tmp_path / "random_component.exe"
+    program = xj2f.parse_j_source(Path("random_component.ijs"), j_source)
+    generated = xj2f.emit_fortran(program)
+    source.write_text(generated, encoding="utf-8")
+
+    assert "real(kind=real64), allocatable :: j_random_1(:)" in generated
+    assert "call random_number(j_random_1)" in generated
+    assert "selected = j_random_1 < p" in generated
+    assert "merge(1, 0, selected)" in generated
+    compiled = subprocess.run(
+        [compiler, "-std=f2018", str(source), "-o", str(executable)],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert compiled.returncode == 0, compiled.stdout + compiled.stderr
+    completed = subprocess.run(
+        [str(executable)], cwd=tmp_path, capture_output=True, text=True, check=False
+    )
+    assert completed.returncode == 0
+    selected_count, total = map(float, completed.stdout.split())
+    assert 3000 < selected_count < 4000
+    assert 0 < total < 1000
+
+
+@pytest.mark.requires_gfortran
 def test_monte_carlo_pi_compiles_and_runs(tmp_path: Path) -> None:
     compiler = shutil.which("gfortran")
     if compiler is None:
@@ -567,6 +607,47 @@ exit 0
     assert "j_result = sum(y) / size(y, 1)" in generated
     assert 'write (*,"(g0)") mean(ints)' in generated
     assert 'write (*,"(g0)") mean(reals)' in generated
+
+
+@pytest.mark.requires_gfortran
+def test_explicit_callee_inherits_real_vector_signature_from_caller(
+    tmp_path: Path,
+) -> None:
+    compiler = shutil.which("gfortran")
+    if compiler is None:
+        pytest.skip("gfortran is not installed")
+    j_source = """first_exp =: 3 : 0
+  ^ 0 { y
+)
+wrapper =: 3 : 0
+  first_exp y
+)
+values =: 0.0 1.0 2.0
+smoutput wrapper values
+exit 0
+"""
+    source = tmp_path / "interprocedural_signature_j.f90"
+    executable = tmp_path / "interprocedural_signature.exe"
+    program = xj2f.parse_j_source(Path("interprocedural_signature.ijs"), j_source)
+    signatures = xj2f._definition_argument_types(program)
+
+    assert signatures[("wrapper", 1)][0][0] == xj2f.TypeInfo(
+        xj2f.AtomType.REAL, xj2f.Shape.vector(3)
+    )
+    assert signatures[("first_exp", 1)][0][0] == xj2f.TypeInfo(
+        xj2f.AtomType.REAL, xj2f.Shape.vector(3)
+    )
+    generated = xj2f.emit_fortran(program)
+    source.write_text(generated, encoding="utf-8")
+    assert "j_result = exp(y(1))" in generated
+    compiled = subprocess.run(
+        [compiler, "-std=f2018", str(source), "-o", str(executable)],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert compiled.returncode == 0, compiled.stdout + compiled.stderr
 
 
 @pytest.mark.requires_gfortran

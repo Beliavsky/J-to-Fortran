@@ -256,6 +256,7 @@ class LoweredTopAssignment:
     type_info: TypeInfo
     print_only: bool
     updates: tuple[str, ...] = ()
+    temporary_declarations: tuple[tuple[str, str], ...] = ()
 
 
 def _error_at(kind: type[J2FError], line: SourceLine, message: str) -> J2FError:
@@ -754,7 +755,18 @@ class FunctionEmitter:
             "integer": TypeInfo(AtomType.INTEGER),
             "integer, allocatable-vector": TypeInfo(AtomType.INTEGER, Shape.vector()),
             "integer, allocatable-matrix": TypeInfo(AtomType.INTEGER, Shape.matrix()),
+            "real(kind=real64)": TypeInfo(AtomType.REAL),
+            "real(kind=real64), allocatable-vector": TypeInfo(
+                AtomType.REAL, Shape.vector()
+            ),
+            "real(kind=real64), allocatable-matrix": TypeInfo(
+                AtomType.REAL, Shape.matrix()
+            ),
+            "logical": TypeInfo(AtomType.LOGICAL),
             "logical, allocatable-vector": TypeInfo(AtomType.LOGICAL, Shape.vector()),
+            "logical, allocatable-matrix": TypeInfo(
+                AtomType.LOGICAL, Shape.matrix()
+            ),
         }.get(declaration)
         if type_info is not None:
             self.types[name] = type_info
@@ -880,18 +892,18 @@ class FunctionEmitter:
                 named_verbs=self.named_verbs,
             )
         )
-        if value_type.atom_type is AtomType.INTEGER and value_type.rank == 1:
-            self._declare(name, "integer, allocatable-vector")
-            self.types[name] = value_type
-            self._write(f"{name} = {rendered}")
-            return
-        if value_type.atom_type is AtomType.LOGICAL and value_type.rank == 1:
-            self._declare(name, "logical, allocatable-vector")
-            self.types[name] = value_type
-            self._write(f"{name} = {rendered}")
-            return
-        if value_type.atom_type is AtomType.INTEGER and value_type.rank == 0:
-            self._declare(name, "integer")
+        declaration_base = {
+            AtomType.INTEGER: "integer",
+            AtomType.REAL: "real(kind=real64)",
+            AtomType.LOGICAL: "logical",
+        }.get(value_type.atom_type)
+        if declaration_base is not None and value_type.rank in {0, 1, 2}:
+            declaration = declaration_base
+            if value_type.rank == 1:
+                declaration += ", allocatable-vector"
+            elif value_type.rank == 2:
+                declaration += ", allocatable-matrix"
+            self._declare(name, declaration)
             self.types[name] = value_type
             self._write(f"{name} = {rendered}")
             return
@@ -1844,6 +1856,7 @@ def _lower_top_assignments(
     helpers: set[str] = set()
     noun_names: set[str] = set()
     print_only = _print_only_top_names(program)
+    random_index = 0
     for assignment in (item for item in program.items if isinstance(item, Assign)):
         name = _fortran_name(assignment.name)
         if name in types:
@@ -1877,11 +1890,26 @@ def _lower_top_assignments(
                 rendered = ""
                 extent_text = ", ".join(str(extent) for extent in extents)
                 random_type = TypeInfo(AtomType.REAL, Shape(extents))
-                transformed_types = {**types, name: random_type}
+                temporary_declarations: tuple[tuple[str, str], ...] = ()
+                random_target = name
+                if type_info != random_type:
+                    random_index += 1
+                    random_target = f"j_random_{random_index}"
+                    random_shape, transformed = _materialize_uniform_random_array(
+                        expression, random_target
+                    )
+                    dimensions = ",".join(":" for _ in extents)
+                    temporary_declarations = (
+                        (
+                            "real(kind=real64), allocatable",
+                            f"{random_target}({dimensions})",
+                        ),
+                    )
+                transformed_types = {**types, random_target: random_type}
                 after_random = (
                     ""
                     if isinstance(transformed, Name)
-                    and _fortran_name(transformed.identifier) == name
+                    and _fortran_name(transformed.identifier) == random_target
                     else render_fortran_expression(
                         transformed,
                         _fortran_name,
@@ -1896,11 +1924,12 @@ def _lower_top_assignments(
                 )
                 updates = (
                     *checks,
-                    f"allocate({name}({extent_text}))",
-                    f"call random_number({name})",
+                    f"allocate({random_target}({extent_text}))",
+                    f"call random_number({random_target})",
                     *((f"{name} = {after_random}",) if after_random else ()),
                 )
             else:
+                temporary_declarations = ()
                 amendment = render_fortran_amendment(
                     expression,
                     name,
@@ -1951,6 +1980,7 @@ def _lower_top_assignments(
                 type_info,
                 name in print_only and not updates,
                 updates,
+                temporary_declarations,
             )
         )
     return lowered, helpers
@@ -2092,6 +2122,69 @@ def _definition_argument_types(
             visit(expression.left, names)
             visit(expression.right, names)
 
+    def visit_statements(
+        statements: tuple[Statement, ...], names: dict[str, TypeInfo]
+    ) -> None:
+        for statement in statements:
+            if isinstance(statement, CommentStatement):
+                continue
+            if isinstance(statement, Assign):
+                try:
+                    expression = parse_expression(
+                        statement.expression, noun_names=set(names)
+                    )
+                except (LexerError, ExpressionParseError):
+                    continue
+                visit(expression, names)
+                try:
+                    names[_fortran_name(statement.name)] = infer_type(
+                        expression, names, _fortran_name
+                    )
+                except LoweringError:
+                    pass
+                continue
+            if isinstance(statement, ExpressionStatement):
+                try:
+                    expression = parse_expression(
+                        statement.expression, noun_names=set(names)
+                    )
+                except (LexerError, ExpressionParseError):
+                    continue
+                visit(expression, names)
+                continue
+            if isinstance(statement, ForLoop):
+                try:
+                    expression = parse_expression(
+                        statement.expression, noun_names=set(names)
+                    )
+                except (LexerError, ExpressionParseError):
+                    pass
+                else:
+                    visit(expression, names)
+                loop_names = dict(names)
+                loop_names[_fortran_name(statement.variable)] = TypeInfo(
+                    AtomType.INTEGER
+                )
+                visit_statements(statement.body, loop_names)
+                continue
+            if isinstance(statement, WhileLoop):
+                try:
+                    expression = parse_expression(
+                        statement.condition, noun_names=set(names)
+                    )
+                except (LexerError, ExpressionParseError):
+                    pass
+                else:
+                    visit(expression, names)
+                visit_statements(statement.body, dict(names))
+                continue
+            if isinstance(statement, IfStatement):
+                branches = [statement.body]
+                branches.extend(branch.body for branch in statement.elseif_branches)
+                if statement.else_body is not None:
+                    branches.append(statement.else_body)
+                visit_statements(tuple(sum((list(branch) for branch in branches), [])), dict(names))
+
     for item in program.items:
         if not isinstance(item, (Assign, EchoStatement)):
             continue
@@ -2110,6 +2203,29 @@ def _definition_argument_types(
             except LoweringError:
                 pass
             noun_names.add(item.name)
+    definitions = _explicit_definitions(program)
+    while True:
+        before = repr(inferred)
+        for definition in definitions:
+            exported_name = _fortran_name(
+                definition.generic_name or definition.name
+            )
+            signatures = inferred.get(
+                (exported_name, len(definition.arguments)), []
+            )
+            for signature in signatures:
+                local_types = dict(top_types)
+                local_types.update(
+                    {
+                        _fortran_name(argument): argument_type
+                        for argument, argument_type in zip(
+                            definition.arguments, signature, strict=True
+                        )
+                    }
+                )
+                visit_statements(definition.body, local_types)
+        if repr(inferred) == before:
+            break
     return {key: tuple(signatures) for key, signatures in inferred.items()}
 
 
@@ -2562,7 +2678,14 @@ def emit_fortran(
     ):
         lines.append("  use, intrinsic :: iso_fortran_env, only: real64")
     lines.append("  implicit none")
-    declarations = [_main_entity_declaration(assignment) for assignment in active_assignments]
+    declarations = [
+        declaration
+        for assignment in active_assignments
+        for declaration in (
+            _main_entity_declaration(assignment),
+            *assignment.temporary_declarations,
+        )
+    ]
     lines.extend(f"  {line}" for line in combine_declarations(declarations))
     assignment_by_name = {assignment.name: assignment for assignment in top_assignments}
     echo_calls: list[

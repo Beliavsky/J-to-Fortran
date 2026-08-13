@@ -1333,6 +1333,14 @@ def test_normal_transform_primitives_preserve_vector_shape(
     assert render_fortran_expression(expression, names=names) == fortran
 
 
+def test_exponential_of_real_vector_selection_is_real_scalar() -> None:
+    expression = parse_expression("^ 2 { values")
+    names = {"values": TypeInfo(AtomType.REAL, Shape.vector(5))}
+
+    assert infer_type(expression, names) == TypeInfo(AtomType.REAL)
+    assert render_fortran_expression(expression, names=names) == "exp(values(3))"
+
+
 def test_real_vector_integer_power_is_elemental() -> None:
     expression = parse_expression("values ^ 4")
     names = {"values": TypeInfo(AtomType.REAL, Shape.vector("n"))}
@@ -1341,3 +1349,22 @@ def test_real_vector_integer_power_is_elemental() -> None:
         AtomType.REAL, Shape.vector("n")
     )
     assert render_fortran_expression(expression, names=names) == "values**4"
+
+
+@pytest.mark.parametrize(
+    ("j_source", "fortran"),
+    [
+        ("selected * values", "merge(1, 0, selected) * values"),
+        ("1 - selected", "1 - merge(1, 0, selected)"),
+    ],
+)
+def test_logical_arrays_are_converted_when_used_numerically(
+    j_source: str, fortran: str
+) -> None:
+    expression = parse_expression(j_source)
+    names = {
+        "selected": TypeInfo(AtomType.LOGICAL, Shape.vector("n")),
+        "values": TypeInfo(AtomType.REAL, Shape.vector("n")),
+    }
+
+    assert render_fortran_expression(expression, names=names) == fortran

@@ -857,6 +857,10 @@ def infer_type(
             if operand_type.atom_type not in {AtomType.INTEGER, AtomType.REAL}:
                 raise LoweringError("natural logarithm requires a real numeric operand")
             return TypeInfo(AtomType.REAL, operand_type.shape)
+        if spelling == "^":
+            if operand_type.atom_type not in {AtomType.INTEGER, AtomType.REAL}:
+                raise LoweringError("exponential requires a real numeric operand")
+            return TypeInfo(AtomType.REAL, operand_type.shape)
         if spelling in {"<.", ">."}:
             return TypeInfo(AtomType.INTEGER, operand_type.shape)
         if spelling == "-.":
@@ -1375,10 +1379,12 @@ def infer_type(
                 AtomType.INTEGER,
                 AtomType.REAL,
                 AtomType.COMPLEX,
+                AtomType.LOGICAL,
             } or right_type.atom_type not in {
                 AtomType.INTEGER,
                 AtomType.REAL,
                 AtomType.COMPLEX,
+                AtomType.LOGICAL,
             }:
                 raise LoweringError(
                     "domain error: arithmetic requires numeric arguments"
@@ -1664,6 +1670,8 @@ def _render_fortran_expression(
             )
         if spelling == "^.":
             return f"log({operand})", _ATOM_PRECEDENCE, "call"
+        if spelling == "^":
+            return f"exp({operand})", _ATOM_PRECEDENCE, "call"
         if spelling == "<.":
             return f"floor({operand})", _ATOM_PRECEDENCE, "call"
         if spelling == ">.":
@@ -2063,6 +2071,15 @@ def render_fortran_expression(
             named_verbs=named_verbs,
         )
         spelling = primitive_spelling(bare_expression.verb)
+        if spelling in {"^", "^."}:
+            operand = render_fortran_expression(
+                bare_expression.operand,
+                name_transform,
+                names=names,
+                named_verbs=named_verbs,
+            )
+            intrinsic = "exp" if spelling == "^" else "log"
+            return f"{intrinsic}({operand})"
         if spelling == "+" and operand_type.atom_type is AtomType.COMPLEX:
             operand = render_fortran_expression(
                 bare_expression.operand,
@@ -2438,8 +2455,28 @@ def render_fortran_expression(
                 names=names,
                 named_verbs=named_verbs,
             )
-            if spelling == "*" and _same_expression(
+            left_type = infer_type(
+                bare_expression.left,
+                names,
+                name_transform,
+                named_verbs=named_verbs,
+            )
+            right_type = infer_type(
+                bare_expression.right,
+                names,
+                name_transform,
+                named_verbs=named_verbs,
+            )
+            if spelling in {"+", "-", "*", "%"} and (
+                left_type.atom_type is AtomType.LOGICAL
+            ):
+                left = f"merge(1, 0, {left})"
+            if (
+                spelling == "*"
+                and left_type.atom_type is not AtomType.LOGICAL
+                and _same_expression(
                 bare_expression.left, bare_expression.right
+                )
             ):
                 _, left_precedence, _ = _render_fortran_expression(
                     bare_expression.left, name_transform
@@ -2454,6 +2491,10 @@ def render_fortran_expression(
                 names=names,
                 named_verbs=named_verbs,
             )
+            if spelling in {"+", "-", "*", "%"} and (
+                right_type.atom_type is AtomType.LOGICAL
+            ):
+                right = f"merge(1, 0, {right})"
             _, left_precedence, left_operator = _render_fortran_expression(
                 bare_expression.left, name_transform
             )
@@ -2467,6 +2508,8 @@ def render_fortran_expression(
                 if not (associative and right_operator == operator):
                     right_requires += 1
             right = _parenthesize(right, right_precedence, right_requires)
+            if operator in {"+", "-", "*", "/"} and right.startswith(("+", "-")):
+                right = f"({right})"
             return f"{left} {operator} {right}"
     rendered, _, _ = _render_fortran_expression(bare_expression, name_transform)
     return rendered
