@@ -238,7 +238,8 @@ The parser currently recognizes:
   module procedures ordered after their dependencies;
 - explicitly omitted monadic or dyadic `plot` and `pd` visualization
   directives;
-- dyadic reflex, integer-noun bond, monadic `@:` composition, and monadic forks;
+- monadic and dyadic reflexes of supported primitives, integer-noun bond,
+  monadic `@:` composition, and monadic forks;
 - sum-product inner products lowered to `dot_product` and `matmul`;
 - direct determinants of statically known 2 by 2 matrices;
 - vector and matrix division by integer 2 by 2 matrices;

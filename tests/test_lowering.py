@@ -146,6 +146,55 @@ def test_monadic_reciprocal_parenthesizes_a_compound_operand() -> None:
 
 
 @pytest.mark.parametrize(
+    ("source", "names", "expected_type", "expected_fortran"),
+    [
+        (
+            "denominator %~ numerator",
+            {
+                "denominator": TypeInfo(AtomType.INTEGER),
+                "numerator": TypeInfo(AtomType.INTEGER),
+            },
+            TypeInfo(AtomType.REAL),
+            "real(numerator, kind=dp) / denominator",
+        ),
+        (
+            "exponent ^~ base",
+            {
+                "exponent": TypeInfo(AtomType.INTEGER),
+                "base": TypeInfo(AtomType.REAL),
+            },
+            TypeInfo(AtomType.REAL),
+            "base**exponent",
+        ),
+        (
+            "3 <~ value",
+            {"value": TypeInfo(AtomType.INTEGER)},
+            TypeInfo(AtomType.LOGICAL),
+            "value < 3",
+        ),
+    ],
+)
+def test_dyadic_primitive_reflex_swaps_arguments(
+    source: str,
+    names: dict[str, TypeInfo],
+    expected_type: TypeInfo,
+    expected_fortran: str,
+) -> None:
+    expression = parse_expression(source, noun_names=set(names))
+
+    assert infer_type(expression, names) == expected_type
+    assert render_fortran_expression(expression, names=names) == expected_fortran
+
+
+def test_monadic_primitive_reflex_duplicates_its_argument() -> None:
+    expression = parse_expression("-~ value")
+    names = {"value": TypeInfo(AtomType.INTEGER)}
+
+    assert infer_type(expression, names) == TypeInfo(AtomType.INTEGER)
+    assert render_fortran_expression(expression, names=names) == "value - value"
+
+
+@pytest.mark.parametrize(
     "operand_type",
     [
         TypeInfo(AtomType.INTEGER),

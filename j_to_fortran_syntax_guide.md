@@ -546,6 +546,15 @@ mean = sum(y) / real(size(y), kind=dp)
 General tacit J trains require structural analysis and remain broader than the
 current subset.
 
+Reflex `~` duplicates a monadic argument or swaps dyadic arguments. For an
+otherwise supported primitive, the transpiler normalizes these forms before
+ordinary type inference and lowering:
+
+```j
+denominator %~ numerator  NB. numerator % denominator
+3 <~ value                NB. value < 3
+```
+
 ## Matrix Operations
 
 J's inner product notation can express dot products and matrix multiplication:

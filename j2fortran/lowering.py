@@ -194,6 +194,28 @@ def reflex_table_spelling(verb: Verb) -> str | None:
     return table_spelling(verb.operand)
 
 
+def _normalize_primitive_reflex(expression: Expression) -> DyadicApply | None:
+    """Expand primitive ``u~`` application by duplicating or swapping nouns."""
+
+    expression = ungroup(expression)
+    if not isinstance(expression, (MonadicApply, DyadicApply)) or not isinstance(
+        expression.verb, AdverbApplication
+    ):
+        return None
+    if expression.verb.adverb != "~" or not isinstance(
+        expression.verb.operand, PrimitiveVerb
+    ):
+        return None
+    # Monadic grade reflex is J's sort idiom and has dedicated lowering.
+    if expression.verb.operand.spelling in {"/:", "\\:"}:
+        return None
+    if isinstance(expression, MonadicApply):
+        left = right = expression.operand
+    else:
+        left, right = expression.right, expression.left
+    return DyadicApply(expression.verb.operand, left, right, expression.span)
+
+
 def is_sum_product(verb: Verb) -> bool:
     if not isinstance(verb, InnerProductVerb):
         return False
@@ -635,6 +657,14 @@ def infer_type(
     named_verbs: Mapping[str, TypeInfo] | None = None,
 ) -> TypeInfo:
     expression = ungroup(expression)
+    reflected = _normalize_primitive_reflex(expression)
+    if reflected is not None:
+        return infer_type(
+            reflected,
+            names,
+            name_transform,
+            named_verbs=named_verbs,
+        )
     if isinstance(expression, NumberLiteral):
         return TypeInfo(_number_atom_type(expression))
     if isinstance(expression, Strand):
@@ -1856,6 +1886,9 @@ def _render_fortran_expression(
 ) -> tuple[str, int, str | None]:
     if isinstance(expression, Group):
         return _render_fortran_expression(expression.expression, name_transform)
+    reflected = _normalize_primitive_reflex(expression)
+    if reflected is not None:
+        return _render_fortran_expression(reflected, name_transform)
     if isinstance(expression, NumberLiteral):
         return _fortran_number(expression.text), _ATOM_PRECEDENCE, None
     if isinstance(expression, Name):
@@ -2288,6 +2321,14 @@ def render_fortran_expression(
     bare_expression = _normalize_monadic_verb_chains(
         expression, named_verbs, name_transform
     )
+    reflected = _normalize_primitive_reflex(bare_expression)
+    if reflected is not None:
+        return render_fortran_expression(
+            reflected,
+            name_transform,
+            names=names,
+            named_verbs=named_verbs,
+        )
     if (
         isinstance(bare_expression, DyadicApply)
         and file_write_mode(bare_expression.verb) is not None
@@ -3318,6 +3359,14 @@ def required_runtime_helpers(
 
     expression = ungroup(expression)
     helpers: set[str] = set()
+    reflected = _normalize_primitive_reflex(expression)
+    if reflected is not None:
+        return required_runtime_helpers(
+            reflected,
+            names,
+            name_transform,
+            named_verbs=named_verbs,
+        )
     monadic_chain = _monadic_verb_chain(
         expression, named_verbs, name_transform
     )
