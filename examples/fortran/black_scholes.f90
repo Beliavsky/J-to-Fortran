@@ -5,7 +5,8 @@ module black_scholes_j_mod
   use, intrinsic :: iso_fortran_env, only: dp => real64
   implicit none
   private
-  public :: normal_cdf, black_scholes, spot, rate, volatility, maturity, discount
+  public :: normal_cdf, black_scholes, pi, spot, rate, volatility, maturity, discount
+  real(kind=dp), parameter :: pi = acos(-1.0_dp)
   integer :: spot, maturity
   real(kind=dp) :: rate, volatility, discount
 
@@ -20,7 +21,7 @@ pure elemental function normal_cdf(y) result(j_result)
   t = 1.0_dp / (1 + 0.2316419_dp * abs(y))
   polynomial = t * (0.319381530_dp + t * (-0.356563782_dp + t * (1.781477937_dp + t * ( &
      & -1.821255978_dp + t * 1.330274429_dp))))
-  tail = (exp(-0.5_dp * y**2) / sqrt(2 * acos(-1.0_dp))) * polynomial
+  tail = (exp(-0.5_dp * y**2) / sqrt(2 * pi)) * polynomial
   if (y >= 0) then
     j_result = 1 - tail
   else
@@ -35,7 +36,7 @@ pure function black_scholes(y) result(j_result)
   real(kind=dp), allocatable :: j_result(:,:)
   real(kind=dp) :: discount, vol_sqrt_t
   real(kind=dp), allocatable :: d1(:), d2(:), call_j(:), put(:)
-  discount = exp(-(rate * maturity))
+  discount = exp(-rate * maturity)
   vol_sqrt_t = volatility * sqrt(real(maturity, kind=dp))
   d1 = (log(real(spot, kind=dp) / y) + (rate + 0.5_dp * volatility**2) * maturity) / vol_sqrt_t
   d2 = d1 - vol_sqrt_t
@@ -47,7 +48,7 @@ end function black_scholes
 end module black_scholes_j_mod
 
 program black_scholes_j
-  use black_scholes_j_mod, only: black_scholes, discount, maturity, normal_cdf, rate, spot, &
+  use black_scholes_j_mod, only: black_scholes, discount, maturity, normal_cdf, pi, rate, spot, &
      & volatility
   use, intrinsic :: iso_fortran_env, only: dp => real64
   implicit none
@@ -68,12 +69,12 @@ program black_scholes_j
   call random_number(u1)
   u1 = max(1e-12_dp, u1)
   call random_number(u2)
-  z = sqrt(-2 * log(u1)) * cos(2 * acos(-1.0_dp) * u2)
+  z = sqrt(-2 * log(u1)) * cos(2 * pi * u2)
   terminal = spot * exp((rate - 0.5_dp * volatility**2) * maturity + volatility * &
      & sqrt(real(maturity, kind=dp)) * z)
   ! Each column contains payoffs for one strike, using common random draws.
   ! J: discount =: ^ -rate * maturity
-  discount = exp(-(rate * maturity))
+  discount = exp(-rate * maturity)
   differences = spread(terminal, dim=2, ncopies=size(strikes)) - spread(strikes, dim=1, &
      & ncopies=size(terminal))
   mc_call = discount * (sum(max(0.0_dp, differences), dim=1) / n)

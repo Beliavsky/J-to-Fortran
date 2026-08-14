@@ -7,6 +7,7 @@ module fit_return_mixture_j_mod
   implicit none
   private
   public :: j_component_update, j_fit_em, j_load_returns, j_log_likelihood, j_print_component
+  real(kind=dp), parameter :: pi = acos(-1.0_dp)
 
 contains
 
@@ -161,7 +162,7 @@ pure function j_mv_density(observations, mean_vector, covariance) result(density
   inverse = j_inverse_real(covariance)
   quadratic = sum(matmul(centered, inverse) * centered, dim=2)
   determinant = max(1.0e-300_dp, j_determinant_real(covariance))
-  normalizer = (2.0_dp * acos(-1.0_dp))**(0.5_dp * dimension_j) * sqrt(determinant)
+  normalizer = (2.0_dp * pi)**(0.5_dp * dimension_j) * sqrt(determinant)
   density = max(1.0e-300_dp, exp(-0.5_dp * quadratic) / normalizer)
 end function j_mv_density
 

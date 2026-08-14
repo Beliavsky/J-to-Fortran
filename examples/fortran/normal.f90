@@ -5,7 +5,8 @@ module normal_j_mod
   use, intrinsic :: iso_fortran_env, only: dp => real64
   implicit none
   private
-  public :: mean
+  public :: mean, pi
+  real(kind=dp), parameter :: pi = acos(-1.0_dp)
 
 contains
 
@@ -18,7 +19,7 @@ end function mean
 end module normal_j_mod
 
 program normal_j
-  use normal_j_mod, only: mean
+  use normal_j_mod, only: mean, pi
   use, intrinsic :: iso_fortran_env, only: dp => real64
   implicit none
   integer :: n
@@ -32,7 +33,7 @@ program normal_j
   allocate(u2(n))
   call random_number(u2)
   radius = sqrt(-2 * log(u1))
-  angle = 2 * acos(-1.0_dp) * u2
+  angle = 2 * pi * u2
   z = radius * cos(angle)
   write (*,"(a)") "number of simulated standard normal variates"
   write (*,"(i0)") n

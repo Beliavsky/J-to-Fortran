@@ -26,7 +26,7 @@ pure function american_price(y) result(j_result)
   down = 1.0_dp / up
   probability_up = (exp(rate * dt) - down) / (up - down)
   probability_down = 1 - probability_up
-  discount = exp(-(rate * dt))
+  discount = exp(-rate * dt)
   ! At expiry, node j has j upward and steps-j downward moves.
   ! J: terminal_stock =. spot * up ^ (2 * i. 1 + steps) - steps
   terminal_stock = spot * up**(2 * j_iota(1 + steps) - steps)

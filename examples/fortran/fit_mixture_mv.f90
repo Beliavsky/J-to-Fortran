@@ -6,7 +6,8 @@ module fit_mixture_mv_j_mod
   implicit none
   private
   public :: covariance_is_pd, mv_density, component_update, fit_two_em, fit_three_em, &
-     & log_likelihood_one, log_likelihood_two, log_likelihood_three, n, xa, xb, xc, j_iota
+     & log_likelihood_one, log_likelihood_two, log_likelihood_three, pi, n, xa, xb, xc, j_iota
+  real(kind=dp), parameter :: pi = acos(-1.0_dp)
   integer :: n
   real(kind=dp), allocatable :: xa(:), xb(:), xc(:)
 
@@ -196,8 +197,8 @@ end module fit_mixture_mv_j_mod
 
 program fit_mixture_mv_j
   use fit_mixture_mv_j_mod, only: component_update, covariance_is_pd, fit_three_em, fit_two_em, &
-     & j_iota, log_likelihood_one, log_likelihood_three, log_likelihood_two, mv_density, n, xa, xb &
-     & , xc
+     & j_iota, log_likelihood_one, log_likelihood_three, log_likelihood_two, mv_density, n, pi, xa &
+     & , xb, xc
   use, intrinsic :: iso_fortran_env, only: dp => real64
   implicit none
   integer :: dimension_j
@@ -247,17 +248,17 @@ program fit_mixture_mv_j
   call random_number(u1)
   u1 = max(1e-12_dp, u1)
   call random_number(u2)
-  z1 = sqrt(-2 * log(u1)) * cos(2 * acos(-1.0_dp) * u2)
+  z1 = sqrt(-2 * log(u1)) * cos(2 * pi * u2)
   allocate(u3(n), u4(n))
   call random_number(u3)
   u3 = max(1e-12_dp, u3)
   call random_number(u4)
-  z2 = sqrt(-2 * log(u3)) * cos(2 * acos(-1.0_dp) * u4)
+  z2 = sqrt(-2 * log(u3)) * cos(2 * pi * u4)
   allocate(u5(n), u6(n))
   call random_number(u5)
   u5 = max(1e-12_dp, u5)
   call random_number(u6)
-  z3 = sqrt(-2 * log(u5)) * cos(2 * acos(-1.0_dp) * u6)
+  z3 = sqrt(-2 * log(u5)) * cos(2 * pi * u6)
   ! Transform independent normals by each component's Cholesky factor.
   ! J: xa1 =: (0 { true_means1) + l11_1 * z1
   xa1 = true_means1(1) + l11_1 * z1

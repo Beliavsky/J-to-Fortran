@@ -5,7 +5,8 @@ module mixture_j_mod
   use, intrinsic :: iso_fortran_env, only: dp => real64
   implicit none
   private
-  public :: mean
+  public :: mean, pi
+  real(kind=dp), parameter :: pi = acos(-1.0_dp)
 
 contains
 
@@ -18,7 +19,7 @@ end function mean
 end module mixture_j_mod
 
 program mixture_j
-  use mixture_j_mod, only: mean
+  use mixture_j_mod, only: mean, pi
   use, intrinsic :: iso_fortran_env, only: dp => real64
   implicit none
   integer :: n, mu1, mu2
@@ -44,12 +45,12 @@ program mixture_j
   call random_number(u1)
   u1 = max(1e-12_dp, u1)
   call random_number(u2)
-  z1 = sqrt(-2 * log(u1)) * cos(2 * acos(-1.0_dp) * u2)
+  z1 = sqrt(-2 * log(u1)) * cos(2 * pi * u2)
   allocate(u3(n), u4(n))
   call random_number(u3)
   u3 = max(1e-12_dp, u3)
   call random_number(u4)
-  z2 = sqrt(-2 * log(u3)) * cos(2 * acos(-1.0_dp) * u4)
+  z2 = sqrt(-2 * log(u3)) * cos(2 * pi * u4)
   ! Select a component independently for each observation.
   ! J: component1 =: (? n $ 0) < p
   allocate(j_random_1(n))

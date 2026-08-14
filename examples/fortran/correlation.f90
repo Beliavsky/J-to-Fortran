@@ -6,7 +6,8 @@ module correlation_j_mod
   use, intrinsic :: iso_fortran_env, only: dp => real64
   implicit none
   private
-  public :: mean, y
+  public :: mean, pi, y
+  real(kind=dp), parameter :: pi = acos(-1.0_dp)
   real(kind=dp), allocatable :: y(:)
 
 contains
@@ -20,7 +21,7 @@ end function mean
 end module correlation_j_mod
 
 program correlation_j
-  use correlation_j_mod, only: mean, y
+  use correlation_j_mod, only: mean, pi, y
   use, intrinsic :: iso_fortran_env, only: dp => real64
   implicit none
   integer :: n, c
@@ -34,14 +35,14 @@ program correlation_j
   call random_number(u1)
   u1 = max(1e-12_dp, u1)
   call random_number(u2)
-  x = sqrt(-2 * log(u1)) * cos(2 * acos(-1.0_dp) * u2)
+  x = sqrt(-2 * log(u1)) * cos(2 * pi * u2)
   ! Generate independent standard normal noise e.
   ! J: u3 =: 1e_12 >. ? n $ 0
   allocate(u3(n), u4(n))
   call random_number(u3)
   u3 = max(1e-12_dp, u3)
   call random_number(u4)
-  e = sqrt(-2 * log(u3)) * cos(2 * acos(-1.0_dp) * u4)
+  e = sqrt(-2 * log(u3)) * cos(2 * pi * u4)
   y = c * x + e
   x_centered = x - mean(x)
   y_centered = y - mean(y)

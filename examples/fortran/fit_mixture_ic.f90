@@ -6,8 +6,9 @@ module fit_mixture_ic_j_mod
   implicit none
   private
   public :: mean, mixture_moments, moment_jacobian, fit_mixture_moments, fit_two_em, fit_three_em, &
-     & log_likelihood_one, log_likelihood_two, log_likelihood_three, x, sample_moments, &
+     & log_likelihood_one, log_likelihood_two, log_likelihood_three, pi, x, sample_moments, &
      & moment_scale, normal_constant, j_iota
+  real(kind=dp), parameter :: pi = acos(-1.0_dp)
   real(kind=dp), allocatable :: x(:), sample_moments(:), moment_scale(:)
   real(kind=dp) :: normal_constant
 
@@ -284,7 +285,7 @@ end module fit_mixture_ic_j_mod
 program fit_mixture_ic_j
   use fit_mixture_ic_j_mod, only: fit_mixture_moments, fit_three_em, fit_two_em, j_iota, &
      & log_likelihood_one, log_likelihood_three, log_likelihood_two, mean, mixture_moments, &
-     & moment_jacobian, moment_scale, normal_constant, sample_moments, x
+     & moment_jacobian, moment_scale, normal_constant, pi, sample_moments, x
   use, intrinsic :: iso_fortran_env, only: dp => real64
   implicit none
   integer :: n, true_mu1, true_mu2
@@ -309,12 +310,12 @@ program fit_mixture_ic_j
   call random_number(u1)
   u1 = max(1e-12_dp, u1)
   call random_number(u2)
-  z1 = sqrt(-2 * log(u1)) * cos(2 * acos(-1.0_dp) * u2)
+  z1 = sqrt(-2 * log(u1)) * cos(2 * pi * u2)
   allocate(u3(n), u4(n))
   call random_number(u3)
   u3 = max(1e-12_dp, u3)
   call random_number(u4)
-  z2 = sqrt(-2 * log(u3)) * cos(2 * acos(-1.0_dp) * u4)
+  z2 = sqrt(-2 * log(u3)) * cos(2 * pi * u4)
   allocate(j_random_1(n))
   call random_number(j_random_1)
   component1 = j_random_1 < true_weight
@@ -324,7 +325,7 @@ program fit_mixture_ic_j
   sample_moments = [real(kind=dp) :: mean(x), [real(kind=dp) :: mean(x**2), [real(kind=dp) :: &
      & mean(x**3), [real(kind=dp) :: mean(x**4), mean(x**5)]]]]
   moment_scale = max(1.0_dp, abs(sample_moments))
-  normal_constant = sqrt(2 * acos(-1.0_dp))
+  normal_constant = sqrt(2 * pi)
   ! Fit one component directly and two components from matched moments.
   ! J: one_mu =: mean x
   one_mu = mean(x)

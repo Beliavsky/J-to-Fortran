@@ -2125,7 +2125,7 @@ _FORTRAN_PRECEDENCE = {
 }
 _ATOM_PRECEDENCE = 100
 _POWER_PRECEDENCE = 60
-_UNARY_PRECEDENCE = 55
+_UNARY_PRECEDENCE = 45
 _NOT_PRECEDENCE = 25
 
 
@@ -2160,7 +2160,7 @@ def _fortran_number(spelling: str) -> str:
         coefficient, exponent = spelling.split("p", 1)
         coefficient = coefficient.replace("_", "-")
         exponent_value = int(exponent.replace("_", "-"))
-        pi_value = "acos(-1.0_dp)"
+        pi_value = "pi"
         if exponent_value == 0:
             power = "1.0_dp"
         elif exponent_value == 1:
@@ -2676,6 +2676,8 @@ def _render_fortran_expression(
             same_operator = right_operator == operator
             if not (associative and same_operator):
                 right_requires += 1
+        if right_operator in {"unary+", "unary-"}:
+            right_requires = max(right_requires, _UNARY_PRECEDENCE + 1)
         right = _parenthesize(right, right_precedence, right_requires)
         return f"{left} {operator} {right}", precedence, operator
     if isinstance(
@@ -3240,7 +3242,16 @@ def render_fortran_expression(
                 isinstance(operand_expression, DyadicApply)
                 and match_index_selection(operand_expression) is None
             ):
-                operand = f"({operand})"
+                try:
+                    _, operand_precedence, _ = _render_fortran_expression(
+                        operand_expression, name_transform
+                    )
+                except LoweringError:
+                    operand = f"({operand})"
+                else:
+                    operand = _parenthesize(
+                        operand, operand_precedence, _UNARY_PRECEDENCE
+                    )
             return f"{spelling}{operand}"
         if spelling in {"^", "^."}:
             operand = render_fortran_expression(

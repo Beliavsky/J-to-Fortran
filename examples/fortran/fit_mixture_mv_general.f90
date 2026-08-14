@@ -6,8 +6,9 @@ module fit_mixture_mv_general_j_mod
   implicit none
   private
   public :: mv_density, component_update, fit_two_em, fit_three_em, log_likelihood_one, &
-     & log_likelihood_two, log_likelihood_three, j_iota, n, dimension_j, component_size, &
+     & log_likelihood_two, log_likelihood_three, pi, j_iota, n, dimension_j, component_size, &
      & observations, parameters1, parameters2, first, second
+  real(kind=dp), parameter :: pi = acos(-1.0_dp)
 
   interface component_update
     module procedure component_update_integer_rank1, component_update_real_rank1
@@ -30,7 +31,7 @@ pure function mv_density(y) result(j_result)
   centered = observations - spread((y(1 + j_iota(dimension_j) + 1)), dim=1, &
      & ncopies=size(observations, 1))
   quadratic = sum(centered * matmul(centered, j_inverse_real(covariance)), dim=2)
-  normalizer = (2 * acos(-1.0_dp))**(0.5_dp * dimension_j) * sqrt((max(1e-300_dp, &
+  normalizer = (2 * pi)**(0.5_dp * dimension_j) * sqrt((max(1e-300_dp, &
      & j_determinant_real(covariance))))
   j_result = max(1e-300_dp, exp(-0.5_dp * quadratic) / normalizer)
 end function mv_density
@@ -272,7 +273,7 @@ end module fit_mixture_mv_general_j_mod
 program fit_mixture_mv_general_j
   use fit_mixture_mv_general_j_mod, only: component_size, component_update, dimension_j, first, &
      & fit_three_em, fit_two_em, j_iota, log_likelihood_one, log_likelihood_three, &
-     & log_likelihood_two, mv_density, n, observations, parameters1, parameters2, second
+     & log_likelihood_two, mv_density, n, observations, parameters1, parameters2, pi, second
   use, intrinsic :: iso_fortran_env, only: dp => real64
   implicit none
   real(kind=dp) :: true_weight, split_weight, parameters_per_component
@@ -303,7 +304,7 @@ program fit_mixture_mv_general_j
   call random_number(u1)
   u1 = max(1e-12_dp, u1)
   call random_number(u2)
-  z = sqrt(-2 * log(u1)) * cos(2 * acos(-1.0_dp) * u2)
+  z = sqrt(-2 * log(u1)) * cos(2 * pi * u2)
   sample1 = spread(true_mean1, dim=1, &
      & ncopies=size(matmul(z, transpose(true_cholesky1)), 1)) + matmul(z, transpose(true_cholesky1))
   sample2 = spread(true_mean2, dim=1, &

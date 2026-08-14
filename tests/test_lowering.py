@@ -2082,6 +2082,8 @@ def test_left_bond_of_named_dyad_lowers_to_two_argument_call() -> None:
         ("a * (b + c)", "a * (b + c)"),
         ("(a * b) + (c * d)", "a * b + c * d"),
         ("a - (b - c)", "a - (b - c)"),
+        ("- a * b", "-a * b"),
+        ("a * (- b)", "a * (-b)"),
         ("*: x", "x**2"),
         ("(a + b) * (a + b)", "(a + b)**2"),
     ],
@@ -2126,9 +2128,9 @@ def test_unsupported_special_number_is_explicit() -> None:
 @pytest.mark.parametrize(
     ("j_source", "fortran"),
     [
-        ("1p1", "acos(-1.0_dp)"),
-        ("2p1", "2.0_dp * acos(-1.0_dp)"),
-        ("1p2", "acos(-1.0_dp)**2"),
+        ("1p1", "pi"),
+        ("2p1", "2.0_dp * pi"),
+        ("1p2", "pi**2"),
     ],
 )
 def test_pi_numeric_constants(j_source: str, fortran: str) -> None:

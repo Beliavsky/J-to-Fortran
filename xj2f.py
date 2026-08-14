@@ -5696,6 +5696,31 @@ def _prepend_file_comments(
     return "\n".join([first_line, *header, "", *remaining_lines])
 
 
+_J_PI_LITERAL = re.compile(
+    r"(?<![A-Za-z0-9_])_?(?:\d+(?:\.\d*)?|\.\d+)p_?\d+"
+)
+
+
+def _program_uses_pi_literal(program: Program) -> bool:
+    """Return whether executable J source contains a pi numeric literal."""
+
+    def contains_pi(value: object) -> bool:
+        if isinstance(value, CommentStatement):
+            return False
+        if isinstance(value, SourceLine):
+            return _J_PI_LITERAL.search(value.text) is not None
+        if dataclasses.is_dataclass(value):
+            return any(
+                contains_pi(getattr(value, field.name))
+                for field in dataclasses.fields(value)
+            )
+        if isinstance(value, (tuple, list)):
+            return any(contains_pi(item) for item in value)
+        return False
+
+    return contains_pi(program)
+
+
 def _emit_numeric_csv_statistics_fortran(
     program: Program,
     spec: NumericCsvStatisticsSpec,
@@ -6078,7 +6103,7 @@ def _return_mixture_procedures() -> list[str]:
         "  quadratic = sum(matmul(centered, inverse) * centered, dim=2)",
         "  determinant = max(1.0e-300_dp, &",
         "    j_determinant_real(covariance))",
-        "  normalizer = (2.0_dp * acos(-1.0_dp))** &",
+        "  normalizer = (2.0_dp * pi)** &",
         "    (0.5_dp * dimension_j) * sqrt(determinant)",
         "  density = max(1.0e-300_dp, &",
         "    exp(-0.5_dp * quadratic) / normalizer)",
@@ -6226,6 +6251,7 @@ def _emit_return_mixture_fortran(
             "  private",
             "  public :: j_component_update, j_fit_em, j_load_returns",
             "  public :: j_log_likelihood, j_print_component",
+            "  real(kind=dp), parameter :: pi = acos(-1.0_dp)",
             "",
             "contains",
             "",
@@ -6373,6 +6399,7 @@ def emit_fortran(
     effective_result_style = function_result_style or (
         "concise" if concise else "named"
     )
+    uses_pi = _program_uses_pi_literal(program)
     leading_comments, _, _ = _top_level_comment_groups(program)
     return_mixture = _return_mixture_spec(program)
     if return_mixture is not None:
@@ -6502,6 +6529,9 @@ def emit_fortran(
         public_line = f"  public :: {_fortran_name(exported_name)}"
         if public_line not in lines:
             lines.append(public_line)
+    if uses_pi:
+        lines.append("  public :: pi")
+        lines.append("  real(kind=dp), parameter :: pi = acos(-1.0_dp)")
     generic_definitions: dict[str, list[str]] = {}
     for definition in definitions:
         if definition.generic_name is not None:
@@ -6655,6 +6685,9 @@ def emit_fortran(
     main_imports = sorted(
         function_names | set(exported_helpers) | captured_top_names
     )
+    if uses_pi:
+        main_imports.append("pi")
+        main_imports.sort()
     lines.append(f"program {program_name}")
     if main_imports:
         lines.append(f"  use {module_name}, only: {', '.join(main_imports)}")

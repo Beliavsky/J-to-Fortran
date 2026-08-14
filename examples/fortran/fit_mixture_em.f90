@@ -5,8 +5,9 @@ module fit_mixture_em_j_mod
   use, intrinsic :: iso_fortran_env, only: dp => real64
   implicit none
   private
-  public :: mean, mixture_moments, moment_jacobian, fit_mixture_moments, fit_mixture_em, x, &
+  public :: mean, mixture_moments, moment_jacobian, fit_mixture_moments, fit_mixture_em, pi, x, &
      & sample_moments, moment_scale
+  real(kind=dp), parameter :: pi = acos(-1.0_dp)
   real(kind=dp), allocatable :: x(:), sample_moments(:), moment_scale(:)
 
 contains
@@ -191,7 +192,7 @@ end module fit_mixture_em_j_mod
 
 program fit_mixture_em_j
   use fit_mixture_em_j_mod, only: fit_mixture_em, fit_mixture_moments, mean, mixture_moments, &
-     & moment_jacobian, moment_scale, sample_moments, x
+     & moment_jacobian, moment_scale, pi, sample_moments, x
   use, intrinsic :: iso_fortran_env, only: dp => real64
   implicit none
   integer :: n, true_mu1, true_mu2
@@ -215,12 +216,12 @@ program fit_mixture_em_j
   call random_number(u1)
   u1 = max(1e-12_dp, u1)
   call random_number(u2)
-  z1 = sqrt(-2 * log(u1)) * cos(2 * acos(-1.0_dp) * u2)
+  z1 = sqrt(-2 * log(u1)) * cos(2 * pi * u2)
   allocate(u3(n), u4(n))
   call random_number(u3)
   u3 = max(1e-12_dp, u3)
   call random_number(u4)
-  z2 = sqrt(-2 * log(u3)) * cos(2 * acos(-1.0_dp) * u4)
+  z2 = sqrt(-2 * log(u3)) * cos(2 * pi * u4)
   ! Select a component independently for each observation.
   ! J: component1 =: (? n $ 0) < true_weight
   allocate(j_random_1(n))

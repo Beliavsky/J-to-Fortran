@@ -285,7 +285,8 @@ def test_monte_carlo_pi_uses_symbolic_random_array_extent() -> None:
     assert "call random_number(x)" in generated
     assert "call random_number(y)" in generated
     assert "sum(merge(1, 0, inside))" in generated
-    assert "acos(-1.0_dp)" in generated
+    assert "real(kind=dp), parameter :: pi = acos(-1.0_dp)" in generated
+    assert 'write (*,"(g0)") pi' in generated
 
 
 def test_guarded_random_array_is_materialized_and_updated_in_place() -> None:
@@ -478,17 +479,18 @@ def test_black_scholes_example_compiles_and_runs(tmp_path: Path) -> None:
     assert "merge(1, 0, y >= 0)" not in normal_cdf_source
     assert "density" not in normal_cdf_source
     assert (
-        "tail = (exp(-0.5_dp * y**2) / sqrt(2 * acos(-1.0_dp))) * "
+        "tail = (exp(-0.5_dp * y**2) / sqrt(2 * pi)) * "
         "polynomial" in normal_cdf_source
     )
+    assert generated.count(":: pi = acos(-1.0_dp)") == 1
     assert (
-        "public :: normal_cdf, black_scholes, spot, rate, volatility, "
+        "public :: normal_cdf, black_scholes, pi, spot, rate, volatility, "
         "maturity, discount" in generated
     )
     assert generated.count("public ::") == 1
     assert (
         "real(kind=dp), parameter :: rate = 0.05_dp, volatility = 0.2_dp, "
-        "discount = exp(-(rate * maturity))" in generated.replace("&\n     & ", "")
+        "discount = exp(-rate * maturity)" in generated.replace("&\n     & ", "")
     )
     assert "analytic_call" not in generated
     assert "analytic_put" not in generated
@@ -510,9 +512,9 @@ def test_black_scholes_example_compiles_and_runs(tmp_path: Path) -> None:
     ordinary_black_scholes = ordinary.split(
         "pure function black_scholes", 1
     )[1].split("end function black_scholes", 1)[0]
-    assert "discount = exp(-(rate * maturity))" not in black_scholes_source
+    assert "discount = exp(-rate * maturity)" not in black_scholes_source
     assert ":: discount" not in black_scholes_source
-    assert "discount = exp(-(rate * maturity))" in ordinary_black_scholes
+    assert "discount = exp(-rate * maturity)" in ordinary_black_scholes
 
     compiled = subprocess.run(
         [compiler, "-std=f2018", str(source), "-o", str(executable)],
