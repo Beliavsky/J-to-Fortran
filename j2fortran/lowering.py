@@ -925,6 +925,19 @@ def infer_type(
                 else AtomType.REAL
             )
             return TypeInfo(atom_type, operand_type.shape)
+        if spelling == "%":
+            if operand_type.atom_type not in {
+                AtomType.INTEGER,
+                AtomType.REAL,
+                AtomType.COMPLEX,
+            }:
+                raise LoweringError("reciprocal requires a numeric operand")
+            atom_type = (
+                AtomType.COMPLEX
+                if operand_type.atom_type is AtomType.COMPLEX
+                else AtomType.REAL
+            )
+            return TypeInfo(atom_type, operand_type.shape)
         if spelling == "|":
             if operand_type.atom_type not in {
                 AtomType.INTEGER,
@@ -1956,6 +1969,10 @@ def _render_fortran_expression(
             precedence = _FORTRAN_PRECEDENCE["*"]
             operand = _parenthesize(operand, operand_precedence, precedence)
             return f"0.5_dp * {operand}", precedence, "*"
+        if spelling == "%":
+            precedence = _FORTRAN_PRECEDENCE["/"]
+            operand = _parenthesize(operand, operand_precedence, precedence + 1)
+            return f"1.0_dp / {operand}", precedence, "/"
         if spelling == "|":
             return f"abs({operand})", _ATOM_PRECEDENCE, "call"
         if spelling == "*":

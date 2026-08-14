@@ -435,6 +435,17 @@ complex type and array shape:
 0.5_dp * values
 ```
 
+Monadic `%` similarly promotes integer operands and maps to elementwise
+reciprocal:
+
+```j
+% values
+```
+
+```fortran
+1.0_dp / values
+```
+
 For matrices, a J leading-axis reduction often maps to a Fortran reduction
 with `dim=1`. The `dim` argument is omitted for a vector when it is unnecessary:
 

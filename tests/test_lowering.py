@@ -101,6 +101,50 @@ def test_monadic_halve_parenthesizes_a_compound_operand() -> None:
     assert render_fortran_expression(expression, names=names) == "0.5_dp * (a + b)"
 
 
+@pytest.mark.parametrize(
+    ("source", "operand_type", "expected_type", "expected_fortran"),
+    [
+        (
+            "% value",
+            TypeInfo(AtomType.INTEGER),
+            TypeInfo(AtomType.REAL),
+            "1.0_dp / value",
+        ),
+        (
+            "% values",
+            TypeInfo(AtomType.REAL, Shape.vector()),
+            TypeInfo(AtomType.REAL, Shape.vector()),
+            "1.0_dp / values",
+        ),
+        (
+            "% z",
+            TypeInfo(AtomType.COMPLEX),
+            TypeInfo(AtomType.COMPLEX),
+            "1.0_dp / z",
+        ),
+    ],
+)
+def test_monadic_reciprocal_lowering(
+    source: str,
+    operand_type: TypeInfo,
+    expected_type: TypeInfo,
+    expected_fortran: str,
+) -> None:
+    expression = parse_expression(source)
+    name = source.split()[-1]
+    names = {name: operand_type}
+
+    assert infer_type(expression, names) == expected_type
+    assert render_fortran_expression(expression, names=names) == expected_fortran
+
+
+def test_monadic_reciprocal_parenthesizes_a_compound_operand() -> None:
+    expression = parse_expression("% a * b")
+    names = {"a": TypeInfo(AtomType.INTEGER), "b": TypeInfo(AtomType.INTEGER)}
+
+    assert render_fortran_expression(expression, names=names) == "1.0_dp / (a * b)"
+
+
 def test_j_division_converts_integer_numerator_to_real() -> None:
     expression = parse_expression("total % count")
     names = {
