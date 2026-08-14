@@ -211,11 +211,14 @@ The parser currently recognizes:
 - scalar dyadic explicit verbs and direct dyadic calls;
 - scalar ambivalent explicit verbs emitted through Fortran generic interfaces;
 - conditionless `elseif. do.` default branches in explicit control flow;
-- scalar `while.` loops with loop-carried local assignments;
+- scalar `while.` and `whilst.` loops with loop-carried local assignments;
+- compact control sentences, including assignments before `while.` and
+  `if. ... do. ... else. ... end.` on one physical source line;
 - explicit `for_name.` iteration over zero-based `i. y` sequences;
 - explicit `for_name.` iteration over integer vectors using regular indexed loops;
 - pure recursive scalar integer explicit verbs;
-- call-site inference of integer-vector dummy ranks from literals and preceding nouns;
+- integer-vector dummy-rank inference from call sites, homogeneous
+  destructuring, and constant argument indexing;
 - dyadic reflex, integer-noun bond, monadic `@:` composition, and monadic forks;
 - sum-product inner products lowered to `dot_product` and `matmul`;
 - direct determinants of statically known 2 by 2 matrices;

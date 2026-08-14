@@ -2008,6 +2008,73 @@ def test_destructuring_assignment_evaluates_a_complex_rhs_once() -> None:
     ]
 
 
+def test_destructuring_infers_a_vector_dummy_without_a_call_site() -> None:
+    source = """addpair =: monad define
+  'a b' =. y
+  a + b
+)
+"""
+    generated = xj2f.emit_fortran(
+        xj2f.parse_j_source(Path("destructure_library.ijs"), source)
+    )
+
+    assert "pure function addpair(y) result(j_result)" in generated
+    assert "integer, intent(in) :: y(:)" in generated
+    assert "j_result = y(1) + y(2)" in generated
+
+
+def test_constant_selection_infers_a_vector_dummy_without_a_call_site() -> None:
+    source = """third =: monad define
+  2 { y
+)
+"""
+    generated = xj2f.emit_fortran(
+        xj2f.parse_j_source(Path("selection_library.ijs"), source)
+    )
+
+    assert "integer, intent(in) :: y(:)" in generated
+    assert "j_result = y(3)" in generated
+
+
+def test_compact_control_sentences_are_split_outside_quoted_text() -> None:
+    source = """countup =: monad define
+  n =. 0 while. n < y do. n =. >: n end.
+  if. n = y do. 1 else. 0 end.
+)
+smoutput countup 3
+"""
+    program = xj2f.parse_j_source(Path("compact_control.ijs"), source)
+    generated = xj2f.emit_fortran(program)
+
+    verb = program.items[0]
+    assert isinstance(verb, xj2f.VerbDefinition)
+    assert isinstance(verb.body[1], xj2f.WhileLoop)
+    assert isinstance(verb.body[2], xj2f.IfStatement)
+    assert "do while (n < y)" in generated
+    assert "if (n == y) then" in generated
+    assert "else" in generated
+
+    quoted = xj2f._source_lines("label =: 'if. do. else. end.'")
+    assert [line.text for line in quoted] == ["label =: 'if. do. else. end.'"]
+
+
+def test_whilst_is_an_alias_for_while() -> None:
+    source = """countup =: monad define
+  n =. 0
+  whilst. n < y do.
+    n =. >: n
+  end.
+  n
+)
+smoutput countup 3
+"""
+    generated = xj2f.emit_fortran(
+        xj2f.parse_j_source(Path("whilst.ijs"), source)
+    )
+
+    assert "do while (n < y)" in generated
+
+
 def test_ambivalent_explicit_verb_has_two_specific_definitions() -> None:
     source = "f =: 3 : 0\n  y * y\n:\n  x + y\n)\n"
     program = xj2f.parse_j_source(Path("ambivalent.ijs"), source)

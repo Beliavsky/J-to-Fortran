@@ -515,6 +515,17 @@ while. error > tolerance do.
 end.
 ```
 
+`whilst.` is accepted as J's equivalent spelling of `while.`. Control words
+may also share a physical source line; for example, this is parsed as the same
+structured conditional:
+
+```j
+if. y < 0 do. -y else. y end.
+```
+
+Quoted text is not split when it happens to contain words such as `if.` or
+`end.`. `select.`/`case.` dispatch remains outside the current subset.
+
 Fortran equivalents:
 
 ```fortran

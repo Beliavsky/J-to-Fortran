@@ -325,13 +325,81 @@ def _error_at(kind: type[J2FError], line: SourceLine, message: str) -> J2FError:
     return kind(f"{line.number}: {message}\n    {line.text.rstrip()}")
 
 
+_INLINE_CONTROL_WORD = re.compile(
+    r"(?<![A-Za-z0-9_])(?:elseif\.|whilst\.|while\.|if\.|else\."
+    r"|for(?:_[A-Za-z][A-Za-z0-9_]*)?\.|do\.|end\.)(?![A-Za-z0-9_])"
+)
+
+
+def _outside_string_mask(text: str) -> str:
+    """Replace J quoted text with spaces while preserving character offsets."""
+
+    masked = list(text)
+    index = 0
+    quoted = False
+    while index < len(text):
+        if text[index] != "'":
+            if quoted:
+                masked[index] = " "
+            index += 1
+            continue
+        masked[index] = " "
+        if quoted and index + 1 < len(text) and text[index + 1] == "'":
+            masked[index + 1] = " "
+            index += 2
+            continue
+        quoted = not quoted
+        index += 1
+    return "".join(masked)
+
+
+def _logical_source_fragments(raw: str) -> list[str]:
+    """Split compact J control sentences into parser-sized fragments."""
+
+    masked = _outside_string_mask(raw)
+    comment_at = masked.find("NB.")
+    comment = ""
+    code = raw
+    if comment_at >= 0:
+        code = raw[:comment_at]
+        comment = raw[comment_at:]
+        masked = masked[:comment_at]
+    matches = list(_INLINE_CONTROL_WORD.finditer(masked))
+    if not matches:
+        return [raw]
+
+    pieces: list[str] = []
+    start = 0
+    current = ""
+
+    def flush() -> None:
+        nonlocal current
+        if current.strip():
+            pieces.append(current.strip())
+        current = ""
+
+    for match in matches:
+        current += code[start:match.start()]
+        word = match.group(0)
+        if word != "do.":
+            flush()
+        current += word
+        if word in {"do.", "else.", "end."}:
+            flush()
+        start = match.end()
+    current += code[start:]
+    flush()
+    if comment.strip():
+        pieces.append(comment.strip())
+    return pieces
+
+
 def _source_lines(text: str) -> list[SourceLine]:
     result: list[SourceLine] = []
     for number, raw in enumerate(text.splitlines(), 1):
-        stripped = raw.strip()
-        if not stripped:
-            continue
-        result.append(SourceLine(number, raw))
+        for fragment in _logical_source_fragments(raw):
+            if fragment.strip():
+                result.append(SourceLine(number, fragment))
     return result
 
 
@@ -357,7 +425,7 @@ class Parser:
         r"^for(?:_(?P<variable>[A-Za-z][A-Za-z0-9_]*))?\.\s+"
         r"(?P<expression>.+?)\s+do\.\s*$"
     )
-    _while = re.compile(r"^while\.\s+(.+?)\s+do\.\s*$")
+    _while = re.compile(r"^(?:while|whilst)\.\s+(.+?)\s+do\.\s*$")
     _if = re.compile(r"^if\.\s+(.+?)\s+do\.\s*$")
     _elseif = re.compile(r"^elseif\.\s+(.+?)\s+do\.\s*$")
 
@@ -3774,6 +3842,76 @@ def _captured_top_names(
     return captured
 
 
+def _definition_argument_shape_hint(
+    definition: VerbDefinition,
+) -> tuple[TypeInfo, ...] | None:
+    """Infer a minimum vector extent from unpacking and constant selection."""
+
+    minimum_extents: dict[str, int | None] = {}
+
+    def require_vector(name: str, extent: int | None) -> None:
+        if name not in definition.arguments:
+            return
+        previous = minimum_extents.get(name)
+        if previous is None or (extent is not None and extent > previous):
+            minimum_extents[name] = extent
+
+    def inspect(statements: tuple[Statement, ...]) -> None:
+        for statement in statements:
+            if isinstance(statement, CommentStatement):
+                continue
+            texts: list[str] = []
+            if isinstance(statement, Assign):
+                texts.append(statement.expression)
+                destructuring = Parser._destructuring_assignment.fullmatch(
+                    statement.line.text.strip()
+                )
+                if destructuring is not None:
+                    source = destructuring.group("expression").strip()
+                    if re.fullmatch(r"[A-Za-z][A-Za-z0-9_]*", source):
+                        count = len(
+                            destructuring.group("names").replace("''", "'").split()
+                        )
+                        require_vector(source, count)
+            elif isinstance(statement, ExpressionStatement):
+                texts.append(statement.expression)
+            elif isinstance(statement, AssertStatement):
+                texts.append(statement.expression)
+            elif isinstance(statement, ForLoop):
+                texts.append(statement.expression)
+                inspect(statement.body)
+            elif isinstance(statement, WhileLoop):
+                texts.append(statement.condition)
+                inspect(statement.body)
+            elif isinstance(statement, IfStatement):
+                texts.append(statement.condition)
+                inspect(statement.body)
+                for branch in statement.elseif_branches:
+                    texts.append(branch.condition)
+                    inspect(branch.body)
+                if statement.else_body is not None:
+                    inspect(statement.else_body)
+            for text in texts:
+                for argument in definition.arguments:
+                    selection = re.compile(
+                        rf"(?<![A-Za-z0-9_])(?P<index>_?\d+)\s*\{{\s*"
+                        rf"{re.escape(argument)}(?![A-Za-z0-9_])"
+                    )
+                    for match in selection.finditer(text):
+                        index = int(match.group("index").replace("_", "-"))
+                        require_vector(argument, index + 1 if index >= 0 else None)
+
+    inspect(definition.body)
+    if not minimum_extents:
+        return None
+    return tuple(
+        TypeInfo(AtomType.INTEGER, Shape.vector(minimum_extents[argument]))
+        if argument in minimum_extents
+        else TypeInfo(AtomType.INTEGER)
+        for argument in definition.arguments
+    )
+
+
 def _definition_argument_types(
     program: Program,
 ) -> dict[tuple[str, int], tuple[tuple[TypeInfo, ...], ...]]:
@@ -5111,7 +5249,12 @@ def emit_fortran(
         )
         if len(signatures) <= 1:
             specialized_definitions.append(
-                (definition, signatures[0] if signatures else None)
+                (
+                    definition,
+                    signatures[0]
+                    if signatures
+                    else _definition_argument_shape_hint(definition),
+                )
             )
             continue
         generic_name = definition.generic_name or definition.name
