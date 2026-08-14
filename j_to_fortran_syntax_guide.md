@@ -50,6 +50,10 @@ the result can represent reciprocals:
 real(base, kind=dp)**exponent
 ```
 
+The conventional J math aliases `sin`, `cos`, `tan`, `asin`, `acos`, and
+`atan` map directly to the corresponding elemental Fortran intrinsics when no
+translated J definition overrides the name.
+
 ## Scalar Values and Types
 
 J infers types dynamically:

@@ -37,6 +37,9 @@ class LoweringError(ValueError):
     pass
 
 
+_NAMED_REAL_INTRINSICS = {"sin", "cos", "tan", "asin", "acos", "atan"}
+
+
 @dataclass(frozen=True, slots=True)
 class IndexAxis:
     values: tuple[int, ...]
@@ -729,10 +732,6 @@ def infer_type(
             )
             return TypeInfo(atom_type)
         if isinstance(expression.verb, NamedVerb):
-            if named_verbs is None:
-                raise LoweringError(
-                    f"type of verb {expression.verb.identifier!r} is unknown"
-                )
             if (
                 operand_type.atom_type not in {AtomType.INTEGER, AtomType.REAL}
                 or operand_type.rank not in {0, 1, 2}
@@ -740,12 +739,17 @@ def infer_type(
                 raise LoweringError(
                     "direct named-verb application currently requires a numeric scalar, vector, or matrix"
                 )
-            try:
-                return named_verbs[name_transform(expression.verb.identifier)]
-            except KeyError as exc:
-                raise LoweringError(
-                    f"type of verb {expression.verb.identifier!r} is unknown"
-                ) from exc
+            if named_verbs is not None:
+                result_type = named_verbs.get(
+                    name_transform(expression.verb.identifier)
+                )
+                if result_type is not None:
+                    return result_type
+            if expression.verb.identifier in _NAMED_REAL_INTRINSICS:
+                return TypeInfo(AtomType.REAL, operand_type.shape)
+            raise LoweringError(
+                f"type of verb {expression.verb.identifier!r} is unknown"
+            )
         reflex_table = reflex_table_spelling(expression.verb)
         if reflex_table == "+":
             if (

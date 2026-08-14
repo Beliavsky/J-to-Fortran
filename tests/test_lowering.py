@@ -1843,6 +1843,24 @@ def test_normal_transform_primitives_preserve_vector_shape(
     assert render_fortran_expression(expression, names=names) == fortran
 
 
+@pytest.mark.parametrize(
+    "intrinsic",
+    ["sin", "cos", "tan", "asin", "acos", "atan"],
+)
+def test_named_real_math_aliases_lower_to_elemental_intrinsics(
+    intrinsic: str,
+) -> None:
+    expression = parse_expression(f"{intrinsic} values")
+    names = {"values": TypeInfo(AtomType.INTEGER, Shape.vector("n"))}
+
+    assert infer_type(expression, names, named_verbs={}) == TypeInfo(
+        AtomType.REAL, Shape.vector("n")
+    )
+    assert render_fortran_expression(
+        expression, names=names, named_verbs={}
+    ) == f"{intrinsic}(values)"
+
+
 def test_exponential_of_real_vector_selection_is_real_scalar() -> None:
     expression = parse_expression("^ 2 { values")
     names = {"values": TypeInfo(AtomType.REAL, Shape.vector(5))}

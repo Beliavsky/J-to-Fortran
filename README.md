@@ -253,6 +253,8 @@ The parser currently recognizes:
 - complex literals, arithmetic, negation, and square;
 - complex conjugate with monadic `+`, lowered to Fortran `conjg`;
 - complex magnitude lowered to the real-valued `abs` intrinsic;
+- conventional named `sin`, `cos`, `tan`, `asin`, `acos`, and `atan` aliases
+  lowered to elemental Fortran intrinsics;
 - monadic halve `-:` on integer, real, and complex scalars and arrays;
 - monadic reciprocal `%` on integer, real, and complex scalars and arrays;
 - monadic double `+:` on integer, real, and complex scalars and arrays;
