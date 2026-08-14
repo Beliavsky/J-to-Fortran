@@ -192,8 +192,9 @@ also returns the assigned value, as J does.
 
 Rank decoration on a multiline header, such as `3 : 0 \" 1`, is accepted;
 the required dummy rank is inferred from calls and operations in the body. The
-common `(1&$:) : (dyad define)` form becomes a Fortran generic containing the
-explicit dyad and a monadic wrapper that supplies the fixed left argument.
+common `(1&$:) : (dyad define)` form, and its `(1&$:) : (4 : 0)` spelling,
+become a Fortran generic containing the explicit dyad and a monadic wrapper
+that supplies the fixed left argument.
 
 The corresponding Fortran procedure has two dummy arguments:
 
@@ -270,9 +271,9 @@ later reference to a missing verb still produces an explicit inference error.
 
 Rectangular numeric data written with `\". ;. _2 ] 0 : 0 ... )` is converted
 to a constant reshape expression. Ragged or nonnumeric blocks are rejected.
-Visualization directives beginning with `plot` or `pd` are intentionally
-omitted and identified in comments because they do not affect the translated
-numerical result.
+Monadic and dyadic visualization sentences using `plot` or `pd` are
+intentionally omitted and identified in comments because they do not affect
+the translated numerical result.
 
 At top level, a call to a verb defined by the translated source is evaluated
 even when its result is discarded. The generated main program assigns that

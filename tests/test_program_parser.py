@@ -2242,6 +2242,19 @@ smoutput value
     assert "! J visualization omitted: plot 1 2 3" in generated
 
 
+def test_dyadic_plot_invocation_is_omitted_as_visualization() -> None:
+    source = """values =: 1 2 3
+'pensize 2' plot values
+smoutput values
+"""
+    generated = xj2f.emit_fortran(
+        xj2f.parse_j_source(Path("dyadic_plot.ijs"), source)
+    )
+
+    assert "! J visualization omitted: 'pensize 2' plot values" in generated
+    assert 'write (*,"(*(i0, 1x))") [1, 2, 3]' in generated
+
+
 def test_print_is_accepted_as_a_top_level_output_verb() -> None:
     generated = xj2f.emit_fortran(
         xj2f.parse_j_source(Path("print_value.ijs"), "print 42\n")
@@ -2271,6 +2284,24 @@ smoutput 2 add 4
 """
     generated = xj2f.emit_fortran(
         xj2f.parse_j_source(Path("default_monad.ijs"), source)
+    )
+
+    assert "module procedure add_dyad, add_monad" in generated
+    assert "j_result = x + y" in generated
+    assert "j_result = add(1, y)" in generated
+    assert 'write (*,"(i0)") add(4)' in generated
+    assert 'write (*,"(i0)") add(2, 4)' in generated
+
+
+def test_recursive_default_monad_accepts_numeric_explicit_dyad_header() -> None:
+    source = """add =: (1&$:) : (4 : 0)
+  x + y
+)
+smoutput add 4
+smoutput 2 add 4
+"""
+    generated = xj2f.emit_fortran(
+        xj2f.parse_j_source(Path("default_monad_numeric.ijs"), source)
     )
 
     assert "module procedure add_dyad, add_monad" in generated

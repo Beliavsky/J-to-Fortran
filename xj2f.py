@@ -434,7 +434,7 @@ class Parser:
     _ambivalent_dyad_start = re.compile(
         r"^(?P<name>[A-Za-z][A-Za-z0-9_]*)\s*=:\s*"
         r"\(\s*(?P<noun>_?\d+)\s*&\s*\$:\s*\)\s*:\s*"
-        r"\(\s*dyad\s+define\s*\)\s*$"
+        r"\(\s*(?:dyad\s+define|4\s*:\s*0)\s*\)\s*$"
     )
     _direct_definition_start = re.compile(
         r"^(?P<name>[A-Za-z][A-Za-z0-9_]*)\s*=:\s*\{\{(?P<body>.*)$"
@@ -460,7 +460,9 @@ class Parser:
         r"^(?P<name>[A-Za-z][A-Za-z0-9_]*)\s*(?P<copula>=[:.])\s*"
         r'"\.\s*;\.\s*_2\s*\]\s*0\s*:\s*0\s*$'
     )
-    _visual_directive = re.compile(r"^(?:pd|plot)\b.*$")
+    _visual_directive = re.compile(
+        r"(?<![A-Za-z0-9_])(?:pd|plot)(?![A-Za-z0-9_])"
+    )
     _separator = re.compile(r"^(?:[-=]\s*){8,}$")
 
     def __init__(self, source_path: Path, text: str):
@@ -493,7 +495,7 @@ class Parser:
             if numeric_block:
                 items.append(self._parse_numeric_block(line, numeric_block))
                 continue
-            if self._visual_directive.fullmatch(text):
+            if self._visual_directive.search(_outside_string_mask(text)):
                 items.append(
                     CommentStatement(line, f"J visualization omitted: {text}")
                 )
@@ -817,7 +819,7 @@ class Parser:
                 statements.append(CommentStatement(line, text[3:].lstrip()))
                 self.index += 1
                 continue
-            if self._visual_directive.fullmatch(text):
+            if self._visual_directive.search(_outside_string_mask(text)):
                 statements.append(
                     CommentStatement(line, f"J visualization omitted: {text}")
                 )

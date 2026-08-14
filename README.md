@@ -181,7 +181,7 @@ The parser currently recognizes:
   `dyad : '...'` spellings;
 - direct definitions using `{{ ... }}`, with valence inferred from use of `x`;
 - ranked explicit headers such as `3 : 0 \" 1` and the common
-  `(1&$:) : (dyad define)` default-monad form;
+  `(1&$:) : (dyad define)` and `(1&$:) : (4 : 0)` default-monad forms;
 - local and global copulas as syntax (`=.` and `=:`), with local assignments
   supported inside translated verbs;
 - homogeneous multiple assignment such as `'a b' =. y`, lowered to selections
@@ -232,7 +232,8 @@ The parser currently recognizes:
   loading script; unresolved addons are documented in generated comments;
 - calls to locally translated verbs used only for their effects, with their
   otherwise unused results materialized in generated variables;
-- explicitly omitted `plot` and `pd` visualization directives;
+- explicitly omitted monadic or dyadic `plot` and `pd` visualization
+  directives;
 - dyadic reflex, integer-noun bond, monadic `@:` composition, and monadic forks;
 - sum-product inner products lowered to `dot_product` and `matmul`;
 - direct determinants of statically known 2 by 2 matrices;
