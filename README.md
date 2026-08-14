@@ -11,6 +11,20 @@ prime-number example in this repository. When it encounters syntax outside
 the supported subset, it stops with the J source line and an explanation
 rather than silently guessing.
 
+## Why Fortran?
+
+Fortran is a natural compilation target for numerical J code. It is fast,
+standardized, and supported by mature compilers, while sharing J's emphasis on
+whole-array operations. Its multidimensional arrays, array sections, reductions,
+and 1-based indexing let many J calculations retain a recognizable array-oriented
+form instead of becoming collections of scalar loops.
+
+Readable Fortran can also be compiled into portable standalone programs or
+reused from other languages. For numerically intensive J scripts, translation
+therefore offers a path to conventional deployment and established scientific
+libraries while preserving the original program's high-level structure where
+possible.
+
 For side-by-side explanations of common J and Fortran constructs, see the
 [J to Fortran syntax guide](j_to_fortran_syntax_guide.md).
 
@@ -159,9 +173,26 @@ Fortran, and `:save` to write `xj2f_repl_session.ijs` and
 both saved files; output implicitly requested by a bare expression does not.
 The installed command is `xj2f-repl`.
 
+Previously saved output statements are suppressed while evaluating a new bare
+expression, so the REPL prints only that expression's value. They remain part
+of the complete session executed by `:run` and `:run-both`.
+
 The initial implementation replays all saved source for every evaluation; it
 does not preserve a live Fortran process. Random assignments therefore draw
 new values, and file operations execute again, whenever the session is replayed.
+
+Use `--ofort` to execute generated source directly with the ofort interpreter
+instead of compiling and linking on every replay:
+
+```powershell
+python xj2f_repl.py --ofort --no-save
+```
+
+The REPL uses `C:\c\ofort\ofort.exe --fast` when that executable exists and
+otherwise searches for `ofort` on `PATH`. Use `--ofort-command COMMAND` to
+select another executable or options. Setup blocks are validated with
+`ofort --check` and are not executed until an output expression or run command
+replays the session. `--ofort` cannot be combined with `--compiler` or `--ifx`.
 
 ## Batch translation
 

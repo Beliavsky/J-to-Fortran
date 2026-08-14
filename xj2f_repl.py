@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import argparse
 import re
+import shlex
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -18,6 +20,7 @@ import xj2f
 
 ROOT = Path(__file__).resolve().parent
 DEFAULT_XJ2F = Path(xj2f.__file__).resolve()
+DEFAULT_OFORT = Path(r"C:\c\ofort\ofort.exe")
 DEFAULT_SESSION_J = "xj2f_repl_session.ijs"
 DEFAULT_SESSION_FORTRAN = "xj2f_repl_session.f90"
 
@@ -78,6 +81,35 @@ def is_immediate_output(block: str) -> bool:
     return _IMMEDIATE_OUTPUT.match(block.strip()) is not None
 
 
+def split_source_blocks(source: str) -> list[str]:
+    """Split loaded source into top-level blocks without splitting definitions."""
+
+    blocks: list[str] = []
+    pending: list[str] = []
+    for line in source.splitlines():
+        if pending:
+            pending.append(line)
+            if not block_needs_more(pending):
+                blocks.append("\n".join(pending))
+                pending = []
+            continue
+        if not line.strip():
+            continue
+        pending = [line]
+        if not block_needs_more(pending):
+            blocks.append(line)
+            pending = []
+    if pending:
+        blocks.append("\n".join(pending))
+    return blocks
+
+
+def interactive_blocks(saved_blocks: Sequence[str]) -> list[str]:
+    """Return replay state without previously requested top-level output."""
+
+    return [block for block in saved_blocks if not is_immediate_output(block)]
+
+
 def repl_source(saved_blocks: Sequence[str], transient: str | None = None) -> str:
     """Build one replayable J program, displaying a bare transient expression."""
 
@@ -122,7 +154,9 @@ def build_xj2f_command(
     flag = mode_flags[mode]
     if flag is not None:
         command.append(flag)
-    command.extend(["--compiler", args.compiler, "--timeout", str(args.timeout)])
+    command.extend(
+        ["--compiler", args.compiler or "gfortran", "--timeout", str(args.timeout)]
+    )
     command.extend(["--source-comments", args.source_comments])
     if args.ifx:
         command.append("--ifx")
@@ -140,6 +174,216 @@ def build_xj2f_command(
     return command
 
 
+def ofort_command(args: argparse.Namespace) -> list[str]:
+    """Return the selected ofort command and its default REPL options."""
+
+    if args.ofort_command:
+        try:
+            command = shlex.split(args.ofort_command, posix=True)
+        except ValueError as exc:
+            raise ValueError(f"invalid --ofort-command: {exc}") from exc
+        if not command:
+            raise ValueError("--ofort-command must not be empty")
+        return command
+    executable = str(DEFAULT_OFORT) if DEFAULT_OFORT.is_file() else "ofort"
+    return [executable, "--fast"]
+
+
+def build_ofort_run_command(
+    args: argparse.Namespace, fortran_path: Path, mode: str
+) -> list[str]:
+    command = ofort_command(args)
+    if mode == "compile":
+        return [*command, "--check", str(fortran_path)]
+    if mode in {"time", "time-both"} and "--time" not in command:
+        command.append("--time")
+    return [*command, str(fortran_path)]
+
+
+def _j_command(args: argparse.Namespace, source_path: Path) -> list[str]:
+    if args.jconsole:
+        try:
+            command = shlex.split(args.jconsole, posix=True)
+        except ValueError as exc:
+            raise ValueError(f"invalid --jconsole command: {exc}") from exc
+    else:
+        executable = shutil.which("jconsole")
+        if executable is None:
+            raise FileNotFoundError(
+                "cannot find J; use --jconsole COMMAND or add jconsole to PATH"
+            )
+        command = [executable]
+    return [*command, str(source_path)]
+
+
+def _run_ofort_session(
+    source_path: Path,
+    fortran_path: Path,
+    args: argparse.Namespace,
+    mode: str,
+    started: float,
+) -> SessionResult:
+    """Translate once, then validate or execute the source with ofort."""
+
+    translate_command = build_xj2f_command(
+        args, source_path, fortran_path, "translate"
+    )
+    try:
+        translated = subprocess.run(
+            translate_command,
+            text=True,
+            capture_output=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=args.timeout + 10,
+            check=False,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
+        message = (
+            f"{translate_command[0]} was not found"
+            if isinstance(exc, FileNotFoundError)
+            else f"translation timed out after {exc.timeout:g} seconds"
+        )
+        return SessionResult(
+            False, message=message, seconds=time.perf_counter() - started
+        )
+    fortran = (
+        fortran_path.read_text(encoding="utf-8", errors="replace")
+        if fortran_path.exists()
+        else ""
+    )
+    if translated.returncode != 0:
+        message = "\n".join(
+            part.rstrip()
+            for part in (translated.stdout, translated.stderr)
+            if part.strip()
+        )
+        return SessionResult(
+            False,
+            stdout=translated.stdout,
+            stderr=translated.stderr,
+            fortran=fortran,
+            message=f"translation failed\n{message}",
+            seconds=time.perf_counter() - started,
+        )
+
+    try:
+        command = build_ofort_run_command(args, fortran_path, mode)
+    except ValueError as exc:
+        return SessionResult(
+            False,
+            fortran=fortran,
+            message=str(exc),
+            seconds=time.perf_counter() - started,
+        )
+    j_run: subprocess.CompletedProcess[str] | None = None
+    if mode in {"run-both", "time-both"}:
+        try:
+            j_run = subprocess.run(
+                _j_command(args, source_path),
+                text=True,
+                capture_output=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=args.timeout,
+                check=False,
+            )
+        except FileNotFoundError as exc:
+            return SessionResult(
+                False,
+                fortran=fortran,
+                message=str(exc),
+                seconds=time.perf_counter() - started,
+            )
+        except subprocess.TimeoutExpired as exc:
+            return SessionResult(
+                False,
+                fortran=fortran,
+                message=f"J timed out after {exc.timeout:g} seconds",
+                seconds=time.perf_counter() - started,
+            )
+        if j_run.returncode != 0:
+            message = "\n".join(
+                part.rstrip()
+                for part in (j_run.stdout, j_run.stderr)
+                if part.strip()
+            )
+            return SessionResult(
+                False,
+                stdout=j_run.stdout,
+                stderr=j_run.stderr,
+                fortran=fortran,
+                message=f"J failed ({j_run.returncode})\n{message}",
+                seconds=time.perf_counter() - started,
+            )
+
+    try:
+        completed = subprocess.run(
+            command,
+            text=True,
+            capture_output=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=args.timeout,
+            check=False,
+        )
+    except FileNotFoundError:
+        return SessionResult(
+            False,
+            fortran=fortran,
+            message=f"ofort command was not found: {command[0]}",
+            seconds=time.perf_counter() - started,
+        )
+    except subprocess.TimeoutExpired as exc:
+        return SessionResult(
+            False,
+            fortran=fortran,
+            message=f"ofort timed out after {exc.timeout:g} seconds",
+            seconds=time.perf_counter() - started,
+        )
+    if completed.returncode != 0:
+        message = "\n".join(
+            part.rstrip()
+            for part in (completed.stdout, completed.stderr)
+            if part.strip()
+        )
+        return SessionResult(
+            False,
+            stdout=completed.stdout,
+            stderr=completed.stderr,
+            fortran=fortran,
+            message=f"ofort failed ({completed.returncode})\n{message}",
+            seconds=time.perf_counter() - started,
+        )
+
+    fortran_output = completed.stdout
+    if args.round is not None:
+        fortran_output = xj2f._round_numeric_output(fortran_output, args.round)
+    if j_run is None:
+        stdout = fortran_output
+    else:
+        j_output = xj2f._normalize_j_numeric_output(j_run.stdout)
+        if args.round is not None:
+            j_output = xj2f._round_numeric_output(j_output, args.round)
+        stdout = "--- J output ---\n" + j_output.rstrip() + "\n\n"
+        stdout += "--- Fortran output ---\n" + fortran_output
+    stderr = "".join(
+        part
+        for part in (
+            j_run.stderr if j_run is not None else "",
+            completed.stderr,
+        )
+        if part
+    )
+    return SessionResult(
+        True,
+        stdout=stdout,
+        stderr=stderr,
+        fortran=fortran,
+        seconds=time.perf_counter() - started,
+    )
+
+
 def run_session(
     saved_blocks: Sequence[str],
     args: argparse.Namespace,
@@ -155,8 +399,12 @@ def run_session(
         source_path = root / DEFAULT_SESSION_J
         fortran_path = root / DEFAULT_SESSION_FORTRAN
         source_path.write_text(source, encoding="utf-8", newline="\n")
-        command = build_xj2f_command(args, source_path, fortran_path, mode)
         started = time.perf_counter()
+        if args.ofort and mode != "translate":
+            return _run_ofort_session(
+                source_path, fortran_path, args, mode, started
+            )
+        command = build_xj2f_command(args, source_path, fortran_path, mode)
         process_count = 3 if mode in {"run-both", "time-both"} else 2
         if mode == "translate":
             process_count = 1
@@ -251,7 +499,9 @@ def run_repl(
     print("Type :help for commands. Bare expressions display their Fortran result.")
     saved_blocks: list[str] = []
     if initial_source is not None:
-        saved_blocks.append(initial_source.read_text(encoding="utf-8-sig"))
+        saved_blocks.extend(
+            split_source_blocks(initial_source.read_text(encoding="utf-8-sig"))
+        )
         print(f"loaded {initial_source}")
     last_fortran = ""
     while True:
@@ -322,8 +572,13 @@ def run_repl(
                 saved_blocks.append(block)
                 continue
             explicit_output = is_immediate_output(block)
+            replay_blocks = (
+                [*interactive_blocks(saved_blocks), block]
+                if explicit_output
+                else [*saved_blocks, block]
+            )
             result = run_session(
-                [*saved_blocks, block],
+                replay_blocks,
                 args,
                 mode="run" if explicit_output else "compile",
             )
@@ -338,7 +593,9 @@ def run_repl(
                 print_result(result)
             continue
 
-        result = run_session(saved_blocks, args, transient=block)
+        result = run_session(
+            interactive_blocks(saved_blocks), args, transient=block
+        )
         if result.ok and result.fortran:
             last_fortran = result.fortran
         print_result(result, timing=args.time)
@@ -377,8 +634,20 @@ def build_argument_parser() -> argparse.ArgumentParser:
         help="execution mode used with --batch",
     )
     parser.add_argument("--xj2f", default=str(DEFAULT_XJ2F), help="path to xj2f.py")
-    parser.add_argument("--compiler", default="gfortran", help="Fortran compiler command")
+    parser.add_argument(
+        "--compiler",
+        help='Fortran compiler command (default: "gfortran")',
+    )
     parser.add_argument("--ifx", action="store_true", help="compile with Intel ifx")
+    parser.add_argument(
+        "--ofort",
+        action="store_true",
+        help="execute generated Fortran directly with ofort",
+    )
+    parser.add_argument(
+        "--ofort-command",
+        help="ofort executable and options (default: ofort --fast)",
+    )
     parser.add_argument("--jconsole", help="J console command for J/Fortran modes")
     parser.add_argument("--timeout", type=float, default=60.0, help="per-stage timeout")
     parser.add_argument("--round", type=int, help="round displayed floating-point output")
@@ -408,6 +677,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         parser.error("--timeout must be positive")
     if args.round is not None and args.round < 0:
         parser.error("--round must be nonnegative")
+    if args.ofort and (args.ifx or args.compiler):
+        parser.error("--ofort cannot be combined with --ifx or --compiler")
+    if args.ofort_command and not args.ofort:
+        parser.error("--ofort-command requires --ofort")
     if not Path(args.xj2f).is_file():
         parser.error(f"xj2f.py was not found: {args.xj2f}")
     if args.batch and not args.source:
