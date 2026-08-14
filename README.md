@@ -134,6 +134,33 @@ end program sumsq_j
 
 Use `python xj2f.py --help` for the complete option list.
 
+## Interactive REPL
+
+`xj2f_repl.py` provides a source-replay REPL. Assignments and verb definitions
+remain in the session; each bare expression is temporarily wrapped with
+`smoutput`, transpiled, compiled, and evaluated by the generated Fortran:
+
+```text
+> python xj2f_repl.py --no-save
+xj2f interactive mode (source replay)
+Type :help for commands. Bare expressions display their Fortran result.
+xj2f> x =: 1 2 3 4
+xj2f> +/ x
+10
+xj2f> *: x
+1 4 9 16
+xj2f> :quit
+```
+
+Use `:source` and `:fortran` to inspect the current J and most recently
+generated Fortran, `:clear` to reset the session, `:run-both` to run J and
+Fortran, and `:save` to write `xj2f_repl_session.ijs` and
+`xj2f_repl_session.f90`. The installed command is `xj2f-repl`.
+
+The initial implementation replays all saved source for every evaluation; it
+does not preserve a live Fortran process. Random assignments therefore draw
+new values, and file operations execute again, whenever the session is replayed.
+
 ## Batch translation
 
 `xj2f_batch.py` runs the driver over explicit `.ijs` files, directories, glob
