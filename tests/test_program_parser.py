@@ -1932,6 +1932,82 @@ def test_dyadic_explicit_verb_has_x_and_y_arguments() -> None:
     assert verb.arguments == ("x", "y")
 
 
+@pytest.mark.parametrize(
+    ("header", "arguments"),
+    [
+        ("square =: monad define", ("y",)),
+        ("sum =: dyad define", ("x", "y")),
+    ],
+)
+def test_legacy_multiline_explicit_definition_syntax(
+    header: str, arguments: tuple[str, ...]
+) -> None:
+    program = xj2f.parse_j_source(
+        Path("legacy_definition.ijs"), f"{header}\n  x + y\n)\n"
+    )
+    verb = program.items[0]
+
+    assert isinstance(verb, xj2f.VerbDefinition)
+    assert verb.arguments == arguments
+
+
+@pytest.mark.parametrize(
+    ("source", "arguments", "body"),
+    [
+        ("square =: monad : '*: y'", ("y",), "*: y"),
+        ("sum =: dyad : 'x + y' NB. add", ("x", "y"), "x + y"),
+    ],
+)
+def test_legacy_one_line_explicit_definition_syntax(
+    source: str, arguments: tuple[str, ...], body: str
+) -> None:
+    program = xj2f.parse_j_source(Path("legacy_one_line.ijs"), source)
+    verb = program.items[0]
+
+    assert isinstance(verb, xj2f.VerbDefinition)
+    assert verb.arguments == arguments
+    assert verb.body[0].expression == body
+
+
+def test_destructuring_assignment_expands_to_opened_selections() -> None:
+    source = """addpair =: monad define
+  'a b' =. y
+  a + b
+)
+"""
+    program = xj2f.parse_j_source(Path("destructure.ijs"), source)
+    verb = program.items[0]
+
+    assert isinstance(verb, xj2f.VerbDefinition)
+    assignments = [
+        statement for statement in verb.body if isinstance(statement, xj2f.Assign)
+    ]
+    assert [(item.name, item.expression) for item in assignments] == [
+        ("a", "> 0 { y"),
+        ("b", "> 1 { y"),
+    ]
+
+
+def test_destructuring_assignment_evaluates_a_complex_rhs_once() -> None:
+    source = """addpair =: monad define
+  'a b' =. y + 1
+  a + b
+)
+"""
+    program = xj2f.parse_j_source(Path("destructure_once.ijs"), source)
+    verb = program.items[0]
+
+    assert isinstance(verb, xj2f.VerbDefinition)
+    assignments = [
+        statement for statement in verb.body if isinstance(statement, xj2f.Assign)
+    ]
+    assert [(item.name, item.expression) for item in assignments] == [
+        ("j_destructure_1", "y + 1"),
+        ("a", "> 0 { j_destructure_1"),
+        ("b", "> 1 { j_destructure_1"),
+    ]
+
+
 def test_ambivalent_explicit_verb_has_two_specific_definitions() -> None:
     source = "f =: 3 : 0\n  y * y\n:\n  x + y\n)\n"
     program = xj2f.parse_j_source(Path("ambivalent.ijs"), source)

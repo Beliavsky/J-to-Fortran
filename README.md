@@ -176,9 +176,13 @@ The parser currently recognizes:
 
 - standalone `NB.` comments, preserved as Fortran `!` comments;
 - standalone top-level noun programs without an explicit verb definition;
-- monadic explicit verb definitions using `name =: 3 : 0 ... )`;
+- monadic and dyadic explicit verb definitions using `3 : 0` and `4 : 0`,
+  including the legacy `monad define`, `dyad define`, `monad : '...'`, and
+  `dyad : '...'` spellings;
 - local and global copulas as syntax (`=.` and `=:`), with local assignments
   supported inside translated verbs;
+- homogeneous multiple assignment such as `'a b' =. y`, lowered to selections
+  while evaluating a nontrivial right-hand side only once;
 - `for_name. 1 + i. expression do. ... end.`;
 - structured `if.`/`elseif.`/`else.` branches;
 - integer arithmetic, comparisons, Boolean `*.` and `-.`, integer residue `|`,

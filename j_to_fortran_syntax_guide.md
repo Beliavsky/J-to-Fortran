@@ -118,6 +118,17 @@ Fortran is case-insensitive, while J names are case-sensitive. `xj2f.py`
 therefore disambiguates names that differ only in case and renames identifiers
 that would collide with Fortran keywords or common intrinsics.
 
+J multiple assignment opens and assigns successive items:
+
+```j
+'a b' =. y
+```
+
+For a homogeneous numeric array this becomes ordinary Fortran selection, such
+as `a = y(1)` and `b = y(2)`. A nontrivial right-hand side is first saved in a
+generated temporary so it is evaluated only once. Heterogeneous boxed values
+remain outside the currently supported subset.
+
 ## Explicit Verbs and Procedures
 
 A monadic explicit J verb is commonly written with `3 : 0`. Its argument is
@@ -145,6 +156,16 @@ A dyadic explicit verb uses `4 : 0`; its left and right arguments are `x` and
 weighted =: 4 : 0
   x * +/ y
 )
+```
+
+The legacy spellings below are accepted as equivalent explicit definitions:
+
+```j
+square =: monad define
+  *: y
+)
+
+add =: dyad : 'x + y'
 ```
 
 The corresponding Fortran procedure has two dummy arguments:

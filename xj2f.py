@@ -337,10 +337,21 @@ def _source_lines(text: str) -> list[SourceLine]:
 
 class Parser:
     _verb_start = re.compile(
-        r"^([A-Za-z][A-Za-z0-9_]*)\s*=:\s*([34])\s*:\s*0\s*$"
+        r"^(?P<name>[A-Za-z][A-Za-z0-9_]*)\s*=:\s*"
+        r"(?:(?P<code>[34])\s*:\s*0|(?P<legacy>monad|dyad)\s+define)"
+        r"(?:\s+NB\..*)?$"
+    )
+    _one_line_legacy_verb = re.compile(
+        r"^(?P<name>[A-Za-z][A-Za-z0-9_]*)\s*=:\s*"
+        r"(?P<kind>monad|dyad)\s*:\s*"
+        r"'(?P<body>(?:''|[^'])*)'\s*(?:NB\..*)?$"
     )
     _assignment = re.compile(
         r"^([A-Za-z][A-Za-z0-9_]*)\s*(=[:.])\s*(.*?)\s*$"
+    )
+    _destructuring_assignment = re.compile(
+        r"^'(?P<names>(?:''|[^'])*)'\s*(?P<copula>=[:.])\s*"
+        r"(?P<expression>.+?)\s*$"
     )
     _for = re.compile(
         r"^for(?:_(?P<variable>[A-Za-z][A-Za-z0-9_]*))?\.\s+"
@@ -354,6 +365,7 @@ class Parser:
         self.source_path = source_path
         self.lines = _source_lines(text)
         self.index = 0
+        self.destructuring_index = 0
 
     def parse(self) -> Program:
         items: list[TopLevel] = []
@@ -367,17 +379,21 @@ class Parser:
             verb = self._verb_start.fullmatch(text)
             if verb:
                 self.index += 1
-                terminators = {":", ")"} if verb.group(2) == "3" else {")"}
+                code = verb.group("code") or {
+                    "monad": "3",
+                    "dyad": "4",
+                }[verb.group("legacy")]
+                terminators = {":", ")"} if code == "3" else {")"}
                 body = self._parse_statements(terminators)
                 if (
-                    verb.group(2) == "3"
+                    code == "3"
                     and self.index < len(self.lines)
                     and self.lines[self.index].text.strip() == ":"
                 ):
                     self.index += 1
                     dyadic_body = self._parse_statements({")"})
                     self._expect(")", line, "ambivalent explicit verb")
-                    generic_name = verb.group(1)
+                    generic_name = verb.group("name")
                     items.extend(
                         [
                             VerbDefinition(
@@ -398,8 +414,33 @@ class Parser:
                     )
                     continue
                 self._expect(")", line, "explicit verb")
-                arguments = ("y",) if verb.group(2) == "3" else ("x", "y")
-                items.append(VerbDefinition(line, verb.group(1), arguments, tuple(body)))
+                arguments = ("y",) if code == "3" else ("x", "y")
+                items.append(
+                    VerbDefinition(line, verb.group("name"), arguments, tuple(body))
+                )
+                continue
+            one_line_verb = self._one_line_legacy_verb.fullmatch(text)
+            if one_line_verb:
+                arguments = (
+                    ("y",)
+                    if one_line_verb.group("kind") == "monad"
+                    else ("x", "y")
+                )
+                body = one_line_verb.group("body").replace("''", "'")
+                items.append(
+                    VerbDefinition(
+                        line,
+                        one_line_verb.group("name"),
+                        arguments,
+                        (ExpressionStatement(line, body),),
+                    )
+                )
+                self.index += 1
+                continue
+            destructuring = self._destructuring_assignments(line, text)
+            if destructuring is not None:
+                items.extend(destructuring)
+                self.index += 1
                 continue
             assignment = self._assignment.fullmatch(text)
             if assignment:
@@ -542,6 +583,11 @@ class Parser:
                 statements.append(ContinueStatement(line))
                 self.index += 1
                 continue
+            destructuring = self._destructuring_assignments(line, text)
+            if destructuring is not None:
+                statements.extend(destructuring)
+                self.index += 1
+                continue
             assignment = self._assignment.fullmatch(text)
             if assignment:
                 statements.append(
@@ -557,6 +603,35 @@ class Parser:
             statements.append(ExpressionStatement(line, text))
             self.index += 1
         return statements
+
+    def _destructuring_assignments(
+        self, line: SourceLine, text: str
+    ) -> tuple[Assign, ...] | None:
+        """Expand J multiple assignment into scalar selections of one value."""
+
+        match = self._destructuring_assignment.fullmatch(text)
+        if match is None:
+            return None
+        names = match.group("names").replace("''", "'").split()
+        if not names or any(
+            re.fullmatch(r"[A-Za-z][A-Za-z0-9_]*", name) is None
+            for name in names
+        ):
+            raise _error_at(ParseError, line, "invalid destructuring assignment names")
+        expression = match.group("expression")
+        copula = match.group("copula")
+        assignments: list[Assign] = []
+        if re.fullmatch(r"[A-Za-z][A-Za-z0-9_]*", expression):
+            source = expression
+        else:
+            self.destructuring_index += 1
+            source = f"j_destructure_{self.destructuring_index}"
+            assignments.append(Assign(line, source, copula, expression))
+        assignments.extend(
+            Assign(line, name, copula, f"> {index} {{ {source}")
+            for index, name in enumerate(names)
+        )
+        return tuple(assignments)
 
     @staticmethod
     def _is_terminator(text: str, terminators: set[str]) -> bool:
