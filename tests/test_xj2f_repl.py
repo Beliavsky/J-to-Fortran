@@ -95,6 +95,47 @@ def test_interactive_assignments_persist_and_expressions_are_transient(
     assert "6" in output.out
 
 
+def test_explicit_output_persists_in_interactive_session(monkeypatch, capsys) -> None:
+    entered = iter(["x =: 10 20 30", "smoutput +/ x", ":quit"])
+    monkeypatch.setattr(builtins, "input", lambda _prompt: next(entered))
+    calls: list[tuple[list[str], str | None, str]] = []
+
+    def successful_session(saved_blocks, _args, *, transient=None, mode="run"):
+        calls.append((list(saved_blocks), transient, mode))
+        output = "60\n" if mode == "run" else ""
+        return xj2f_repl.SessionResult(True, stdout=output, fortran="program session\n")
+
+    monkeypatch.setattr(xj2f_repl, "run_session", successful_session)
+
+    assert xj2f_repl.run_repl(repl_args()) == 0
+    output = capsys.readouterr()
+
+    assert calls == [
+        (["x =: 10 20 30"], None, "compile"),
+        (["x =: 10 20 30", "smoutput +/ x"], None, "run"),
+    ]
+    assert "60" in output.out
+
+
+def test_saved_session_fortran_contains_explicit_output(tmp_path: Path) -> None:
+    j_path = tmp_path / "session.ijs"
+    fortran_path = tmp_path / "session.f90"
+    args = repl_args(
+        "--save-j",
+        str(j_path),
+        "--save-fortran",
+        str(fortran_path),
+    )
+
+    result = xj2f_repl.save_session(
+        ["x =: 10 20 30", "smoutput +/ x"], args
+    )
+
+    assert result.ok, result.message
+    assert "smoutput +/ x" in j_path.read_text(encoding="utf-8")
+    assert 'write (*,"(i0)") sum(x)' in fortran_path.read_text(encoding="utf-8")
+
+
 def test_failed_assignment_is_not_saved(monkeypatch, capsys) -> None:
     entered = iter(["x =: missing", ":source", ":quit"])
     monkeypatch.setattr(builtins, "input", lambda _prompt: next(entered))

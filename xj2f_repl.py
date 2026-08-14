@@ -317,15 +317,22 @@ def run_repl(
         block = "\n".join(block_lines)
         if not block.strip():
             continue
-        if is_setup_block(block):
+        if is_setup_block(block) or is_immediate_output(block):
             if block.strip().startswith("NB."):
                 saved_blocks.append(block)
                 continue
-            result = run_session([*saved_blocks, block], args, mode="compile")
+            explicit_output = is_immediate_output(block)
+            result = run_session(
+                [*saved_blocks, block],
+                args,
+                mode="run" if explicit_output else "compile",
+            )
             if result.ok:
                 saved_blocks.append(block)
                 if result.fortran:
                     last_fortran = result.fortran
+                if explicit_output:
+                    print_result(result, timing=args.time)
             else:
                 print("xj2f_repl: block was not saved", file=sys.stderr)
                 print_result(result)
