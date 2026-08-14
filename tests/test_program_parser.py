@@ -2440,6 +2440,28 @@ def test_scalar_conditional_emits_elemental_function_and_direct_echo() -> None:
     assert 'write (*,"(i0)") classify(3)' in generated
 
 
+def test_reassigned_argument_uses_a_versioned_local() -> None:
+    source = """scale =: 3 : 0
+  y =. y % 2
+  if. y > 1 do.
+    y + 1
+  else.
+    y
+  end.
+)
+smoutput scale 4
+"""
+    program = xj2f.parse_j_source(Path("scale.ijs"), source)
+    generated = xj2f.emit_fortran(program)
+
+    assert "integer, intent(in) :: y" in generated
+    assert "real(kind=dp) :: y_j" in generated
+    assert "y_j = real(y, kind=dp) / 2" in generated
+    assert "if (y_j > 1) then" in generated
+    assert "j_result = y_j + 1" in generated
+    assert "\n  y = " not in generated
+
+
 def test_conditional_without_else_is_not_a_total_result() -> None:
     source = """f =: 3 : 0
   if. y > 0 do.

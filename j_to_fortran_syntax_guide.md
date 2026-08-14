@@ -172,6 +172,12 @@ pure function sumsq(y) result(j_result)
 end function sumsq
 ```
 
+An unconditional assignment such as `y =. y % 2` is legal in an explicit J
+verb. The translation keeps dummy argument `y` as `intent(in)` and stores the
+new value in a local such as `y_j`; later references use that local. This also
+allows the reassignment to change type, for example from an integer input to a
+real quotient.
+
 A dyadic explicit verb uses `4 : 0`; its left and right arguments are `x` and
 `y`:
 

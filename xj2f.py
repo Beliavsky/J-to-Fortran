@@ -4714,6 +4714,164 @@ def _monadic_tacit_source(verb: Verb, operand: str) -> str | None:
     return None
 
 
+def _replace_j_noun_name(text: str, old: str, new: str) -> str:
+    """Rename a J noun outside quoted text and trailing comments."""
+
+    masked = _outside_string_mask(text)
+    comment_at = masked.find("NB.")
+    code_end = len(text) if comment_at < 0 else comment_at
+    pattern = re.compile(
+        rf"(?<![A-Za-z0-9_]){re.escape(old)}(?![A-Za-z0-9_])"
+    )
+    matches = list(pattern.finditer(masked, 0, code_end))
+    for match in reversed(matches):
+        text = text[: match.start()] + new + text[match.end() :]
+    return text
+
+
+def _rename_statement_noun(
+    statement: Statement, old: str, new: str
+) -> Statement:
+    """Rename references to one noun throughout a parsed statement."""
+
+    def rename(text: str) -> str:
+        return _replace_j_noun_name(text, old, new)
+
+    if isinstance(statement, Assign):
+        return dataclasses.replace(
+            statement,
+            name=new if statement.name == old else statement.name,
+            expression=rename(statement.expression),
+        )
+    if isinstance(statement, ExpressionStatement):
+        return dataclasses.replace(statement, expression=rename(statement.expression))
+    if isinstance(statement, AssertStatement):
+        return dataclasses.replace(statement, expression=rename(statement.expression))
+    if isinstance(statement, ForLoop):
+        return dataclasses.replace(
+            statement,
+            variable=new if statement.variable == old else statement.variable,
+            expression=rename(statement.expression),
+            body=tuple(
+                _rename_statement_noun(child, old, new)
+                for child in statement.body
+            ),
+        )
+    if isinstance(statement, WhileLoop):
+        return dataclasses.replace(
+            statement,
+            condition=rename(statement.condition),
+            body=tuple(
+                _rename_statement_noun(child, old, new)
+                for child in statement.body
+            ),
+        )
+    if isinstance(statement, IfStatement):
+        return dataclasses.replace(
+            statement,
+            condition=rename(statement.condition),
+            body=tuple(
+                _rename_statement_noun(child, old, new)
+                for child in statement.body
+            ),
+            elseif_branches=tuple(
+                dataclasses.replace(
+                    branch,
+                    condition=rename(branch.condition),
+                    body=tuple(
+                        _rename_statement_noun(child, old, new)
+                        for child in branch.body
+                    ),
+                )
+                for branch in statement.elseif_branches
+            ),
+            else_body=(
+                None
+                if statement.else_body is None
+                else tuple(
+                    _rename_statement_noun(child, old, new)
+                    for child in statement.else_body
+                )
+            ),
+        )
+    if isinstance(statement, SelectStatement):
+        return dataclasses.replace(
+            statement,
+            expression=rename(statement.expression),
+            branches=tuple(
+                dataclasses.replace(
+                    branch,
+                    expression=(
+                        None
+                        if branch.expression is None
+                        else rename(branch.expression)
+                    ),
+                    body=tuple(
+                        _rename_statement_noun(child, old, new)
+                        for child in branch.body
+                    ),
+                )
+                for branch in statement.branches
+            ),
+        )
+    return statement
+
+
+def _version_reassigned_arguments(definition: VerbDefinition) -> VerbDefinition:
+    """Use local versions when an explicit verb reassigns an input argument."""
+
+    body = list(definition.body)
+    used_names = set(definition.arguments)
+
+    def collect_names(statements: tuple[Statement, ...] | list[Statement]) -> None:
+        for statement in statements:
+            if isinstance(statement, Assign):
+                used_names.add(statement.name)
+            elif isinstance(statement, ForLoop):
+                if statement.variable is not None:
+                    used_names.add(statement.variable)
+                collect_names(statement.body)
+            elif isinstance(statement, WhileLoop):
+                collect_names(statement.body)
+            elif isinstance(statement, IfStatement):
+                collect_names(statement.body)
+                for branch in statement.elseif_branches:
+                    collect_names(branch.body)
+                if statement.else_body is not None:
+                    collect_names(statement.else_body)
+            elif isinstance(statement, SelectStatement):
+                for branch in statement.branches:
+                    collect_names(branch.body)
+
+    collect_names(body)
+    used_fortran_names = {_fortran_name(name) for name in used_names}
+    for argument in definition.arguments:
+        first_assignment = next(
+            (
+                index
+                for index, statement in enumerate(body)
+                if isinstance(statement, Assign) and statement.name == argument
+            ),
+            None,
+        )
+        if first_assignment is None:
+            continue
+        suffix = 1
+        candidate = f"{argument}_j"
+        while _fortran_name(candidate) in used_fortran_names:
+            suffix += 1
+            candidate = f"{argument}_j{suffix}"
+        used_fortran_names.add(_fortran_name(candidate))
+        assignment = body[first_assignment]
+        assert isinstance(assignment, Assign)
+        body[first_assignment] = dataclasses.replace(assignment, name=candidate)
+        body[first_assignment + 1 :] = [
+            _rename_statement_noun(statement, argument, candidate)
+            for statement in body[first_assignment + 1 :]
+        ]
+    return dataclasses.replace(definition, body=tuple(body))
+
+
 def _explicit_definitions(program: Program) -> list[VerbDefinition]:
     """Expand supported tacit definitions into the explicit internal form."""
 
@@ -5880,8 +6038,9 @@ def emit_fortran(
         available_top_types = _infer_top_assignment_types(
             program, function_types
         )
+        emission_definition = _version_reassigned_arguments(definition)
         emitted, required, result_type = FunctionEmitter(
-            definition,
+            emission_definition,
             signature,
             named_verbs=function_types,
             global_types={

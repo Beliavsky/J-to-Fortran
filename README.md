@@ -179,6 +179,8 @@ The parser currently recognizes:
 - monadic and dyadic explicit verb definitions using `3 : 0` and `4 : 0`,
   including the legacy `monad define`, `dyad define`, `monad : '...'`, and
   `dyad : '...'` spellings;
+- unconditional reassignment of an input argument through a versioned local
+  variable, preserving the Fortran dummy argument's `intent(in)` contract;
 - direct definitions using `{{ ... }}`, with valence inferred from use of `x`;
 - ranked explicit headers such as `3 : 0 \" 1` and the common
   `(1&$:) : (dyad define)` and `(1&$:) : (4 : 0)` default-monad forms;
