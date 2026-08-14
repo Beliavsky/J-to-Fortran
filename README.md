@@ -234,6 +234,8 @@ The parser currently recognizes:
   loading script; unresolved addons are documented in generated comments;
 - calls to locally translated verbs used only for their effects, with their
   otherwise unused results materialized in generated variables;
+- calls to explicit verbs defined later in the same source, with generated
+  module procedures ordered after their dependencies;
 - explicitly omitted monadic or dyadic `plot` and `pd` visualization
   directives;
 - dyadic reflex, integer-noun bond, monadic `@:` composition, and monadic forks;

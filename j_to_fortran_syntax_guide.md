@@ -278,6 +278,9 @@ the translated numerical result.
 At top level, a call to a verb defined by the translated source is evaluated
 even when its result is discarded. The generated main program assigns that
 result to a clearly named temporary, preserving calls made for side effects.
+Explicit verbs may call verbs defined later in the J source. Generated module
+procedures are dependency-ordered so a callee's inferred result type is
+available while its callers are lowered.
 
 ## Text File Output
 

@@ -2275,6 +2275,26 @@ square 5
     assert "j_discarded_result_1 = square(5)" in generated
 
 
+def test_forward_called_definition_is_emitted_before_its_caller() -> None:
+    source = """outer =: monad define
+  inner y
+)
+inner =: monad define
+  *: y
+)
+smoutput outer 4
+"""
+    generated = xj2f.emit_fortran(
+        xj2f.parse_j_source(Path("forward_call.ijs"), source)
+    )
+
+    inner_at = generated.index("function inner(y)")
+    outer_at = generated.index("function outer(y)")
+    assert inner_at < outer_at
+    assert "j_result = inner(y)" in generated
+    assert 'write (*,"(i0)") outer(4)' in generated
+
+
 def test_recursive_default_monad_with_explicit_dyad_is_supported() -> None:
     source = """add =: (1&$:) : (dyad define)
   x + y

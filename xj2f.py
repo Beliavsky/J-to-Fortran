@@ -4826,6 +4826,46 @@ def _explicit_definitions(program: Program) -> list[VerbDefinition]:
     return definitions
 
 
+def _order_definitions_by_dependencies(
+    definitions: list[tuple[VerbDefinition, tuple[TypeInfo, ...] | None]],
+) -> list[tuple[VerbDefinition, tuple[TypeInfo, ...] | None]]:
+    """Put translated callees before callers while retaining stable order."""
+
+    by_exported_name: dict[
+        str, list[tuple[VerbDefinition, tuple[TypeInfo, ...] | None]]
+    ] = {}
+    for item in definitions:
+        definition = item[0]
+        exported_name = definition.generic_name or definition.name
+        by_exported_name.setdefault(exported_name, []).append(item)
+
+    ordered: list[tuple[VerbDefinition, tuple[TypeInfo, ...] | None]] = []
+    state: dict[int, str] = {}
+
+    def visit(item: tuple[VerbDefinition, tuple[TypeInfo, ...] | None]) -> None:
+        key = id(item)
+        if state.get(key) == "done":
+            return
+        if state.get(key) == "visiting":
+            return
+        state[key] = "visiting"
+        definition = item[0]
+        own_name = definition.generic_name or definition.name
+        for candidate_name, candidates in by_exported_name.items():
+            if candidate_name == own_name or not FunctionEmitter._references_verb(
+                definition.body, candidate_name
+            ):
+                continue
+            for candidate in candidates:
+                visit(candidate)
+        state[key] = "done"
+        ordered.append(item)
+
+    for item in definitions:
+        visit(item)
+    return ordered
+
+
 def _boxed_tuple_items(expression) -> list | None:
     """Flatten a semicolon-linked tuple, or report that it is not boxed."""
 
@@ -5791,6 +5831,9 @@ def emit_fortran(
                     signature,
                 )
             )
+    specialized_definitions = _order_definitions_by_dependencies(
+        specialized_definitions
+    )
     definitions = [definition for definition, _ in specialized_definitions]
     captured_top_names = _captured_top_names(definitions, program)
     if not definitions and not any(
