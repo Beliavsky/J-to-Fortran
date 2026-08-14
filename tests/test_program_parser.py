@@ -972,6 +972,25 @@ smoutput absolute _3
     assert "j_result = result" in generated
 
 
+def test_final_loop_carried_assignment_is_an_implicit_result() -> None:
+    source = """countdown =: monad define
+  n =. y
+  result =. 0
+  while. n > 0 do.
+    n =. n - 1
+    result =. result + n
+  end.
+)
+smoutput countdown 3
+"""
+    generated = xj2f.emit_fortran(
+        xj2f.parse_j_source(Path("loop_result.ijs"), source)
+    )
+
+    assert "do while (n > 0)" in generated
+    assert "j_result = result_j" in generated
+
+
 def test_reshape_around_chained_amendment_uses_a_temporary() -> None:
     source = """restore =: 3 : 0
   values =. , y
@@ -2269,6 +2288,32 @@ def test_constant_selection_infers_a_vector_dummy_without_a_call_site() -> None:
     assert "j_result = y(3)" in generated
 
 
+def test_behead_and_curtail_infer_a_vector_dummy_without_a_call_site() -> None:
+    source = """adjacent_sums =: monad define
+  (}: y) + }. y
+)
+"""
+    generated = xj2f.emit_fortran(
+        xj2f.parse_j_source(Path("adjacent_sums.ijs"), source)
+    )
+
+    assert "integer, intent(in) :: y(:)" in generated
+    assert "j_result = y(:size(y) - 1) + y(2:)" in generated
+
+
+def test_tally_infers_a_vector_dummy_without_a_call_site() -> None:
+    source = """length =: monad define
+  # y
+)
+"""
+    generated = xj2f.emit_fortran(
+        xj2f.parse_j_source(Path("length.ijs"), source)
+    )
+
+    assert "integer, intent(in) :: y(:)" in generated
+    assert "j_result = size(y, 1)" in generated
+
+
 def test_compact_control_sentences_are_split_outside_quoted_text() -> None:
     source = """countup =: monad define
   n =. 0 while. n < y do. n =. >: n end.
@@ -2764,6 +2809,26 @@ def test_branch_local_rank_change_remains_an_error() -> None:
 
     with pytest.raises(xj2f.UnsupportedJError, match="changes type/rank"):
         xj2f.emit_fortran(program)
+
+
+def test_loop_carried_scalar_fill_promotes_to_a_vector() -> None:
+    source = """accumulate =: monad define
+  count =. # y
+  state =. 0
+  for_i. i. 2 do.
+    result =. state + y
+    state =. y * 2
+  end.
+  result
+)
+"""
+    generated = xj2f.emit_fortran(
+        xj2f.parse_j_source(Path("loop_vector_fill.ijs"), source)
+    )
+
+    assert "integer, allocatable :: state(:)" in generated
+    assert "state = spread(0, dim=1, ncopies=size(y))" in generated
+    assert "state = y * 2" in generated
 
 
 def test_homogeneous_boxed_numeric_vectors_become_matrix_rows() -> None:

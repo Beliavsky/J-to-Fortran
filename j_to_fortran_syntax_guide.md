@@ -453,6 +453,10 @@ with a vector matching the matrix column count becomes:
 spread(weights, dim=1, ncopies=size(matrix, 1)) * matrix
 ```
 
+Rank may be written directly or in parentheses. For example, `}:"1 matrix`
+and `}:"(1) matrix` both curtail each trailing rank-1 cell and lower to a
+Fortran section that omits the final column.
+
 When an explicit verb unpacks an argument and then uses the unpacked numeric
 items as arrays, the supported homogeneous-box convention represents those
 items as matrix rows. This is intentionally narrower than J's fully

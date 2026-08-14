@@ -1889,6 +1889,17 @@ class FunctionEmitter:
         final = executable[-1]
         if isinstance(final, Assign):
             return final.name, final.line
+        if isinstance(final, (ForLoop, WhileLoop)):
+            loop_result = cls._implicit_result_assignment(final.body)
+            if loop_result is None:
+                return None
+            name, _ = loop_result
+            if not any(
+                isinstance(statement, Assign) and statement.name == name
+                for statement in executable[:-1]
+            ):
+                return None
+            return name, final.line
         if not isinstance(final, IfStatement):
             return None
 
@@ -1999,6 +2010,54 @@ class FunctionEmitter:
         }.get(declaration)
         if type_info is not None:
             self.types[name] = type_info
+
+    def _promote_loop_scalar_to_vector(
+        self, name: str, declaration: str, expression: Expression
+    ) -> bool:
+        """Promote a scalar fill to loop-carried vector storage."""
+        old = self.declarations.get(name)
+        if old not in {"integer", "real(kind=dp)"} or not declaration.endswith(
+            "allocatable-vector"
+        ):
+            return False
+
+        vector_source: str | None = None
+
+        def inspect(node: object) -> None:
+            nonlocal vector_source
+            if vector_source is not None:
+                return
+            if isinstance(node, Name):
+                candidate = self._name(node.identifier)
+                type_info = self.types.get(candidate)
+                if candidate != name and type_info is not None and type_info.rank == 1:
+                    vector_source = candidate
+                return
+            if dataclasses.is_dataclass(node):
+                for field in dataclasses.fields(node):
+                    inspect(getattr(node, field.name))
+            elif isinstance(node, tuple):
+                for item in node:
+                    inspect(item)
+
+        inspect(expression)
+        if vector_source is None:
+            return False
+        assignment_pattern = re.compile(
+            rf"^(?P<indent>\s*){re.escape(name)}\s*=\s*(?P<value>.+)$"
+        )
+        for index in range(len(self.body) - 1, -1, -1):
+            match = assignment_pattern.fullmatch(self.body[index])
+            if match is None:
+                continue
+            value = match.group("value")
+            self.body[index] = (
+                f"{match.group('indent')}{name} = spread({value}, dim=1, "
+                f"ncopies=size({vector_source}))"
+            )
+            self.declarations[name] = declaration
+            return True
+        return False
 
     def _write(self, text: str) -> None:
         self.body.append("  " * self.indent + text)
@@ -2190,14 +2249,19 @@ class FunctionEmitter:
                     _fortran_name(argument)
                     for argument in self.definition.arguments
                 }
-                if (
+                if self.loop_depth > 0 and self._promote_loop_scalar_to_vector(
+                    name, declaration, expression
+                ):
+                    pass
+                elif (
                     name in argument_names
                     or self.loop_depth > 0
                     or self.branch_depth > 0
                 ):
                     raise
-                name = self._new_local_version(assignment.name)
-                self._declare(name, declaration)
+                else:
+                    name = self._new_local_version(assignment.name)
+                    self._declare(name, declaration)
             self.types[name] = value_type
             self._write(f"{name} = {rendered}")
             for update in amendment_updates:
@@ -4689,9 +4753,22 @@ def _definition_argument_shape_hint(
             for text in texts:
                 expression_texts.append(text)
                 for argument in definition.arguments:
+                    argument_pattern = re.escape(argument)
+                    if re.search(
+                        rf"(?:}}\.|}}:)\s*(?:\(\s*)?{argument_pattern}"
+                        rf"(?![A-Za-z0-9_])",
+                        text,
+                    ):
+                        require_vector(argument, 1)
+                    if re.search(
+                        rf"(?<![A-Za-z0-9_])#\s*(?:\(\s*)?{argument_pattern}"
+                        rf"(?![A-Za-z0-9_])",
+                        text,
+                    ):
+                        require_vector(argument, None)
                     selection = re.compile(
                         rf"(?<![A-Za-z0-9_])(?P<index>_?\d+)\s*\{{\s*"
-                        rf"{re.escape(argument)}(?![A-Za-z0-9_])"
+                        rf"{argument_pattern}(?![A-Za-z0-9_])"
                     )
                     for match in selection.finditer(text):
                         index = int(match.group("index").replace("_", "-"))

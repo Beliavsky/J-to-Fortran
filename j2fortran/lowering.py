@@ -274,6 +274,13 @@ def ranked_reduction_spelling(verb: Verb) -> str | None:
     return table_spelling(verb.operand)
 
 
+def ranked_slice_spelling(verb: Verb) -> str | None:
+    if not isinstance(verb, RankApplication) or integer_value(verb.rank) != 1:
+        return None
+    spelling = primitive_spelling(verb.operand)
+    return spelling if spelling in {"}.", "}:"} else None
+
+
 def monad(expression: Expression, spelling: str) -> Expression | None:
     expression = ungroup(expression)
     if isinstance(expression, MonadicApply) and primitive_spelling(expression.verb) == spelling:
@@ -402,6 +409,25 @@ def constant_shape_extents(
         type_info = names.get(name_transform(ungroup(shaped).identifier))
         if type_info is not None:
             return type_info.shape.extents
+    incremented = monad(expression, ">:")
+    if (
+        incremented is not None
+        and isinstance(ungroup(incremented), Name)
+        and names is not None
+    ):
+        name = name_transform(ungroup(incremented).identifier)
+        if names.get(name) == TypeInfo(AtomType.INTEGER):
+            return (f"{name} + 1",)
+    tallied = monad(expression, "#")
+    if (
+        tallied is not None
+        and isinstance(ungroup(tallied), Name)
+        and names is not None
+    ):
+        name = name_transform(ungroup(tallied).identifier)
+        type_info = names.get(name)
+        if type_info is not None and type_info.rank > 0:
+            return (f"size({name}, 1)",)
     catenated = dyad(expression, ",")
     if catenated is not None:
         left = constant_shape_extents(catenated[0], names, name_transform)
@@ -835,6 +861,19 @@ def infer_type(
                 atom_type,
                 Shape(operand_type.shape.extents[:-1]),
             )
+        ranked_slice = ranked_slice_spelling(expression.verb)
+        if ranked_slice is not None:
+            if operand_type.rank < 1:
+                raise LoweringError("rank-1 slice requires an array operand")
+            trailing = operand_type.shape.extents[-1]
+            if isinstance(trailing, int):
+                if trailing == 0:
+                    raise LoweringError("behead and curtail require nonempty cells")
+                trailing -= 1
+            return TypeInfo(
+                operand_type.atom_type,
+                Shape((*operand_type.shape.extents[:-1], trailing)),
+            )
         ranked_application = match_ranked_named_application(expression)
         if ranked_application is not None:
             verb_name, operand, rank = ranked_application
@@ -880,27 +919,19 @@ def infer_type(
                 "+.",
                 "*.",
             }:
-                if operand_type.rank not in {1, 2}:
+                if operand_type.rank not in {1, 2, 3}:
                     raise LoweringError(
-                        "reduction currently requires a vector or matrix"
+                        "reduction currently requires a vector or array of rank at most 3"
                     )
                 if reduction in {"+.", "*."}:
                     if operand_type.atom_type is not AtomType.LOGICAL:
                         raise LoweringError(
                             "Boolean reduction requires a logical operand"
                         )
-                    result_shape = (
-                        Shape.scalar()
-                        if operand_type.rank == 1
-                        else Shape.vector(operand_type.shape.extents[1])
-                    )
+                    result_shape = Shape(operand_type.shape.extents[1:])
                     return TypeInfo(AtomType.LOGICAL, result_shape)
                 if reduction == "+" and operand_type.atom_type is AtomType.LOGICAL:
-                    result_shape = (
-                        Shape.scalar()
-                        if operand_type.rank == 1
-                        else Shape.vector(operand_type.shape.extents[1])
-                    )
+                    result_shape = Shape(operand_type.shape.extents[1:])
                     return TypeInfo(AtomType.INTEGER, result_shape)
                 numeric_types = {AtomType.INTEGER, AtomType.REAL}
                 if reduction in {"+", "*"}:
@@ -911,11 +942,7 @@ def infer_type(
                     raise LoweringError(
                         "minimum and maximum reduction require a nonempty vector"
                     )
-                result_shape = (
-                    Shape.scalar()
-                    if operand_type.rank == 1
-                    else Shape.vector(operand_type.shape.extents[1])
-                )
+                result_shape = Shape(operand_type.shape.extents[1:])
                 return TypeInfo(operand_type.atom_type, result_shape)
             raise LoweringError(
                 "cannot infer the result type of this adverb-derived verb"
@@ -1004,13 +1031,23 @@ def infer_type(
             }:
                 raise LoweringError("conjugate requires a numeric operand")
             return operand_type
-        if spelling in {"-", "*:", "+:"}:
+        if spelling in {"-", "*:"}:
             if operand_type.atom_type not in {
                 AtomType.INTEGER,
                 AtomType.REAL,
                 AtomType.COMPLEX,
             }:
                 raise LoweringError(f"monadic {spelling!r} requires a numeric operand")
+            return operand_type
+        if spelling == "+:":
+            if operand_type.atom_type is AtomType.LOGICAL:
+                return TypeInfo(AtomType.INTEGER, operand_type.shape)
+            if operand_type.atom_type not in {
+                AtomType.INTEGER,
+                AtomType.REAL,
+                AtomType.COMPLEX,
+            }:
+                raise LoweringError("monadic '+:' requires a numeric operand")
             return operand_type
         if spelling in {"<:", ">:"}:
             if operand_type.atom_type not in {AtomType.INTEGER, AtomType.REAL}:
@@ -1171,6 +1208,34 @@ def infer_type(
             if isinstance(expression.verb, RankApplication)
             else None
         )
+        if rank_values == (1, 0) and ranked_spelling == "*":
+            left_type = infer_type(
+                expression.left, names, name_transform, named_verbs=named_verbs
+            )
+            right_type = infer_type(
+                expression.right, names, name_transform, named_verbs=named_verbs
+            )
+            if left_type.rank != 2 or right_type.rank != 2:
+                raise LoweringError(
+                    "rank 1 0 multiplication currently requires two matrices"
+                )
+            left_rows, left_columns = left_type.shape.extents
+            right_rows, right_columns = right_type.shape.extents
+            if (
+                isinstance(left_rows, int)
+                and isinstance(right_rows, int)
+                and left_rows != right_rows
+            ):
+                raise LoweringError("ranked multiplication frame mismatch")
+            atom_type = (
+                AtomType.REAL
+                if AtomType.REAL in {left_type.atom_type, right_type.atom_type}
+                else AtomType.INTEGER
+            )
+            rows = left_rows if left_rows is not None else right_rows
+            return TypeInfo(
+                atom_type, Shape((rows, right_columns, left_columns))
+            )
         if rank_values in {(1,), (0, 1)} and ranked_spelling in {"+", "-", "*"}:
             left_type = infer_type(
                 expression.left, names, name_transform, named_verbs=named_verbs
@@ -1250,9 +1315,9 @@ def infer_type(
                     name_transform,
                     named_verbs=named_verbs,
                 )
-                if source_type.rank != 1:
+                if source_type.rank not in {1, 2, 3}:
                     raise LoweringError(
-                        "computed-index amendment currently requires a vector source"
+                        "computed-index amendment currently requires an array source"
                     )
                 if (
                     selector_type.atom_type is not AtomType.INTEGER
@@ -1268,10 +1333,11 @@ def infer_type(
                     raise LoweringError(
                         "amendment replacement and source atom types differ"
                     )
-                if (
-                    not replacement_type.is_scalar
-                    and replacement_type.shape != selector_type.shape
-                ):
+                selected_shape = Shape(
+                    (() if selector_type.is_scalar else selector_type.shape.extents)
+                    + source_type.shape.extents[1:]
+                )
+                if not replacement_type.is_scalar and replacement_type.shape != selected_shape:
                     raise LoweringError(
                         "computed-index amendment replacement must be scalar or conforming"
                     )
@@ -1499,7 +1565,7 @@ def infer_type(
                 ),
             )
         table = table_spelling(expression.verb)
-        if table in {"+", "-", "*", "^", "=", "<"}:
+        if table in {"+", "-", "*", "^", "=", "~:", "<", "<:", ">", ">:"}:
             left_type = infer_type(
                 expression.left, names, name_transform, named_verbs=named_verbs
             )
@@ -1509,6 +1575,8 @@ def infer_type(
             if table == "*":
                 allowed_types = {AtomType.INTEGER, AtomType.REAL, AtomType.LOGICAL}
             elif table == "-":
+                allowed_types = {AtomType.INTEGER, AtomType.REAL}
+            elif table in {"=", "~:", "<", "<:", ">", ">:"}:
                 allowed_types = {AtomType.INTEGER, AtomType.REAL}
             else:
                 allowed_types = {AtomType.INTEGER}
@@ -1529,7 +1597,7 @@ def infer_type(
                     )
             atom_type = (
                 AtomType.LOGICAL
-                if table in {"=", "<"}
+                if table in {"=", "~:", "<", "<:", ">", ">:"}
                 else (
                     AtomType.REAL
                     if AtomType.REAL
@@ -1583,13 +1651,18 @@ def infer_type(
             if (
                 left_type.atom_type is not AtomType.INTEGER
                 or left_type.rank not in {0, 1}
-                or right_type.rank != 1
+                or right_type.rank not in {1, 2, 3}
             ):
                 raise LoweringError(
                     "computed selection currently requires an integer scalar or "
-                    "vector index and a vector argument"
+                    "vector index and an array argument"
                 )
-            result_shape = Shape.scalar() if left_type.is_scalar else left_type.shape
+            result_shape = Shape(
+                (
+                    () if left_type.is_scalar else left_type.shape.extents
+                )
+                + right_type.shape.extents[1:]
+            )
             return TypeInfo(right_type.atom_type, result_shape)
         if spelling == "$":
             extents = constant_shape_extents(
@@ -1911,6 +1984,13 @@ def infer_type(
                 or right_type.atom_type is not AtomType.LOGICAL
             ):
                 raise LoweringError("Boolean operation requires logical operands")
+            return TypeInfo(AtomType.LOGICAL, shape)
+        if spelling in {"*:", "+:"}:
+            if (
+                left_type.atom_type is not AtomType.LOGICAL
+                or right_type.atom_type is not AtomType.LOGICAL
+            ):
+                raise LoweringError("Boolean NAND and NOR require logical operands")
             return TypeInfo(AtomType.LOGICAL, shape)
         if spelling == "#":
             if (
@@ -2634,6 +2714,29 @@ def render_fortran_expression(
             names=names,
             named_verbs=named_verbs,
         )
+    if isinstance(bare_expression, DyadicApply) and names is not None:
+        spelling = primitive_spelling(bare_expression.verb)
+        if spelling in {"*:", "+:"}:
+            infer_type(
+                bare_expression,
+                names,
+                name_transform,
+                named_verbs=named_verbs,
+            )
+            left = render_fortran_expression(
+                bare_expression.left,
+                name_transform,
+                names=names,
+                named_verbs=named_verbs,
+            )
+            right = render_fortran_expression(
+                bare_expression.right,
+                name_transform,
+                names=names,
+                named_verbs=named_verbs,
+            )
+            operator = ".and." if spelling == "*:" else ".or."
+            return f".not. ({left} {operator} {right})"
     if (
         isinstance(bare_expression, DyadicApply)
         and file_write_mode(bare_expression.verb) is not None
@@ -2723,6 +2826,26 @@ def render_fortran_expression(
     ):
         rank_values = _rank_values(bare_expression.verb)
         spelling = primitive_spelling(bare_expression.verb.operand)
+        if rank_values == (1, 0) and spelling == "*":
+            infer_type(
+                bare_expression, names, name_transform, named_verbs=named_verbs
+            )
+            left = render_fortran_expression(
+                bare_expression.left,
+                name_transform,
+                names=names,
+                named_verbs=named_verbs,
+            )
+            right = render_fortran_expression(
+                bare_expression.right,
+                name_transform,
+                names=names,
+                named_verbs=named_verbs,
+            )
+            return (
+                f"spread({left}, dim=2, ncopies=size({right}, 2)) * "
+                f"spread({right}, dim=3, ncopies=size({left}, 2))"
+            )
         if rank_values in {(1,), (0, 1)} and spelling in {"+", "-", "*"}:
             infer_type(
                 bare_expression, names, name_transform, named_verbs=named_verbs
@@ -2916,6 +3039,28 @@ def render_fortran_expression(
                 "*.": "all",
             }[ranked_reduction]
             return f"{intrinsic}({operand}, dim={operand_type.rank})"
+        ranked_slice = ranked_slice_spelling(bare_expression.verb)
+        if ranked_slice is not None:
+            operand_type = infer_type(
+                bare_expression.operand,
+                names,
+                name_transform,
+                named_verbs=named_verbs,
+            )
+            operand = render_fortran_expression(
+                bare_expression.operand,
+                name_transform,
+                names=names,
+                named_verbs=named_verbs,
+            )
+            axes = [":" for _ in range(operand_type.rank)]
+            axis = operand_type.rank
+            axes[-1] = (
+                "2:"
+                if ranked_slice == "}."
+                else f":size({operand}, {axis}) - 1"
+            )
+            return f"{operand}({', '.join(axes)})"
         if isinstance(bare_expression.verb, AdverbApplication):
             reduction = primitive_spelling(bare_expression.verb.operand)
             if bare_expression.verb.adverb == "/" and reduction == "+":
@@ -2991,7 +3136,7 @@ def render_fortran_expression(
                 f"spread({exponents}, dim=2, ncopies=size({base_size_source}))"
             )
         table = table_spelling(bare_expression.verb)
-        if table in {"+", "-", "*", "=", "<"}:
+        if table in {"+", "-", "*", "=", "~:", "<", "<:", ">", ">:"}:
             infer_type(
                 bare_expression,
                 names,
@@ -3034,7 +3179,17 @@ def render_fortran_expression(
                 left = f"merge(1, 0, {left})"
             if right_type.atom_type is AtomType.LOGICAL:
                 right = f"merge(1, 0, {right})"
-            operator = {"+": "+", "-": "-", "*": "*", "=": "==", "<": "<"}[table]
+            operator = {
+                "+": "+",
+                "-": "-",
+                "*": "*",
+                "=": "==",
+                "~:": "/=",
+                "<": "<",
+                "<:": "<=",
+                ">": ">",
+                ">:": ">=",
+            }[table]
             return (
                 f"spread({left}, dim=2, ncopies=size({right})) {operator} "
                 f"spread({right}, dim=1, ncopies=size({left}))"
@@ -3047,6 +3202,28 @@ def render_fortran_expression(
             named_verbs=named_verbs,
         )
         spelling = primitive_spelling(bare_expression.verb)
+        if spelling == "-.":
+            operand = render_fortran_expression(
+                bare_expression.operand,
+                name_transform,
+                names=names,
+                named_verbs=named_verbs,
+            )
+            if isinstance(ungroup(bare_expression.operand), DyadicApply):
+                operand = f"({operand})"
+            return f".not. {operand}"
+        if spelling == "+:":
+            operand = render_fortran_expression(
+                bare_expression.operand,
+                name_transform,
+                names=names,
+                named_verbs=named_verbs,
+            )
+            if operand_type.atom_type is AtomType.LOGICAL:
+                operand = f"merge(1, 0, {operand})"
+            elif isinstance(ungroup(bare_expression.operand), DyadicApply):
+                operand = f"({operand})"
+            return f"2 * {operand}"
         if spelling in {"+", "-", "|"} and not (
             spelling == "+" and operand_type.atom_type is AtomType.COMPLEX
         ):
@@ -3489,7 +3666,7 @@ def render_fortran_expression(
         if (
             index_type.atom_type is AtomType.INTEGER
             and index_type.rank in {0, 1}
-            and source_type.rank == 1
+            and source_type.rank in {1, 2, 3}
         ):
             indices = render_fortran_expression(
                 computed_selection[0],
@@ -3503,7 +3680,11 @@ def render_fortran_expression(
                 names=names,
                 named_verbs=named_verbs,
             )
-            return f"{source}({indices} + 1)"
+            trailing = ", ".join(":" for _ in range(source_type.rank - 1))
+            subscript = f"{indices} + 1"
+            if trailing:
+                subscript += f", {trailing}"
+            return f"{source}({subscript})"
     reshaped = dyad(expression, "$")
     if reshaped is not None and names is not None:
         extents = constant_shape_extents(
@@ -3881,6 +4062,12 @@ def render_fortran_amendment(
         source, prior_updates = nested
     if isinstance(amendment, IndexedAmendment):
         infer_type(expression, names, name_transform, named_verbs=named_verbs)
+        source_type = infer_type(
+            amendment.source,
+            names,
+            name_transform,
+            named_verbs=named_verbs,
+        )
         selector = render_fortran_expression(
             amendment.selector,
             name_transform,
@@ -3893,7 +4080,11 @@ def render_fortran_amendment(
             names=names,
             named_verbs=named_verbs,
         )
-        update = f"{target}({selector} + 1) = {replacement}"
+        trailing = ", ".join(":" for _ in range(source_type.rank - 1))
+        subscript = f"{selector} + 1"
+        if trailing:
+            subscript += f", {trailing}"
+        update = f"{target}({subscript}) = {replacement}"
         return source, (*prior_updates, update)
     if isinstance(amendment, MaskAmendment):
         infer_type(expression, names, name_transform, named_verbs=named_verbs)

@@ -198,6 +198,11 @@ class ExpressionParser:
                 continue
             if modifier.value == '"':
                 self._take()
+                parenthesized = (
+                    self.index < len(self.tokens)
+                    and self._peek().kind is TokenKind.LPAREN
+                )
+                opening = self._take() if parenthesized else None
                 if self.index >= len(self.tokens) or self._peek().kind is not TokenKind.NUMBER:
                     raise ExpressionParseError("rank conjunction requires a numeric rank", modifier)
                 rank_tokens = []
@@ -206,6 +211,15 @@ class ExpressionParser:
                     and self._peek().kind is TokenKind.NUMBER
                 ):
                     rank_tokens.append(self._take())
+                if parenthesized:
+                    if (
+                        self.index >= len(self.tokens)
+                        or self._peek().kind is not TokenKind.RPAREN
+                    ):
+                        raise ExpressionParseError(
+                            "unclosed parenthesized rank", opening
+                        )
+                    self._take()
                 rank_items = tuple(
                     NumberLiteral(token.value, _token_span(token))
                     for token in rank_tokens

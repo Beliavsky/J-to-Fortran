@@ -1792,6 +1792,35 @@ def test_constant_selection_rejects_out_of_bounds_index() -> None:
 
 
 @pytest.mark.parametrize(
+    ("source", "expected_type", "expected_fortran"),
+    [
+        (
+            "row { matrix",
+            TypeInfo(AtomType.REAL, Shape.vector(4)),
+            "matrix(row + 1, :)",
+        ),
+        (
+            "rows { matrix",
+            TypeInfo(AtomType.REAL, Shape.matrix(2, 4)),
+            "matrix(rows + 1, :)",
+        ),
+    ],
+)
+def test_computed_leading_axis_selection_supports_matrices(
+    source: str, expected_type: TypeInfo, expected_fortran: str
+) -> None:
+    expression = parse_expression(source)
+    names = {
+        "row": TypeInfo(AtomType.INTEGER),
+        "rows": TypeInfo(AtomType.INTEGER, Shape.vector(2)),
+        "matrix": TypeInfo(AtomType.REAL, Shape.matrix(3, 4)),
+    }
+
+    assert infer_type(expression, names) == expected_type
+    assert render_fortran_expression(expression, names=names) == expected_fortran
+
+
+@pytest.mark.parametrize(
     ("source", "names", "target", "expected"),
     [
         (
@@ -1886,6 +1915,23 @@ def test_chained_computed_index_amendment_lowers_in_source_order() -> None:
     )
 
 
+def test_computed_index_amendment_replaces_a_matrix_row() -> None:
+    expression = parse_expression(
+        "new_row row} matrix", noun_names=["new_row", "row", "matrix"]
+    )
+    names = {
+        "new_row": TypeInfo(AtomType.REAL, Shape.vector(4)),
+        "row": TypeInfo(AtomType.INTEGER),
+        "matrix": TypeInfo(AtomType.REAL, Shape.matrix(3, 4)),
+    }
+
+    assert infer_type(expression, names) == names["matrix"]
+    assert render_fortran_amendment(expression, "result_j", names) == (
+        "matrix",
+        ("result_j(row + 1, :) = new_row",),
+    )
+
+
 def test_scalar_copy_count_replicates_a_scalar() -> None:
     expression = parse_expression("(# values) # 0", noun_names=["values"])
     names = {"values": TypeInfo(AtomType.REAL, Shape.vector())}
@@ -1909,6 +1955,102 @@ def test_reshape_to_shape_of_scalar_selects_first_source_item() -> None:
 
     assert infer_type(expression, names) == TypeInfo(AtomType.REAL)
     assert render_fortran_expression(expression, names=names) == "values(1)"
+
+
+def test_reshape_accepts_increment_and_tally_as_dynamic_extents() -> None:
+    expression = parse_expression("((>: rows), # values) $ 0")
+    names = {
+        "rows": TypeInfo(AtomType.INTEGER),
+        "values": TypeInfo(AtomType.REAL, Shape.vector()),
+    }
+
+    assert infer_type(expression, names) == TypeInfo(
+        AtomType.INTEGER, Shape.matrix("rows + 1", "size(values, 1)")
+    )
+    assert render_fortran_expression(expression, names=names) == (
+        "reshape([0], [rows + 1, size(values, 1)], pad=[0], order=[2, 1])"
+    )
+
+
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    [
+        ('}."1 matrix', "matrix(:, 2:)"),
+        ('}:"(1) matrix', "matrix(:, :size(matrix, 2) - 1)"),
+    ],
+)
+def test_rank_one_behead_and_curtail_slice_trailing_axis(
+    source: str, expected: str
+) -> None:
+    expression = parse_expression(source)
+    names = {"matrix": TypeInfo(AtomType.REAL, Shape.matrix(3, 4))}
+
+    assert infer_type(expression, names) == TypeInfo(
+        AtomType.REAL, Shape.matrix(3, 3)
+    )
+    assert render_fortran_expression(expression, names=names) == expected
+
+
+def test_rank_one_zero_matrix_multiplication_creates_rank_three_array() -> None:
+    expression = parse_expression('points *"(1 0) weights')
+    names = {
+        "points": TypeInfo(AtomType.REAL, Shape.matrix(4, 3)),
+        "weights": TypeInfo(AtomType.REAL, Shape.matrix(4, 10)),
+    }
+
+    assert infer_type(expression, names) == TypeInfo(
+        AtomType.REAL, Shape((4, 10, 3))
+    )
+    assert render_fortran_expression(expression, names=names) == (
+        "spread(points, dim=2, ncopies=size(weights, 2)) * "
+        "spread(weights, dim=3, ncopies=size(points, 2))"
+    )
+
+
+def test_reduction_of_rank_three_array_reduces_leading_axis() -> None:
+    expression = parse_expression("+/ values")
+    names = {"values": TypeInfo(AtomType.REAL, Shape((4, 10, 3)))}
+
+    assert infer_type(expression, names) == TypeInfo(
+        AtomType.REAL, Shape.matrix(10, 3)
+    )
+    assert render_fortran_expression(expression, names=names) == (
+        "sum(values, dim=1)"
+    )
+
+
+def test_comparison_table_and_boolean_double_lower_elementally() -> None:
+    expression = parse_expression("+: values <:/ values")
+    names = {"values": TypeInfo(AtomType.REAL, Shape.vector(4))}
+
+    assert infer_type(expression, names) == TypeInfo(
+        AtomType.INTEGER, Shape.matrix(4, 4)
+    )
+    assert render_fortran_expression(expression, names=names) == (
+        "2 * merge(1, 0, "
+        "spread(values, dim=2, ncopies=size(values)) <= "
+        "spread(values, dim=1, ncopies=size(values)))"
+    )
+
+
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    [
+        ("left +: right", ".not. (left .or. right)"),
+        ("left *: right", ".not. (left .and. right)"),
+    ],
+)
+def test_boolean_nor_and_nand_lower_to_negated_operations(
+    source: str, expected: str
+) -> None:
+    expression = parse_expression(source)
+    names = {
+        "left": TypeInfo(AtomType.LOGICAL),
+        "right": TypeInfo(AtomType.LOGICAL),
+    }
+
+    assert infer_type(expression, names) == TypeInfo(AtomType.LOGICAL)
+    assert render_fortran_expression(expression, names=names) == expected
 
 
 def test_left_bond_of_named_dyad_lowers_to_two_argument_call() -> None:

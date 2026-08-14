@@ -204,15 +204,19 @@ The parser currently recognizes:
 - tally, scalar/vector/rank-2 ravel, vector catenate, and equal-length vector
   laminate;
 - constant in-bounds vector take/drop, plus head, tail, behead, and curtail;
+- rank-1 behead and curtail on trailing array cells, including parenthesized
+  rank syntax such as `}:"(1)`;
 - vector reverse and constant rotate, plus rank-2 transpose;
 - integer-vector grade up and ascending or descending sort;
 - stable integer nub, membership, and zero-based index-of;
 - zero-based indices of true items with monadic `I.` on logical vectors;
 - vector sum, product, minimum, maximum, Boolean-any, and Boolean-all reductions;
 - integer prefix sum/product and fixed-width infix sum/subtraction scans;
-- leading-axis and rank-1 matrix reductions plus integer arithmetic tables;
+- leading-axis reductions through rank 3, rank-1 matrix reductions, comparison
+  tables, and integer arithmetic tables;
 - constant multidimensional `{` selection through rank 3: scalar coordinates,
   leading-axis rows, independent vector selectors, negative indices, and slices;
+- computed scalar or vector leading-axis selection and amendment through rank 3;
 - noun-derived `}` amendment with constant, computed, or `I.` Boolean indices,
   including chained amendments lowered to ordered Fortran assignments;
 - zero-row integer matrix construction such as `0 3 $ 0`;

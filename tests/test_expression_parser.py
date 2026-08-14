@@ -223,6 +223,15 @@ def test_rank_conjunction_derives_a_verb() -> None:
     assert expression.verb.rank.text == "1"
 
 
+def test_parenthesized_rank_conjunction_derives_a_verb() -> None:
+    expression = parse_expression('}:"(1) matrix')
+
+    assert isinstance(expression, MonadicApply)
+    assert isinstance(expression.verb, RankApplication)
+    assert primitive(expression.verb) == "}:"
+    assert expression.verb.rank.text == "1"
+
+
 def test_dyadic_rank_vector_is_preserved() -> None:
     expression = parse_expression('weights *"0 1 matrix')
 
