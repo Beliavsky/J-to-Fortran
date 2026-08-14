@@ -178,6 +178,11 @@ square =: monad define
 add =: dyad : 'x + y'
 ```
 
+Rank decoration on a multiline header, such as `3 : 0 \" 1`, is accepted;
+the required dummy rank is inferred from calls and operations in the body. The
+common `(1&$:) : (dyad define)` form becomes a Fortran generic containing the
+explicit dyad and a monadic wrapper that supplies the fixed left argument.
+
 The corresponding Fortran procedure has two dummy arguments:
 
 ```fortran
@@ -241,6 +246,25 @@ convention. A candidate must have a fixed type and shape, use only constant
 operations, and depend only on earlier inferred constants. Random generation,
 file I/O, translated procedure calls, amendments, and dynamic shapes remain
 executable assignments.
+
+## Dependencies, Data Blocks, and Noncomputational Directives
+
+`transpile_path` follows directly quoted `.ijs` targets in `load` and
+`require`. An absolute path is used when it exists; placeholder paths such as
+`/your_path/helpers.ijs` are resolved by basename near the loading script and
+its parent directories. Dependencies are included once to prevent cycles.
+Addon names and unresolved files are retained as generated comments, so a
+later reference to a missing verb still produces an explicit inference error.
+
+Rectangular numeric data written with `\". ;. _2 ] 0 : 0 ... )` is converted
+to a constant reshape expression. Ragged or nonnumeric blocks are rejected.
+Visualization directives beginning with `plot` or `pd` are intentionally
+omitted and identified in comments because they do not affect the translated
+numerical result.
+
+At top level, a call to a verb defined by the translated source is evaluated
+even when its result is discarded. The generated main program assigns that
+result to a clearly named temporary, preserving calls made for side effects.
 
 ## Text File Output
 

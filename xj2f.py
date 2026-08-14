@@ -423,12 +423,18 @@ class Parser:
     _verb_start = re.compile(
         r"^(?P<name>[A-Za-z][A-Za-z0-9_]*)\s*=:\s*"
         r"(?:(?P<code>[34])\s*:\s*0|(?P<legacy>monad|dyad)\s+define)"
+        r"(?:\s*\"\s*_?\d+(?:\s+_?\d+)*)?"
         r"(?:\s+NB\..*)?$"
     )
     _one_line_legacy_verb = re.compile(
         r"^(?P<name>[A-Za-z][A-Za-z0-9_]*)\s*=:\s*"
         r"(?P<kind>monad|dyad)\s*:\s*"
         r"'(?P<body>(?:''|[^'])*)'\s*(?:NB\..*)?$"
+    )
+    _ambivalent_dyad_start = re.compile(
+        r"^(?P<name>[A-Za-z][A-Za-z0-9_]*)\s*=:\s*"
+        r"\(\s*(?P<noun>_?\d+)\s*&\s*\$:\s*\)\s*:\s*"
+        r"\(\s*dyad\s+define\s*\)\s*$"
     )
     _assignment = re.compile(
         r"^([A-Za-z][A-Za-z0-9_]*)\s*(=[:.])\s*(.*?)\s*$"
@@ -446,6 +452,13 @@ class Parser:
     _elseif = re.compile(r"^elseif\.\s+(.+?)\s+do\.\s*$")
     _select = re.compile(r"^select\.\s+(.+?)\s*$")
     _case = re.compile(r"^case\.\s*(.*?)\s+do\.\s*$")
+    _dependency_directive = re.compile(r"^(?P<command>load|require)\s*(?P<target>.+)$")
+    _numeric_block_start = re.compile(
+        r"^(?P<name>[A-Za-z][A-Za-z0-9_]*)\s*(?P<copula>=[:.])\s*"
+        r'"\.\s*;\.\s*_2\s*\]\s*0\s*:\s*0\s*$'
+    )
+    _visual_directive = re.compile(r"^(?:pd|plot)\b.*$")
+    _separator = re.compile(r"^(?:[-=]\s*){8,}$")
 
     def __init__(self, source_path: Path, text: str):
         self.source_path = source_path
@@ -460,6 +473,31 @@ class Parser:
             text = line.text.strip()
             if text.startswith("NB."):
                 items.append(CommentStatement(line, text[3:].lstrip()))
+                self.index += 1
+                continue
+            dependency = self._dependency_directive.fullmatch(text)
+            if dependency:
+                items.append(
+                    CommentStatement(
+                        line,
+                        f"J {dependency.group('command')} directive omitted; dependency: "
+                        f"{dependency.group('target').strip()}",
+                    )
+                )
+                self.index += 1
+                continue
+            numeric_block = self._numeric_block_start.fullmatch(text)
+            if numeric_block:
+                items.append(self._parse_numeric_block(line, numeric_block))
+                continue
+            if self._visual_directive.fullmatch(text):
+                items.append(
+                    CommentStatement(line, f"J visualization omitted: {text}")
+                )
+                self.index += 1
+                continue
+            if self._separator.fullmatch(text):
+                items.append(CommentStatement(line, text))
                 self.index += 1
                 continue
             verb = self._verb_start.fullmatch(text)
@@ -503,6 +541,38 @@ class Parser:
                 arguments = ("y",) if code == "3" else ("x", "y")
                 items.append(
                     VerbDefinition(line, verb.group("name"), arguments, tuple(body))
+                )
+                continue
+            ambivalent_dyad = self._ambivalent_dyad_start.fullmatch(text)
+            if ambivalent_dyad:
+                self.index += 1
+                dyadic_body = self._parse_statements({")"})
+                self._expect(")", line, "ambivalent dyadic definition")
+                generic_name = ambivalent_dyad.group("name")
+                dyadic_name = generic_name + "_dyad"
+                items.extend(
+                    [
+                        VerbDefinition(
+                            line,
+                            dyadic_name,
+                            ("x", "y"),
+                            tuple(dyadic_body),
+                            generic_name,
+                        ),
+                        VerbDefinition(
+                            line,
+                            generic_name + "_monad",
+                            ("y",),
+                            (
+                                ExpressionStatement(
+                                    line,
+                                    f"{ambivalent_dyad.group('noun')} "
+                                    f"{generic_name} y",
+                                ),
+                            ),
+                            generic_name,
+                        ),
+                    ]
                 )
                 continue
             one_line_verb = self._one_line_legacy_verb.fullmatch(text)
@@ -587,12 +657,12 @@ class Parser:
                 )
                 self.index += 1
                 continue
-            output = re.fullmatch(r"(?:echo|smoutput)\s+(.+)", text)
+            output = re.fullmatch(r"(?:echo|smoutput|print)\s+(.+)", text)
             if output:
                 items.append(EchoStatement(line, output.group(1)))
                 self.index += 1
                 continue
-            if text in {"echo", "smoutput"}:
+            if text in {"echo", "smoutput", "print"}:
                 raise _error_at(ParseError, line, f"{text} requires an expression")
             if text.startswith("exit "):
                 items.append(ExitStatement(line, text[5:].strip()))
@@ -603,6 +673,49 @@ class Parser:
             items.append(ExpressionStatement(line, expression))
             self.index += 1
         return Program(self.source_path, tuple(items))
+
+    def _parse_numeric_block(self, line: SourceLine, match: re.Match[str]) -> Assign:
+        """Lower J's numeric `0 : 0` text conversion idiom to reshape."""
+
+        self.index += 1
+        rows: list[list[str]] = []
+        while self.index < len(self.lines):
+            data_line = self.lines[self.index]
+            text = data_line.text.strip()
+            if text == ")":
+                self.index += 1
+                break
+            values = text.split()
+            if not values:
+                self.index += 1
+                continue
+            if any(
+                re.fullmatch(
+                    r"_?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE]_?\d+)?|_|_\.",
+                    value,
+                )
+                is None
+                for value in values
+            ):
+                raise _error_at(
+                    ParseError, data_line, "numeric 0 : 0 block contains nonnumeric data"
+                )
+            rows.append(values)
+            self.index += 1
+        else:
+            raise _error_at(ParseError, line, "unterminated numeric 0 : 0 block")
+        if not rows:
+            raise _error_at(ParseError, line, "numeric 0 : 0 block is empty")
+        columns = len(rows[0])
+        if any(len(row) != columns for row in rows):
+            raise _error_at(ParseError, line, "numeric 0 : 0 block has ragged rows")
+        values = " ".join(value for row in rows for value in row)
+        return Assign(
+            line,
+            match.group("name"),
+            match.group("copula"),
+            f"{len(rows)} {columns} $ {values}",
+        )
 
     @staticmethod
     def _remove_immediately_shadowed_definition(
@@ -4660,6 +4773,57 @@ def _lower_top_level_file_operations(program: Program) -> Program:
     return dataclasses.replace(program, items=tuple(items))
 
 
+def _lower_known_top_level_invocations(program: Program) -> Program:
+    """Materialize discarded results of calls to verbs defined by the script."""
+
+    known_verbs = {
+        item.generic_name or item.name
+        for item in program.items
+        if isinstance(item, VerbDefinition)
+    }
+    known_verbs.update(
+        item.name for item in program.items if isinstance(item, TacitVerbDefinition)
+    )
+    noun_names = {item.name for item in program.items if isinstance(item, Assign)}
+    existing_names = set(noun_names) | known_verbs
+    items: list[TopLevel] = []
+    call_index = 0
+    for item in program.items:
+        if not isinstance(item, ExpressionStatement):
+            items.append(item)
+            continue
+        try:
+            expression = ungroup(
+                parse_expression(item.expression, noun_names=noun_names)
+            )
+        except (LexerError, ExpressionParseError):
+            items.append(item)
+            continue
+        if isinstance(expression, MonadicApply) and isinstance(
+            expression.verb, NamedVerb
+        ):
+            called_verb = expression.verb.identifier
+        elif isinstance(expression, DyadicApply) and isinstance(
+            expression.verb, NamedVerb
+        ):
+            called_verb = expression.verb.identifier
+        else:
+            items.append(item)
+            continue
+        if called_verb not in known_verbs:
+            items.append(item)
+            continue
+        while True:
+            call_index += 1
+            name = f"j_discarded_result_{call_index}"
+            if name not in existing_names:
+                break
+        existing_names.add(name)
+        noun_names.add(name)
+        items.append(Assign(item.line, name, "=.", item.expression))
+    return dataclasses.replace(program, items=tuple(items))
+
+
 def _expand_top_level_boxed_match(program: Program) -> Program:
     """Decompose a final boxed result match into independently typed matches."""
 
@@ -5444,6 +5608,7 @@ def emit_fortran(
             internal_procedures=internal_procedures,
         )
     program = _lower_top_level_file_operations(program)
+    program = _lower_known_top_level_invocations(program)
     top_expressions = [
         item for item in program.items if isinstance(item, ExpressionStatement)
     ]
@@ -6094,12 +6259,9 @@ def transpile_path(
     internal_procedures: bool = False,
     parameterize_constants: bool = False,
 ) -> str:
-    try:
-        text = input_path.read_text(encoding="utf-8")
-    except OSError as exc:
-        raise J2FError(f"cannot read {input_path}: {exc}") from exc
+    program = _parse_path_with_local_dependencies(input_path)
     return emit_fortran(
-        parse_j_source(input_path, text),
+        program,
         runtime=runtime,
         source_comments=source_comments,
         function_result_style=function_result_style,
@@ -6107,6 +6269,83 @@ def transpile_path(
         internal_procedures=internal_procedures,
         parameterize_constants=parameterize_constants,
     )
+
+
+def _local_dependency_path(source_path: Path, target: str) -> Path | None:
+    """Find a directly named `.ijs` dependency near the loading script."""
+
+    normalized = target.replace("\\", "/")
+    if not normalized.lower().endswith(".ijs"):
+        return None
+    requested = Path(normalized)
+    if requested.is_absolute() and requested.is_file():
+        return requested.resolve()
+    basename = requested.name
+    source_path = source_path.resolve()
+    search_directories = [source_path.parent, *source_path.parents[1:]]
+    workspace = Path.cwd().resolve()
+    for directory in search_directories:
+        candidate = directory / basename
+        if candidate.is_file():
+            return candidate.resolve()
+        if directory == workspace:
+            break
+    return None
+
+
+def _parse_path_with_local_dependencies(
+    input_path: Path, seen: set[Path] | None = None
+) -> Program:
+    """Parse a J script and splice in resolvable local load dependencies."""
+
+    resolved_path = input_path.resolve()
+    visited = seen if seen is not None else set()
+    if resolved_path in visited:
+        return Program(input_path, ())
+    visited.add(resolved_path)
+    try:
+        text = input_path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise J2FError(f"cannot read {input_path}: {exc}") from exc
+    program = parse_j_source(input_path, text)
+    physical_lines = text.splitlines()
+    expanded: list[TopLevel] = []
+    for item in program.items:
+        if not (
+            isinstance(item, CommentStatement)
+            and item.text.startswith("J ")
+            and " directive omitted; dependency: " in item.text
+            and 1 <= item.line.number <= len(physical_lines)
+        ):
+            expanded.append(item)
+            continue
+        directive_text = physical_lines[item.line.number - 1].strip()
+        directive = Parser._dependency_directive.fullmatch(directive_text)
+        target_match = (
+            re.fullmatch(r"'(?P<target>(?:''|[^'])*)'", directive.group("target").strip())
+            if directive is not None
+            else None
+        )
+        dependency_path = (
+            _local_dependency_path(
+                input_path, target_match.group("target").replace("''", "'")
+            )
+            if target_match is not None
+            else None
+        )
+        if dependency_path is None:
+            expanded.append(item)
+            continue
+        expanded.append(
+            CommentStatement(
+                item.line,
+                f"J {directive.group('command')} dependency translated from "
+                f"{dependency_path.name}",
+            )
+        )
+        dependency = _parse_path_with_local_dependencies(dependency_path, visited)
+        expanded.extend(dependency.items)
+    return Program(input_path, tuple(expanded))
 
 
 def expression_ast_report(program: Program) -> dict[str, object]:

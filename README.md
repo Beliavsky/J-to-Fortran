@@ -179,6 +179,8 @@ The parser currently recognizes:
 - monadic and dyadic explicit verb definitions using `3 : 0` and `4 : 0`,
   including the legacy `monad define`, `dyad define`, `monad : '...'`, and
   `dyad : '...'` spellings;
+- ranked explicit headers such as `3 : 0 \" 1` and the common
+  `(1&$:) : (dyad define)` default-monad form;
 - local and global copulas as syntax (`=.` and `=:`), with local assignments
   supported inside translated verbs;
 - homogeneous multiple assignment such as `'a b' =. y`, lowered to selections
@@ -192,6 +194,7 @@ The parser currently recognizes:
 - integer iota `i.` with a scalar bound or constant shape vector through rank 3,
   lowered through a pure helper;
 - monadic shape and constant-shape reshape through rank 3, including cyclic fill;
+- rectangular numeric `\". ;. _2 ] 0 : 0 ... )` data blocks;
 - tally, rank-2 ravel, vector catenate, and equal-length vector laminate;
 - constant in-bounds vector take/drop, plus head, tail, behead, and curtail;
 - vector reverse and constant rotate, plus rank-2 transpose;
@@ -223,6 +226,11 @@ The parser currently recognizes:
 - pure recursive scalar integer explicit verbs;
 - integer-vector dummy-rank inference from call sites, homogeneous
   destructuring, and constant argument indexing;
+- local `.ijs` dependencies named by `load` or `require`, resolved near the
+  loading script; unresolved addons are documented in generated comments;
+- calls to locally translated verbs used only for their effects, with their
+  otherwise unused results materialized in generated variables;
+- explicitly omitted `plot` and `pd` visualization directives;
 - dyadic reflex, integer-noun bond, monadic `@:` composition, and monadic forks;
 - sum-product inner products lowered to `dot_product` and `matmul`;
 - direct determinants of statically known 2 by 2 matrices;

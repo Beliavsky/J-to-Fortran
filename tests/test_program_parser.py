@@ -2156,6 +2156,107 @@ smoutput classify 1
         xj2f.emit_fortran(xj2f.parse_j_source(Path("partial_select.ijs"), source))
 
 
+def test_ranked_legacy_explicit_header_is_recognized() -> None:
+    source = """total =: 3 : 0 \" 1 NB. apply to vectors
+  +/ y
+)
+values =: 1 2 3
+smoutput total values
+"""
+    generated = xj2f.emit_fortran(
+        xj2f.parse_j_source(Path("ranked_header.ijs"), source)
+    )
+
+    assert "pure function total(y) result(j_result)" in generated
+    assert "integer, intent(in) :: y(:)" in generated
+    assert "j_result = sum(y)" in generated
+
+
+def test_numeric_zero_colon_zero_block_becomes_a_reshape() -> None:
+    source = """matrix =: \". ;. _2 ] 0 : 0
+1 2 3
+4 5 6
+)
+smoutput matrix
+"""
+    program = xj2f.parse_j_source(Path("numeric_block.ijs"), source)
+    assignment = next(item for item in program.items if isinstance(item, xj2f.Assign))
+    generated = xj2f.emit_fortran(program)
+
+    assert assignment.expression == "2 3 $ 1 2 3 4 5 6"
+    assert "reshape([1, 2, 3, 4, 5, 6], [2, 3], order=[2, 1])" in generated
+
+
+def test_local_load_dependency_is_spliced_into_transpile_path(tmp_path: Path) -> None:
+    dependency = tmp_path / "numeric_helpers.ijs"
+    dependency.write_text("square =: monad : '*: y'\n", encoding="utf-8")
+    source = tmp_path / "main.ijs"
+    source.write_text(
+        "load '/placeholder/numeric_helpers.ijs'\nsmoutput square 5\n",
+        encoding="utf-8",
+    )
+
+    generated = xj2f.transpile_path(source)
+
+    assert "J load dependency translated from numeric_helpers.ijs" in generated
+    assert "function square(y) result(j_result)" in generated
+    assert 'write (*,"(i0)") square(5)' in generated
+
+
+def test_unresolved_addon_and_visualization_directives_are_documented() -> None:
+    source = """require 'plot'
+pd 'reset'
+plot 1 2 3
+value =: 4
+smoutput value
+"""
+    generated = xj2f.emit_fortran(
+        xj2f.parse_j_source(Path("visualization.ijs"), source)
+    )
+
+    assert "! J require directive omitted; dependency: 'plot'" in generated
+    assert "! J visualization omitted: pd 'reset'" in generated
+    assert "! J visualization omitted: plot 1 2 3" in generated
+
+
+def test_print_is_accepted_as_a_top_level_output_verb() -> None:
+    generated = xj2f.emit_fortran(
+        xj2f.parse_j_source(Path("print_value.ijs"), "print 42\n")
+    )
+
+    assert 'write (*,"(i0)") 42' in generated
+
+
+def test_known_top_level_call_is_evaluated_with_a_discarded_result() -> None:
+    source = """square =: monad : '*: y'
+square 5
+"""
+    generated = xj2f.emit_fortran(
+        xj2f.parse_j_source(Path("discarded_call.ijs"), source)
+    )
+
+    assert "integer :: j_discarded_result_1" in generated
+    assert "j_discarded_result_1 = square(5)" in generated
+
+
+def test_recursive_default_monad_with_explicit_dyad_is_supported() -> None:
+    source = """add =: (1&$:) : (dyad define)
+  x + y
+)
+smoutput add 4
+smoutput 2 add 4
+"""
+    generated = xj2f.emit_fortran(
+        xj2f.parse_j_source(Path("default_monad.ijs"), source)
+    )
+
+    assert "module procedure add_dyad, add_monad" in generated
+    assert "j_result = x + y" in generated
+    assert "j_result = add(1, y)" in generated
+    assert 'write (*,"(i0)") add(4)' in generated
+    assert 'write (*,"(i0)") add(2, 4)' in generated
+
+
 def test_ambivalent_explicit_verb_has_two_specific_definitions() -> None:
     source = "f =: 3 : 0\n  y * y\n:\n  x + y\n)\n"
     program = xj2f.parse_j_source(Path("ambivalent.ijs"), source)
