@@ -8,6 +8,7 @@ from j2fortran.lexer import LexerError, TokenKind, tokenize
 
 
 ROOT = Path(__file__).resolve().parents[1]
+EXAMPLES = ROOT / "examples"
 
 
 def significant(source: str) -> list[tuple[TokenKind, str]]:
@@ -109,7 +110,7 @@ def test_tokens_preserve_offsets_and_line_columns() -> None:
 
 def test_both_pythagorean_examples_lex() -> None:
     for filename in ("pythag.ijs", "pythag_array.ijs"):
-        tokens = tokenize((ROOT / filename).read_text(encoding="utf-8"))
+        tokens = tokenize((EXAMPLES / filename).read_text(encoding="utf-8"))
         assert tokens[-1].kind is TokenKind.EOF
         assert any(token.value == "triples" for token in tokens)
 

@@ -11,6 +11,7 @@ import xj2f
 
 
 ROOT = Path(__file__).resolve().parents[1]
+EXAMPLES = ROOT / "examples"
 
 
 TOP_LEVEL_TEST_PROGRAM = """result =: 10 20 30
@@ -239,7 +240,7 @@ def test_j_command_reports_portable_discovery_options(
 
 @pytest.mark.parametrize("filename", ["pythag.ijs", "pythag_array.ijs"])
 def test_examples_transpile_to_standalone_fortran(filename: str) -> None:
-    generated = xj2f.transpile_path(ROOT / filename)
+    generated = xj2f.transpile_path(EXAMPLES / filename)
 
     assert "module " in generated
     assert "function triples(y) result(j_result)" in generated
@@ -514,7 +515,7 @@ def test_amendment_copies_source_then_updates_selected_section() -> None:
 
 
 def test_loop_example_preserves_control_flow() -> None:
-    generated = xj2f.transpile_path(ROOT / "pythag.ijs")
+    generated = xj2f.transpile_path(EXAMPLES / "pythag.ijs")
 
     assert "do c = 1, y" in generated
     assert "do b = 1, c - 1" in generated
@@ -524,7 +525,7 @@ def test_loop_example_preserves_control_flow() -> None:
 
 
 def test_array_example_lowers_supported_primitives() -> None:
-    generated = xj2f.transpile_path(ROOT / "pythag_array.ijs")
+    generated = xj2f.transpile_path(EXAMPLES / "pythag_array.ijs")
 
     assert "ab = j_cartesian_square(y)" in generated
     assert "a = ab(:, 1)" in generated
@@ -537,8 +538,8 @@ def test_array_example_lowers_supported_primitives() -> None:
 
 def test_external_runtime_uses_only_required_helpers() -> None:
     program = xj2f.parse_j_source(
-        ROOT / "pythag_array.ijs",
-        (ROOT / "pythag_array.ijs").read_text(encoding="utf-8"),
+        EXAMPLES / "pythag_array.ijs",
+        (EXAMPLES / "pythag_array.ijs").read_text(encoding="utf-8"),
     )
     generated = xj2f.emit_fortran(program, runtime="external")
 
@@ -550,7 +551,7 @@ def test_external_runtime_uses_only_required_helpers() -> None:
 
 
 def test_numeric_csv_statistics_workflow_supports_both_runtime_modes() -> None:
-    source = (ROOT / "price_return_stats.ijs").read_text(encoding="utf-8")
+    source = (EXAMPLES / "price_return_stats.ijs").read_text(encoding="utf-8")
     program = xj2f.parse_j_source(Path("price_return_stats.ijs"), source)
 
     embedded = xj2f.emit_fortran(program)
@@ -594,7 +595,7 @@ def test_numeric_csv_statistics_workflow_supports_both_runtime_modes() -> None:
 
 
 def test_annual_csv_statistics_workflow_supports_both_runtime_modes() -> None:
-    source = (ROOT / "price_return_stats_annual.ijs").read_text(encoding="utf-8")
+    source = (EXAMPLES / "price_return_stats_annual.ijs").read_text(encoding="utf-8")
     program = xj2f.parse_j_source(Path("price_return_stats_annual.ijs"), source)
 
     embedded = xj2f.emit_fortran(program)
@@ -622,7 +623,7 @@ def test_annual_csv_statistics_workflow_supports_both_runtime_modes() -> None:
 
 
 def test_return_mixture_workflow_supports_both_runtime_modes() -> None:
-    source = (ROOT / "fit_return_mixture.ijs").read_text(encoding="utf-8")
+    source = (EXAMPLES / "fit_return_mixture.ijs").read_text(encoding="utf-8")
     program = xj2f.parse_j_source(Path("fit_return_mixture.ijs"), source)
 
     embedded = xj2f.emit_fortran(program)
@@ -744,7 +745,7 @@ ok =: result -: expected
 
 
 def test_embedded_runtime_remains_the_default() -> None:
-    generated = xj2f.transpile_path(ROOT / "pythag_array.ijs")
+    generated = xj2f.transpile_path(EXAMPLES / "pythag_array.ijs")
 
     assert "use j2f_runtime" not in generated
     assert "pure function j_cartesian_square" in generated
@@ -752,7 +753,7 @@ def test_embedded_runtime_remains_the_default() -> None:
 
 
 def test_primes_example_lowers_top_level_arrays_and_prints_expression_directly() -> None:
-    generated = xj2f.transpile_path(ROOT / "primes.ijs")
+    generated = xj2f.transpile_path(EXAMPLES / "primes.ijs")
     main = generated.split("program primes_j", 1)[1]
 
     assert "integer, allocatable :: nums(:)" in main
@@ -765,7 +766,7 @@ def test_primes_example_lowers_top_level_arrays_and_prints_expression_directly()
     )
 
     program = xj2f.parse_j_source(
-        ROOT / "primes.ijs", (ROOT / "primes.ijs").read_text(encoding="utf-8")
+        EXAMPLES / "primes.ijs", (EXAMPLES / "primes.ijs").read_text(encoding="utf-8")
     )
     top_level = [
         item
@@ -778,7 +779,7 @@ def test_primes_example_lowers_top_level_arrays_and_prints_expression_directly()
 
 
 def test_print_only_optimization_requires_a_single_use() -> None:
-    source = (ROOT / "primes.ijs").read_text(encoding="utf-8").replace(
+    source = (EXAMPLES / "primes.ijs").read_text(encoding="utf-8").replace(
         "echo primes", "echo primes\necho primes"
     )
     program = xj2f.parse_j_source(Path("twice.ijs"), source)
@@ -791,7 +792,7 @@ def test_print_only_optimization_requires_a_single_use() -> None:
 
 @pytest.mark.parametrize("filename", ["pythag.ijs", "pythag_array.ijs"])
 def test_generated_fortran_follows_procedure_and_use_style(filename: str) -> None:
-    generated = xj2f.transpile_path(ROOT / filename)
+    generated = xj2f.transpile_path(EXAMPLES / filename)
     lines = generated.splitlines()
 
     assert "pure function triples(y) result(j_result)" in lines
@@ -801,7 +802,7 @@ def test_generated_fortran_follows_procedure_and_use_style(filename: str) -> Non
 
 
 def test_function_result_follows_arguments_and_locals_are_combined() -> None:
-    generated = xj2f.transpile_path(ROOT / "pythag.ijs")
+    generated = xj2f.transpile_path(EXAMPLES / "pythag.ijs")
     lines = generated.splitlines()
     header = lines.index("pure function triples(y) result(j_result)")
 
@@ -811,7 +812,7 @@ def test_function_result_follows_arguments_and_locals_are_combined() -> None:
 
 
 def test_array_declarations_with_one_specification_are_combined() -> None:
-    generated = xj2f.transpile_path(ROOT / "pythag_array.ijs")
+    generated = xj2f.transpile_path(EXAMPLES / "pythag_array.ijs")
 
     assert "  integer, allocatable :: ab(:,:), a(:), b(:), sumsq(:), c(:)" in generated
     assert "pure function j_compress_hcat(matrix, column, row_selector)" in generated
@@ -824,7 +825,7 @@ def test_array_declarations_with_one_specification_are_combined() -> None:
 
 @pytest.mark.parametrize("filename", ["pythag.ijs", "pythag_array.ijs"])
 def test_known_matrix_columns_simplify_echo_to_one_write(filename: str) -> None:
-    generated = xj2f.transpile_path(ROOT / filename)
+    generated = xj2f.transpile_path(EXAMPLES / filename)
     main = generated.split("program ", 1)[1]
 
     assert 'write (*,"(3(i0, 1x))") transpose(triples(30))' in main
@@ -833,7 +834,7 @@ def test_known_matrix_columns_simplify_echo_to_one_write(filename: str) -> None:
 
 
 def test_avoided_j_variable_names_are_renamed_consistently() -> None:
-    source = (ROOT / "pythag_array.ijs").read_text(encoding="utf-8").replace("keep", "mask")
+    source = (EXAMPLES / "pythag_array.ijs").read_text(encoding="utf-8").replace("keep", "mask")
     program = xj2f.parse_j_source(Path("renamed.ijs"), source)
     generated = xj2f.emit_fortran(program)
 
@@ -880,7 +881,7 @@ def test_negative_programs_report_j_error_categories(
 
 
 def test_expression_ast_report_includes_nested_control_flow() -> None:
-    path = ROOT / "pythag.ijs"
+    path = EXAMPLES / "pythag.ijs"
     program = xj2f.parse_j_source(path, path.read_text(encoding="utf-8"))
     report = xj2f.expression_ast_report(program)
 
@@ -893,7 +894,7 @@ def test_expression_ast_report_includes_nested_control_flow() -> None:
 
 def test_check_mode_does_not_write_fortran(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     source = tmp_path / "pythag.ijs"
-    source.write_text((ROOT / "pythag.ijs").read_text(encoding="utf-8"), encoding="utf-8")
+    source.write_text((EXAMPLES / "pythag.ijs").read_text(encoding="utf-8"), encoding="utf-8")
 
     assert xj2f.main([str(source), "--check"]) == 0
     assert not (tmp_path / "temp.f90").exists()
@@ -934,7 +935,7 @@ def test_generated_examples_compile_and_run(
 
     source = tmp_path / f"{Path(filename).stem}_j.f90"
     executable = tmp_path / "example.exe"
-    source.write_text(xj2f.transpile_path(ROOT / filename), encoding="utf-8")
+    source.write_text(xj2f.transpile_path(EXAMPLES / filename), encoding="utf-8")
     compiled = subprocess.run(
         [compiler, "-std=f2018", str(source), "-o", str(executable)],
         cwd=tmp_path,
@@ -963,7 +964,7 @@ def test_external_runtime_cli_compiles_and_runs(
 
     result = xj2f.main(
         [
-            str(ROOT / "pythag_array.ijs"),
+            str(EXAMPLES / "pythag_array.ijs"),
             "--out-dir",
             str(tmp_path),
             "--runtime",
@@ -986,7 +987,7 @@ def test_primes_example_compiles_and_runs(tmp_path: Path) -> None:
 
     source = tmp_path / "primes_j.f90"
     executable = tmp_path / "primes.exe"
-    source.write_text(xj2f.transpile_path(ROOT / "primes.ijs"), encoding="utf-8")
+    source.write_text(xj2f.transpile_path(EXAMPLES / "primes.ijs"), encoding="utf-8")
     compiled = subprocess.run(
         [compiler, "-std=f2018", str(source), "-o", str(executable)],
         cwd=tmp_path,

@@ -26,7 +26,7 @@ xj2f --version
 Generate Fortran:
 
 ```powershell
-python xj2f.py pythag.ijs
+python xj2f.py examples\pythag.ijs
 ```
 
 This writes `temp.f90` beside the input. Select a different destination with
@@ -35,23 +35,23 @@ This writes `temp.f90` beside the input. Select a different destination with
 Compile or compile and run:
 
 ```powershell
-python xj2f.py pythag.ijs --compile
-python xj2f.py pythag.ijs --run
+python xj2f.py examples\pythag.ijs --compile
+python xj2f.py examples\pythag.ijs --run
 ```
 
 Run J and Fortran and compare their whitespace-normalized output:
 
 ```powershell
-python xj2f.py pythag.ijs --run-diff
-python xj2f.py pythag_array.ijs --run-diff
-python xj2f.py primes.ijs --run-diff
+python xj2f.py examples\pythag.ijs --run-diff
+python xj2f.py examples\pythag_array.ijs --run-diff
+python xj2f.py examples\primes.ijs --run-diff
 ```
 
 `xj2f.py` uses the `jconsole` executable on `PATH`. An explicit command can be
 supplied when needed:
 
 ```powershell
-python xj2f.py pythag.ijs --run-j --jconsole C:\Programs\J9.7\bin\jconsole.exe
+python xj2f.py examples\pythag.ijs --run-j --jconsole C:\Programs\J9.7\bin\jconsole.exe
 ```
 
 ## Translation example
@@ -137,10 +137,12 @@ Use `python xj2f.py --help` for the complete option list.
 ## Batch translation
 
 `xj2f_batch.py` runs the driver over explicit `.ijs` files, directories, glob
-patterns, and nested `@list` files. Its default mode is the read-only `--check`:
+patterns, and nested `@list` files. With no inputs it scans `examples`; its
+default mode is the read-only `--check`:
 
 ```powershell
 python xj2f_batch.py test_suite indexing_tests --jobs 4
+python xj2f_batch.py
 python xj2f_batch.py "examples\*.ijs" --recursive --compile
 python xj2f_batch.py examples --run-both
 python xj2f_batch.py @programs.txt --run-diff --jconsole C:\J\bin\jconsole.exe
@@ -160,7 +162,7 @@ translate several J sources, external mode keeps one copy of the helpers in
 `j.f90`:
 
 ```powershell
-python xj2f.py pythag_array.ijs --runtime external --compile
+python xj2f.py examples\pythag_array.ijs --runtime external --compile
 ```
 
 External output imports only the procedures it needs from `j2f_runtime`.

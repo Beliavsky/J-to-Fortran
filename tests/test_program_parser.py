@@ -10,6 +10,7 @@ import xj2f
 
 
 ROOT = Path(__file__).resolve().parents[1]
+EXAMPLES = ROOT / "examples"
 
 
 MONTE_CARLO_PI = """n =: 100000
@@ -456,8 +457,8 @@ def test_black_scholes_example_compiles_and_runs(tmp_path: Path) -> None:
     source = tmp_path / "black_scholes_j.f90"
     executable = tmp_path / "black_scholes.exe"
     program = xj2f.parse_j_source(
-        ROOT / "black_scholes.ijs",
-        (ROOT / "black_scholes.ijs").read_text(encoding="utf-8"),
+        EXAMPLES / "black_scholes.ijs",
+        (EXAMPLES / "black_scholes.ijs").read_text(encoding="utf-8"),
     )
     ordinary = xj2f.emit_fortran(program)
     generated = xj2f.emit_fortran(program, parameterize_constants=True)
@@ -541,8 +542,8 @@ def test_american_option_tree_compiles_and_runs(tmp_path: Path) -> None:
     source = tmp_path / "american_options_j.f90"
     executable = tmp_path / "american_options.exe"
     program = xj2f.parse_j_source(
-        ROOT / "american_options.ijs",
-        (ROOT / "american_options.ijs").read_text(encoding="utf-8"),
+        EXAMPLES / "american_options.ijs",
+        (EXAMPLES / "american_options.ijs").read_text(encoding="utf-8"),
     )
     source.write_text(xj2f.emit_fortran(program), encoding="utf-8")
 
@@ -582,7 +583,7 @@ def test_numeric_csv_statistics_compile_and_run(tmp_path: Path) -> None:
         "2025-01-07,103,52\r\n\r\n",
         encoding="ascii",
     )
-    j_source = (ROOT / "price_return_stats.ijs").read_text(encoding="utf-8")
+    j_source = (EXAMPLES / "price_return_stats.ijs").read_text(encoding="utf-8")
     j_source = j_source.replace("asset_class_etf_prices.csv", csv_name)
     source = tmp_path / "price_return_stats_j.f90"
     executable = tmp_path / "price_return_stats.exe"
@@ -629,7 +630,7 @@ def test_annual_csv_statistics_compile_and_run(tmp_path: Path) -> None:
         "2025-01-03,103,53\n",
         encoding="ascii",
     )
-    j_source = (ROOT / "price_return_stats_annual.ijs").read_text(
+    j_source = (EXAMPLES / "price_return_stats_annual.ijs").read_text(
         encoding="utf-8"
     )
     j_source = j_source.replace("asset_class_etf_prices.csv", csv_name)
@@ -683,7 +684,7 @@ def test_return_mixture_compile_and_run(tmp_path: Path) -> None:
         "2025-01-23,112,95\n",
         encoding="ascii",
     )
-    j_source = (ROOT / "fit_return_mixture.ijs").read_text(encoding="utf-8")
+    j_source = (EXAMPLES / "fit_return_mixture.ijs").read_text(encoding="utf-8")
     j_source = j_source.replace("asset_class_etf_prices.csv", csv_name)
     source = tmp_path / "fit_return_mixture_j.f90"
     executable = tmp_path / "fit_return_mixture.exe"
@@ -846,7 +847,7 @@ def test_correlated_normal_simulation_compiles_and_runs(tmp_path: Path) -> None:
 
 
 def test_primes_conditional_has_structured_branches() -> None:
-    path = ROOT / "primes.ijs"
+    path = EXAMPLES / "primes.ijs"
     program = xj2f.parse_j_source(path, path.read_text(encoding="utf-8"))
     verb = next(item for item in program.items if isinstance(item, xj2f.VerbDefinition))
     conditional = verb.body[0]
@@ -861,7 +862,7 @@ def test_primes_conditional_has_structured_branches() -> None:
 
 
 def test_expression_report_contains_all_conditional_branches() -> None:
-    path = ROOT / "primes.ijs"
+    path = EXAMPLES / "primes.ijs"
     program = xj2f.parse_j_source(path, path.read_text(encoding="utf-8"))
     report = xj2f.expression_ast_report(program)
     conditional = report["verbs"][0]["body"][0]

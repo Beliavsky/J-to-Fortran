@@ -16,6 +16,9 @@ from pathlib import Path
 import xj2f
 
 
+DEFAULT_INPUTS = ("examples",)
+
+
 @dataclass(frozen=True, slots=True)
 class CaseResult:
     index: int
@@ -222,7 +225,12 @@ def build_argument_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Run xj2f.py on multiple J files, directories, globs, or @lists"
     )
-    parser.add_argument("inputs", nargs="+", help=".ijs files, directories, globs, or @lists")
+    parser.add_argument(
+        "inputs",
+        nargs="*",
+        default=list(DEFAULT_INPUTS),
+        help=".ijs files, directories, globs, or @lists (default: examples)",
+    )
     parser.add_argument(
         "-r",
         "--recursive",

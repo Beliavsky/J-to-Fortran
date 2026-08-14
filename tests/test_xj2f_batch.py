@@ -57,6 +57,18 @@ def test_batch_check_defaults_to_read_only(tmp_path: Path) -> None:
     assert not (tmp_path / "temp.f90").exists()
 
 
+def test_batch_defaults_to_examples_directory(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    examples = tmp_path / "examples"
+    examples.mkdir()
+    (examples / "valid.ijs").write_text("result =: 1 2 + 3 4\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+
+    assert xj2f_batch.main(["--terse"]) == 0
+    assert "Totals: 1 files, 1 pass, 0 fail" in capsys.readouterr().out
+
+
 def test_batch_limit_and_max_fail_stop_sequential_work(
     tmp_path: Path, capsys
 ) -> None:
