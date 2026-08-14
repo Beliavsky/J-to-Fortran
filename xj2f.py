@@ -5657,19 +5657,43 @@ def _source_text(source: str, expression) -> str:
 
 def _top_level_comment_groups(
     program: Program,
-) -> tuple[dict[int, list[CommentStatement]], list[CommentStatement]]:
-    """Associate each top-level comment group with the next J sentence."""
+) -> tuple[
+    list[CommentStatement],
+    dict[int, list[CommentStatement]],
+    list[CommentStatement],
+]:
+    """Separate file-header comments and associate later groups with sentences."""
 
+    leading: list[CommentStatement] = []
     groups: dict[int, list[CommentStatement]] = {}
     pending: list[CommentStatement] = []
+    seen_sentence = False
     for item in program.items:
         if isinstance(item, CommentStatement):
-            pending.append(item)
+            if seen_sentence:
+                pending.append(item)
+            else:
+                leading.append(item)
             continue
+        seen_sentence = True
         if pending:
             groups.setdefault(item.line.number, []).extend(pending)
             pending = []
-    return groups, pending
+    return leading, groups, pending
+
+
+def _prepend_file_comments(
+    generated: str,
+    comments: list[CommentStatement],
+    source_comments: str,
+) -> str:
+    if source_comments == "none" or not comments:
+        return generated
+    header: list[str] = []
+    for comment in comments:
+        header.extend(wrap_fortran_comment(comment.text))
+    first_line, *remaining_lines = generated.split("\n")
+    return "\n".join([first_line, *header, "", *remaining_lines])
 
 
 def _emit_numeric_csv_statistics_fortran(
@@ -6349,23 +6373,36 @@ def emit_fortran(
     effective_result_style = function_result_style or (
         "concise" if concise else "named"
     )
+    leading_comments, _, _ = _top_level_comment_groups(program)
     return_mixture = _return_mixture_spec(program)
     if return_mixture is not None:
-        return _emit_return_mixture_fortran(
-            program, return_mixture, runtime=runtime, concise=concise,
-            internal_procedures=internal_procedures,
+        return _prepend_file_comments(
+            _emit_return_mixture_fortran(
+                program, return_mixture, runtime=runtime, concise=concise,
+                internal_procedures=internal_procedures,
+            ),
+            leading_comments,
+            source_comments,
         )
     annual_csv_statistics = _annual_csv_statistics_spec(program)
     if annual_csv_statistics is not None:
-        return _emit_annual_csv_statistics_fortran(
-            program, annual_csv_statistics, runtime=runtime, concise=concise,
-            internal_procedures=internal_procedures,
+        return _prepend_file_comments(
+            _emit_annual_csv_statistics_fortran(
+                program, annual_csv_statistics, runtime=runtime, concise=concise,
+                internal_procedures=internal_procedures,
+            ),
+            leading_comments,
+            source_comments,
         )
     csv_statistics = _numeric_csv_statistics_spec(program)
     if csv_statistics is not None:
-        return _emit_numeric_csv_statistics_fortran(
-            program, csv_statistics, runtime=runtime, concise=concise,
-            internal_procedures=internal_procedures,
+        return _prepend_file_comments(
+            _emit_numeric_csv_statistics_fortran(
+                program, csv_statistics, runtime=runtime, concise=concise,
+                internal_procedures=internal_procedures,
+            ),
+            leading_comments,
+            source_comments,
         )
     program = _lower_top_level_file_operations(program)
     program = _lower_known_top_level_invocations(program)
@@ -6379,7 +6416,9 @@ def emit_fortran(
             "top-level verb invocation needs a dedicated lowering rule",
         )
     program = _expand_top_level_boxed_match(program)
-    comment_groups, trailing_comments = _top_level_comment_groups(program)
+    leading_comments, comment_groups, trailing_comments = (
+        _top_level_comment_groups(program)
+    )
     source_sentences = {
         item.line.number: item.line.text.strip()
         for item in program.items
@@ -7010,7 +7049,9 @@ def emit_fortran(
     if concise:
         lines = apply_concise_procedure_style(lines)
     lines = wrap_long_fortran_lines(lines)
-    return "\n".join(lines)
+    return _prepend_file_comments(
+        "\n".join(lines), leading_comments, source_comments
+    )
 
 
 def transpile_path(
