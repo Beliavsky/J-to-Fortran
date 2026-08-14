@@ -900,7 +900,7 @@ def infer_type(
             }:
                 raise LoweringError("conjugate requires a numeric operand")
             return operand_type
-        if spelling in {"-", "*:"}:
+        if spelling in {"-", "*:", "+:"}:
             if operand_type.atom_type not in {
                 AtomType.INTEGER,
                 AtomType.REAL,
@@ -1960,6 +1960,10 @@ def _render_fortran_expression(
         if spelling == "*:":
             operand = _parenthesize(operand, operand_precedence, _POWER_PRECEDENCE)
             return f"{operand}**2", _POWER_PRECEDENCE, "**"
+        if spelling == "+:":
+            precedence = _FORTRAN_PRECEDENCE["*"]
+            operand = _parenthesize(operand, operand_precedence, precedence)
+            return f"2 * {operand}", precedence, "*"
         if spelling in {"<:", ">:"}:
             operator = "-" if spelling == "<:" else "+"
             precedence = _FORTRAN_PRECEDENCE[operator]

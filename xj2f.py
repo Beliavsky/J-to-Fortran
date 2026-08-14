@@ -1477,7 +1477,7 @@ class FunctionEmitter:
                 isinstance(expression.verb, PrimitiveVerb)
                 and expression.verb.spelling
                 in {
-                    "]", "+", "-", "*", "*:", "|", "%", "%:", "^.", "^",
+                    "]", "+", "-", "*", "*:", "+:", "|", "%", "%:", "^.", "^",
                     "<.", ">.", "-.", "-:", "<", ">",
                 }
                 and FunctionEmitter._is_elementwise_expression(

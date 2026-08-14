@@ -446,6 +446,16 @@ reciprocal:
 1.0_dp / values
 ```
 
+Monadic double preserves numeric type and maps to multiplication by two:
+
+```j
++: values
+```
+
+```fortran
+2 * values
+```
+
 For matrices, a J leading-axis reduction often maps to a Fortran reduction
 with `dim=1`. The `dim` argument is omitted for a vector when it is unnecessary:
 

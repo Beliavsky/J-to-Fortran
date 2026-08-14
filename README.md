@@ -246,6 +246,7 @@ The parser currently recognizes:
 - complex magnitude lowered to the real-valued `abs` intrinsic;
 - monadic halve `-:` on integer, real, and complex scalars and arrays;
 - monadic reciprocal `%` on integer, real, and complex scalars and arrays;
+- monadic double `+:` on integer, real, and complex scalars and arrays;
 - complex sum and product reductions, including rank-1 matrix reductions;
 - rational literals represented as `dp` numerator/denominator quotients;
 - integer base decode and mixed-radix encode;

@@ -145,6 +145,31 @@ def test_monadic_reciprocal_parenthesizes_a_compound_operand() -> None:
     assert render_fortran_expression(expression, names=names) == "1.0_dp / (a * b)"
 
 
+@pytest.mark.parametrize(
+    "operand_type",
+    [
+        TypeInfo(AtomType.INTEGER),
+        TypeInfo(AtomType.REAL, Shape.vector()),
+        TypeInfo(AtomType.COMPLEX),
+    ],
+)
+def test_monadic_double_preserves_numeric_type_and_shape(
+    operand_type: TypeInfo,
+) -> None:
+    expression = parse_expression("+: value")
+    names = {"value": operand_type}
+
+    assert infer_type(expression, names) == operand_type
+    assert render_fortran_expression(expression, names=names) == "2 * value"
+
+
+def test_monadic_double_parenthesizes_a_sum() -> None:
+    expression = parse_expression("+: a + b")
+    names = {"a": TypeInfo(AtomType.INTEGER), "b": TypeInfo(AtomType.INTEGER)}
+
+    assert render_fortran_expression(expression, names=names) == "2 * (a + b)"
+
+
 def test_j_division_converts_integer_numerator_to_real() -> None:
     expression = parse_expression("total % count")
     names = {
