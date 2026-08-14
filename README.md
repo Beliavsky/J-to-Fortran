@@ -185,7 +185,8 @@ The parser currently recognizes:
 - local and global copulas as syntax (`=.` and `=:`), with local assignments
   supported inside translated verbs;
 - homogeneous multiple assignment such as `'a b' =. y`, lowered to selections
-  while evaluating a nontrivial right-hand side only once;
+  while evaluating a nontrivial right-hand side only once, including when the
+  assignment has an inline `NB.` comment;
 - right-to-left chained assignments, including assignments nested in
   parenthesized subexpressions;
 - `for_name. 1 + i. expression do. ... end.`;

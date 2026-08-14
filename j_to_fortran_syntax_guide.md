@@ -127,7 +127,8 @@ J multiple assignment opens and assigns successive items:
 For a homogeneous numeric array this becomes ordinary Fortran selection, such
 as `a = y(1)` and `b = y(2)`. A nontrivial right-hand side is first saved in a
 generated temporary so it is evaluated only once. Heterogeneous boxed values
-remain outside the currently supported subset.
+remain outside the currently supported subset. An inline `NB.` comment after
+the assignment does not hide a simple source argument from rank inference.
 
 Chained assignments are evaluated from right to left, as in J:
 

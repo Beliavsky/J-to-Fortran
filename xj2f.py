@@ -997,6 +997,13 @@ class Parser:
         ):
             raise _error_at(ParseError, line, "invalid destructuring assignment names")
         expression = match.group("expression")
+        comment_at = _outside_string_mask(expression).find("NB.")
+        if comment_at >= 0:
+            expression = expression[:comment_at].rstrip()
+        if not expression:
+            raise _error_at(
+                ParseError, line, "destructuring assignment requires a value"
+            )
         copula = match.group("copula")
         assignments: list[Assign] = []
         if re.fullmatch(r"[A-Za-z][A-Za-z0-9_]*", expression):

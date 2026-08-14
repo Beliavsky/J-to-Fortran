@@ -1988,6 +1988,29 @@ def test_destructuring_assignment_expands_to_opened_selections() -> None:
     ]
 
 
+def test_destructuring_ignores_an_inline_comment_after_a_name() -> None:
+    source = """addpair =: monad define
+  'a b' =. y  NB. unpack the pair
+  a + b
+)
+"""
+    program = xj2f.parse_j_source(Path("destructure_comment.ijs"), source)
+    verb = program.items[0]
+
+    assert isinstance(verb, xj2f.VerbDefinition)
+    assignments = [
+        statement for statement in verb.body if isinstance(statement, xj2f.Assign)
+    ]
+    assert [(item.name, item.expression) for item in assignments] == [
+        ("a", "> 0 { y"),
+        ("b", "> 1 { y"),
+    ]
+
+    generated = xj2f.emit_fortran(program)
+    assert "integer, intent(in) :: y(:)" in generated
+    assert "j_result = y(1) + y(2)" in generated
+
+
 def test_destructuring_assignment_evaluates_a_complex_rhs_once() -> None:
     source = """addpair =: monad define
   'a b' =. y + 1
