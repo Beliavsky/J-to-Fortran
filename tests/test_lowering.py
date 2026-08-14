@@ -470,6 +470,17 @@ def test_integer_polynomial_primitive_uses_horner_helper() -> None:
     assert required_runtime_helpers(expression, {}) == {"polynomial_int"}
 
 
+def test_real_polynomial_primitive_uses_real_horner_helper() -> None:
+    expression = parse_expression("0 0 0.5 p. 4")
+
+    assert infer_type(expression, {}) == TypeInfo(AtomType.REAL)
+    assert (
+        render_fortran_expression(expression, names={})
+        == "j_polynomial_real([real(kind=dp) :: 0, 0, 0.5_dp], 4.0_dp)"
+    )
+    assert required_runtime_helpers(expression, {}) == {"polynomial_real"}
+
+
 @pytest.mark.parametrize(
     ("left", "right", "expected_type", "expected_fortran"),
     [

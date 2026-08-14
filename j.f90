@@ -12,7 +12,7 @@ module j2f_runtime
   public :: j_membership_int, j_multiplication_table_int, j_nub_int
   public :: j_power_table_int, j_prefix_max_int, j_prefix_product_int
   public :: j_prefix_sum_int
-  public :: j_polynomial_int
+  public :: j_polynomial_int, j_polynomial_real
   public :: j_reverse_int_vector, j_signum_int, j_sort_int_vector
   public :: j_reverse_character
   public :: j_raze_character
@@ -183,6 +183,16 @@ pure function j_polynomial_int(coefficients, argument) result(value)
     value = coefficients(coefficient_index) + argument * value
   end do
 end function j_polynomial_int
+
+pure function j_polynomial_real(coefficients, argument) result(value)
+  real(kind=dp), intent(in) :: coefficients(:), argument
+  real(kind=dp) :: value
+  integer :: coefficient_index
+  value = 0.0_dp
+  do coefficient_index = size(coefficients), 1, -1
+    value = coefficients(coefficient_index) + argument * value
+  end do
+end function j_polynomial_real
 
 pure function j_addition_table_int(values) result(table_values)
   integer, intent(in) :: values(:)

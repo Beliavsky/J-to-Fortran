@@ -71,6 +71,49 @@ exit 0
 
 @pytest.mark.parametrize("runtime", ["embedded", "external"])
 @pytest.mark.requires_gfortran
+def test_real_polynomial_compiles_and_runs(
+    tmp_path: Path, runtime: str
+) -> None:
+    compiler = shutil.which("gfortran")
+    if compiler is None:
+        pytest.skip("gfortran is not installed")
+    source_text = """quadratic =: 3 : 0
+  1 0 0.5 p. y
+)
+smoutput quadratic 4
+"""
+    program = xj2f.parse_j_source(tmp_path / "polynomial.ijs", source_text)
+    generated = xj2f.emit_fortran(program, runtime=runtime)
+    source = tmp_path / "polynomial.f90"
+    executable = tmp_path / "polynomial.exe"
+    source.write_text(generated, encoding="utf-8")
+    sources = [str(source)]
+    if runtime == "external":
+        sources.insert(0, str(ROOT / "j.f90"))
+        assert "use j2f_runtime, only: j_polynomial_real" in generated
+    else:
+        assert "function j_polynomial_real" in generated
+    compiled = subprocess.run(
+        [compiler, "-std=f2018", *sources, "-o", str(executable)],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert compiled.returncode == 0, compiled.stdout + compiled.stderr
+    completed = subprocess.run(
+        [str(executable)],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert float(completed.stdout) == pytest.approx(9.0)
+
+
+@pytest.mark.parametrize("runtime", ["embedded", "external"])
+@pytest.mark.requires_gfortran
 def test_text_file_overwrite_and_append_compile_and_run(
     tmp_path: Path, runtime: str
 ) -> None:
@@ -2460,6 +2503,38 @@ smoutput scale 4
     assert "if (y_j > 1) then" in generated
     assert "j_result = y_j + 1" in generated
     assert "\n  y = " not in generated
+
+
+def test_same_rank_local_is_promoted_from_integer_to_real() -> None:
+    source = """scale =: 3 : 0
+  z =. 0
+  if. y > 0 do.
+    z =. y % 2
+  end.
+  z + z
+)
+smoutput scale 4
+"""
+    program = xj2f.parse_j_source(Path("scale.ijs"), source)
+    generated = xj2f.emit_fortran(program)
+
+    assert "real(kind=dp) :: z" in generated
+    assert "z = 0" in generated
+    assert "z = real(y, kind=dp) / 2" in generated
+
+
+def test_local_numeric_promotion_does_not_hide_rank_changes() -> None:
+    source = """bad =: 3 : 0
+  z =. i. y
+  z =. y % 2
+  z
+)
+smoutput bad 4
+"""
+    program = xj2f.parse_j_source(Path("bad.ijs"), source)
+
+    with pytest.raises(xj2f.UnsupportedJError, match="changes type/rank"):
+        xj2f.emit_fortran(program)
 
 
 def test_conditional_without_else_is_not_a_total_result() -> None:

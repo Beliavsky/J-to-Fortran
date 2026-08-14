@@ -1684,14 +1684,21 @@ def infer_type(
             return TypeInfo(AtomType.INTEGER, left_type.shape)
         if spelling == "p.":
             if (
-                left_type.atom_type is not AtomType.INTEGER
+                left_type.atom_type not in {AtomType.INTEGER, AtomType.REAL}
                 or left_type.rank != 1
-                or right_type != TypeInfo(AtomType.INTEGER)
+                or right_type.atom_type not in {AtomType.INTEGER, AtomType.REAL}
+                or right_type.rank != 0
             ):
                 raise LoweringError(
-                    "polynomial evaluation currently requires integer coefficients and an integer scalar argument"
+                    "polynomial evaluation requires numeric coefficients and a numeric scalar argument"
                 )
-            return TypeInfo(AtomType.INTEGER)
+            atom_type = (
+                AtomType.REAL
+                if AtomType.REAL
+                in {left_type.atom_type, right_type.atom_type}
+                else AtomType.INTEGER
+            )
+            return TypeInfo(atom_type)
         try:
             shape = agree_shapes(left_type.shape, right_type.shape)
         except ShapeMismatchError as exc:
@@ -2560,13 +2567,27 @@ def render_fortran_expression(
         return f"j_encode_int({bases}, {value})"
     polynomial = dyad(bare_expression, "p.")
     if polynomial is not None and names is not None:
-        infer_type(bare_expression, names, name_transform, named_verbs=named_verbs)
+        result_type = infer_type(
+            bare_expression, names, name_transform, named_verbs=named_verbs
+        )
+        coefficient_type = infer_type(
+            polynomial[0], names, name_transform, named_verbs=named_verbs
+        )
+        argument_type = infer_type(
+            polynomial[1], names, name_transform, named_verbs=named_verbs
+        )
         coefficients = render_fortran_expression(
             polynomial[0], name_transform, names=names, named_verbs=named_verbs
         )
         argument = render_fortran_expression(
             polynomial[1], name_transform, names=names, named_verbs=named_verbs
         )
+        if result_type.atom_type is AtomType.REAL:
+            if coefficient_type.atom_type is AtomType.INTEGER:
+                coefficients = f"real({coefficients}, kind=dp)"
+            if argument_type.atom_type is AtomType.INTEGER:
+                argument = _as_real_dp(argument)
+            return f"j_polynomial_real({coefficients}, {argument})"
         return f"j_polynomial_int({coefficients}, {argument})"
     if (
         isinstance(bare_expression, MonadicApply)
@@ -3650,7 +3671,21 @@ def required_runtime_helpers(
         if primitive_spelling(expression.verb) == "#:":
             helpers.add("encode_int")
         if primitive_spelling(expression.verb) == "p.":
-            helpers.add("polynomial_int")
+            polynomial_type = (
+                infer_type(
+                    expression,
+                    names,
+                    name_transform,
+                    named_verbs=named_verbs,
+                )
+                if names is not None
+                else TypeInfo(AtomType.INTEGER)
+            )
+            helpers.add(
+                "polynomial_real"
+                if polynomial_type.atom_type is AtomType.REAL
+                else "polynomial_int"
+            )
         if primitive_spelling(expression.verb) == "%." and names is not None:
             left_type = infer_type(
                 expression.left,

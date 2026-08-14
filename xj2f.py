@@ -134,6 +134,7 @@ RUNTIME_PROCEDURES = {
     "prefix_sum_int": "j_prefix_sum_int",
     "power_table_int": "j_power_table_int",
     "polynomial_int": "j_polynomial_int",
+    "polynomial_real": "j_polynomial_real",
     "raze_character": "j_raze_character",
     "reverse_character": "j_reverse_character",
     "reverse_int_vector": "j_reverse_int_vector",
@@ -1844,13 +1845,42 @@ class FunctionEmitter:
     def _clean_declaration(declaration: str) -> str:
         return declaration.replace("-vector", "").replace("-matrix", "")
 
+    @classmethod
+    def _promote_numeric_declaration(
+        cls, old: str, new: str
+    ) -> str | None:
+        """Find one Fortran declaration for same-rank integer/real values."""
+
+        if "intent(" in old or "intent(" in new:
+            return None
+        old_shape = cls._shape_suffix(old)
+        new_shape = cls._shape_suffix(new)
+        if old_shape != new_shape:
+            return None
+        old_base = cls._clean_declaration(old).replace(", allocatable", "")
+        new_base = cls._clean_declaration(new).replace(", allocatable", "")
+        numeric_bases = {"integer", "real(kind=dp)"}
+        if old_base not in numeric_bases or new_base not in numeric_bases:
+            return None
+        base = (
+            "real(kind=dp)"
+            if "real(kind=dp)" in {old_base, new_base}
+            else "integer"
+        )
+        if old_shape:
+            base += ", allocatable" + ("-vector" if old_shape == "(:)" else "-matrix")
+        return base
+
     def _declare(self, name: str, declaration: str) -> None:
         name = _fortran_name(name)
         old = self.declarations.get(name)
         if old is not None and old != declaration:
-            raise UnsupportedJError(
-                f"variable {name!r} changes type/rank from {old!r} to {declaration!r}"
-            )
+            promoted = self._promote_numeric_declaration(old, declaration)
+            if promoted is None:
+                raise UnsupportedJError(
+                    f"variable {name!r} changes type/rank from {old!r} to {declaration!r}"
+                )
+            declaration = promoted
         self.declarations[name] = declaration
         type_info = {
             "integer, intent(in)": TypeInfo(AtomType.INTEGER),
@@ -2044,6 +2074,18 @@ class FunctionEmitter:
             AtomType.LOGICAL: "logical",
         }.get(value_type.atom_type)
         if declaration_base is not None and value_type.rank in {0, 1, 2}:
+            old_type = self.types.get(name)
+            if (
+                old_type is not None
+                and old_type.rank == value_type.rank
+                and old_type.atom_type in {AtomType.INTEGER, AtomType.REAL}
+                and value_type.atom_type in {AtomType.INTEGER, AtomType.REAL}
+                and AtomType.REAL in {old_type.atom_type, value_type.atom_type}
+            ):
+                value_type = dataclasses.replace(
+                    value_type, atom_type=AtomType.REAL
+                )
+                declaration_base = "real(kind=dp)"
             declaration = declaration_base
             if value_type.rank == 1:
                 declaration += ", allocatable-vector"
@@ -2742,6 +2784,21 @@ def _runtime_helpers(helpers: set[str]) -> list[str]:
                 "    value = coefficients(coefficient_index) + argument * value",
                 "  end do",
                 "end function j_polynomial_int",
+                "",
+            ]
+        )
+    if "polynomial_real" in helpers:
+        result.extend(
+            [
+                "pure function j_polynomial_real(coefficients, argument) result(value)",
+                "  real(kind=dp), intent(in) :: coefficients(:), argument",
+                "  real(kind=dp) :: value",
+                "  integer :: coefficient_index",
+                "  value = 0.0_dp",
+                "  do coefficient_index = size(coefficients), 1, -1",
+                "    value = coefficients(coefficient_index) + argument * value",
+                "  end do",
+                "end function j_polynomial_real",
                 "",
             ]
         )

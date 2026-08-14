@@ -263,7 +263,7 @@ The parser currently recognizes:
 - complex sum and product reductions, including rank-1 matrix reductions;
 - rational literals represented as `dp` numerator/denominator quotients;
 - integer base decode and mixed-radix encode;
-- integer polynomial evaluation through Horner's method;
+- integer and real polynomial evaluation through Horner's method;
 - heterogeneous top-level boxed test matches decomposed element by element;
 - mixed Boolean expressions and integer literal `0`/`1` branches, inferred as
   logical results and emitted with `.false.`/`.true.` literals;

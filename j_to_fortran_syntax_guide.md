@@ -126,6 +126,11 @@ pure elemental function square(y) result(j_result)
 end function square
 ```
 
+When a local is first initialized with an integer and later receives a real
+value, the generated declaration is promoted to `real(kind=dp)` if its rank is
+unchanged. Scalar-to-array and other rank changes remain unsupported because
+they require separate storage or more extensive data-flow lowering.
+
 Fortran is case-insensitive, while J names are case-sensitive. `xj2f.py`
 therefore disambiguates names that differ only in case and renames identifiers
 that would collide with Fortran keywords or common intrinsics.
@@ -425,6 +430,10 @@ J automatically applies arithmetic itemwise under its agreement rules.
 Fortran also performs elemental arithmetic on conforming arrays, but does not
 implement every J agreement and rank behavior implicitly. Code with explicit,
 stable shapes is the most reliable to translate.
+
+Dyadic `p.` evaluates a polynomial whose coefficients are ordered from the
+constant term upward. Integer and real coefficients with a scalar numeric
+argument are lowered to a type-appropriate Horner-method helper.
 
 ## Reductions and Scans
 
