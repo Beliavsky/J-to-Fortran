@@ -179,6 +179,7 @@ The parser currently recognizes:
 - monadic and dyadic explicit verb definitions using `3 : 0` and `4 : 0`,
   including the legacy `monad define`, `dyad define`, `monad : '...'`, and
   `dyad : '...'` spellings;
+- direct definitions using `{{ ... }}`, with valence inferred from use of `x`;
 - ranked explicit headers such as `3 : 0 \" 1` and the common
   `(1&$:) : (dyad define)` default-monad form;
 - local and global copulas as syntax (`=.` and `=:`), with local assignments
@@ -243,6 +244,7 @@ The parser currently recognizes:
 - complex literals, arithmetic, negation, and square;
 - complex conjugate with monadic `+`, lowered to Fortran `conjg`;
 - complex magnitude lowered to the real-valued `abs` intrinsic;
+- monadic halve `-:` on integer, real, and complex scalars and arrays;
 - complex sum and product reductions, including rank-1 matrix reductions;
 - rational literals represented as `dp` numerator/denominator quotients;
 - integer base decode and mixed-radix encode;

@@ -436,6 +436,9 @@ class Parser:
         r"\(\s*(?P<noun>_?\d+)\s*&\s*\$:\s*\)\s*:\s*"
         r"\(\s*dyad\s+define\s*\)\s*$"
     )
+    _direct_definition_start = re.compile(
+        r"^(?P<name>[A-Za-z][A-Za-z0-9_]*)\s*=:\s*\{\{(?P<body>.*)$"
+    )
     _assignment = re.compile(
         r"^([A-Za-z][A-Za-z0-9_]*)\s*(=[:.])\s*(.*?)\s*$"
     )
@@ -575,6 +578,10 @@ class Parser:
                     ]
                 )
                 continue
+            direct_definition = self._direct_definition_start.fullmatch(text)
+            if direct_definition:
+                items.append(self._parse_direct_definition(line, direct_definition))
+                continue
             one_line_verb = self._one_line_legacy_verb.fullmatch(text)
             if one_line_verb:
                 arguments = (
@@ -674,6 +681,74 @@ class Parser:
             self.index += 1
         return Program(self.source_path, tuple(items))
 
+    @staticmethod
+    def _direct_definition_close(text: str) -> int | None:
+        masked = _outside_string_mask(text)
+        close = masked.find("}}")
+        return close if close >= 0 else None
+
+    def _parse_direct_definition(
+        self, line: SourceLine, match: re.Match[str]
+    ) -> VerbDefinition:
+        """Parse J's `{{ ... }}` direct-definition notation."""
+
+        body_lines: list[SourceLine] = []
+        initial = match.group("body")
+        self.index += 1
+        closed = False
+
+        def append_until_close(source_line: SourceLine, text: str) -> None:
+            nonlocal closed
+            close = self._direct_definition_close(text)
+            if close is None:
+                if text.strip():
+                    body_lines.append(SourceLine(source_line.number, text.strip()))
+                return
+            before = text[:close].strip()
+            after = text[close + 2 :].strip()
+            if before:
+                body_lines.append(SourceLine(source_line.number, before))
+            if after and not after.startswith("NB."):
+                raise _error_at(
+                    ParseError,
+                    source_line,
+                    "unexpected text after direct-definition close",
+                )
+            closed = True
+
+        append_until_close(line, initial)
+        while not closed and self.index < len(self.lines):
+            body_line = self.lines[self.index]
+            self.index += 1
+            append_until_close(body_line, body_line.text)
+        if not closed:
+            raise _error_at(ParseError, line, "unterminated direct definition")
+        if not body_lines:
+            raise _error_at(ParseError, line, "direct definition has an empty body")
+
+        body_parser = Parser(self.source_path, "")
+        body_parser.lines = body_lines
+        body_parser.destructuring_index = self.destructuring_index
+        body = body_parser._parse_statements(set())
+        self.destructuring_index = body_parser.destructuring_index
+        executable = [
+            statement
+            for statement in body
+            if not isinstance(statement, CommentStatement)
+        ]
+        if executable and isinstance(executable[-1], Assign):
+            assignment = executable[-1]
+            body.append(
+                ExpressionStatement(assignment.line, assignment.name)
+            )
+        uses_x = any(
+            re.search(r"(?<![A-Za-z0-9_])x(?![A-Za-z0-9_])", _outside_string_mask(item.text))
+            for item in body_lines
+            if not item.text.strip().startswith("NB.")
+        )
+        arguments = ("x", "y") if uses_x else ("y",)
+        return VerbDefinition(line, match.group("name"), arguments, tuple(body))
+
     def _parse_numeric_block(self, line: SourceLine, match: re.Match[str]) -> Assign:
         """Lower J's numeric `0 : 0` text conversion idiom to reshape."""
 
@@ -740,6 +815,12 @@ class Parser:
                 return statements
             if text.startswith("NB."):
                 statements.append(CommentStatement(line, text[3:].lstrip()))
+                self.index += 1
+                continue
+            if self._visual_directive.fullmatch(text):
+                statements.append(
+                    CommentStatement(line, f"J visualization omitted: {text}")
+                )
                 self.index += 1
                 continue
             loop = self._for.fullmatch(text)
@@ -1397,7 +1478,7 @@ class FunctionEmitter:
                 and expression.verb.spelling
                 in {
                     "]", "+", "-", "*", "*:", "|", "%:", "^.", "^",
-                    "<.", ">.", "-.", "<", ">",
+                    "<.", ">.", "-.", "-:", "<", ">",
                 }
                 and FunctionEmitter._is_elementwise_expression(
                     expression.operand

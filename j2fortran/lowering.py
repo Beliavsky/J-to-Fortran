@@ -912,6 +912,19 @@ def infer_type(
             if operand_type.atom_type not in {AtomType.INTEGER, AtomType.REAL}:
                 raise LoweringError(f"monadic {spelling!r} requires a numeric operand")
             return operand_type
+        if spelling == "-:":
+            if operand_type.atom_type not in {
+                AtomType.INTEGER,
+                AtomType.REAL,
+                AtomType.COMPLEX,
+            }:
+                raise LoweringError("halve requires a numeric operand")
+            atom_type = (
+                AtomType.COMPLEX
+                if operand_type.atom_type is AtomType.COMPLEX
+                else AtomType.REAL
+            )
+            return TypeInfo(atom_type, operand_type.shape)
         if spelling == "|":
             if operand_type.atom_type not in {
                 AtomType.INTEGER,
@@ -1939,6 +1952,10 @@ def _render_fortran_expression(
             precedence = _FORTRAN_PRECEDENCE[operator]
             operand = _parenthesize(operand, operand_precedence, precedence)
             return f"{operand} {operator} 1", precedence, operator
+        if spelling == "-:":
+            precedence = _FORTRAN_PRECEDENCE["*"]
+            operand = _parenthesize(operand, operand_precedence, precedence)
+            return f"0.5_dp * {operand}", precedence, "*"
         if spelling == "|":
             return f"abs({operand})", _ATOM_PRECEDENCE, "call"
         if spelling == "*":
@@ -2553,6 +2570,20 @@ def render_fortran_expression(
                 named_verbs=named_verbs,
             )
             return f"conjg({operand})"
+        if spelling == "-:":
+            operand = render_fortran_expression(
+                bare_expression.operand,
+                name_transform,
+                names=names,
+                named_verbs=named_verbs,
+            )
+            operand_expression = ungroup(bare_expression.operand)
+            if isinstance(operand_expression, DyadicApply) or (
+                isinstance(operand_expression, MonadicApply)
+                and primitive_spelling(operand_expression.verb) in {"+", "-"}
+            ):
+                operand = f"({operand})"
+            return f"0.5_dp * {operand}"
         if spelling in {"<", ">"}:
             return render_fortran_expression(
                 bare_expression.operand,

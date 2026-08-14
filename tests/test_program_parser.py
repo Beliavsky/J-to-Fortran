@@ -2257,6 +2257,51 @@ smoutput 2 add 4
     assert 'write (*,"(i0)") add(2, 4)' in generated
 
 
+def test_one_line_direct_definition_is_translated() -> None:
+    source = """linear =: {{ 0.6 + 0.0286 * (y - 11.5) }}
+smoutput linear 2
+"""
+    program = xj2f.parse_j_source(Path("direct_linear.ijs"), source)
+    generated = xj2f.emit_fortran(program)
+    verb = program.items[0]
+
+    assert isinstance(verb, xj2f.VerbDefinition)
+    assert verb.arguments == ("y",)
+    assert "pure elemental function linear(y) result(j_result)" in generated
+    assert "j_result = 0.6_dp + 0.0286_dp * (y - 11.5_dp)" in generated
+
+
+def test_multiline_direct_definition_infers_dyadic_valence() -> None:
+    source = """model =: {{
+  offset =. 1 { y
+  value =. x + offset
+  value
+}}
+"""
+    program = xj2f.parse_j_source(Path("direct_dyad.ijs"), source)
+    generated = xj2f.emit_fortran(program)
+    verb = program.items[0]
+
+    assert isinstance(verb, xj2f.VerbDefinition)
+    assert verb.arguments == ("x", "y")
+    assert "function model(x, y) result(j_result)" in generated
+    assert "integer, intent(in) :: x, y(:)" in generated
+
+
+def test_direct_definition_returns_its_final_assignment_value() -> None:
+    source = """square =: {{
+  result =. y ^ 2
+}}
+smoutput square 4
+"""
+    generated = xj2f.emit_fortran(
+        xj2f.parse_j_source(Path("direct_assignment_result.ijs"), source)
+    )
+
+    assert "j_result = y**2" in generated
+    assert 'write (*,"(i0)") square(4)' in generated
+
+
 def test_ambivalent_explicit_verb_has_two_specific_definitions() -> None:
     source = "f =: 3 : 0\n  y * y\n:\n  x + y\n)\n"
     program = xj2f.parse_j_source(Path("ambivalent.ijs"), source)

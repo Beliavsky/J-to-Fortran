@@ -178,6 +178,17 @@ square =: monad define
 add =: dyad : 'x + y'
 ```
 
+J's direct-definition notation is also accepted:
+
+```j
+square =: {{ y * y }}
+weighted =: {{ x * +/ y }}
+```
+
+The transpiler treats a direct definition as dyadic when its body uses `x` and
+as monadic otherwise. The final expression is its result; a final assignment
+also returns the assigned value, as J does.
+
 Rank decoration on a multiline header, such as `3 : 0 \" 1`, is accepted;
 the required dummy rank is inferred from calls and operations in the body. The
 common `(1&$:) : (dyad define)` form becomes a Fortran generic containing the
@@ -412,6 +423,17 @@ Prefix scans generally require a helper or a regular loop because standard
 Fortran has no direct inclusive-scan intrinsic. `xj2f.py` intentionally emits
 regular loops for generated sequences whose bounds are not compile-time
 constants, avoiding large implied-DO constructors that can compile slowly.
+
+Monadic halve promotes integer operands to `dp` real and preserves real or
+complex type and array shape:
+
+```j
+-: values
+```
+
+```fortran
+0.5_dp * values
+```
 
 For matrices, a J leading-axis reduction often maps to a Fortran reduction
 with `dim=1`. The `dim` argument is omitted for a vector when it is unnecessary:
