@@ -481,6 +481,19 @@ def test_real_polynomial_primitive_uses_real_horner_helper() -> None:
     assert required_runtime_helpers(expression, {}) == {"polynomial_real"}
 
 
+def test_mread_uses_real_matrix_runtime_helper() -> None:
+    expression = parse_expression("mread 'table.dat'")
+
+    assert infer_type(expression, {}) == TypeInfo(
+        AtomType.REAL, Shape.matrix()
+    )
+    assert (
+        render_fortran_expression(expression, names={})
+        == 'j_mread("table.dat")'
+    )
+    assert required_runtime_helpers(expression, {}) == {"mread"}
+
+
 @pytest.mark.parametrize(
     ("left", "right", "expected_type", "expected_fortran"),
     [

@@ -127,6 +127,7 @@ RUNTIME_PROCEDURES = {
     "inverse_real": "j_inverse_real",
     "match_real": "j_match_real",
     "membership_int": "j_membership_int",
+    "mread": "j_mread",
     "multiplication_table_int": "j_multiplication_table_int",
     "nub_int": "j_nub_int",
     "prefix_product_int": "j_prefix_product_int",
@@ -2607,6 +2608,53 @@ class FunctionEmitter:
 
 def _runtime_helpers(helpers: set[str]) -> list[str]:
     result: list[str] = []
+    if "mread" in helpers:
+        result.extend(
+            [
+                "function j_mread(filename) result(values)",
+                "  character(len=*), intent(in) :: filename",
+                "  real(kind=dp), allocatable :: values(:,:)",
+                "  integer :: unit, io_status, row_count, column_count, row, line_columns, position",
+                "  character(len=4096) :: line",
+                "  logical :: in_field, separator",
+                '  open(newunit=unit, file=filename, status="old", action="read", iostat=io_status)',
+                '  if (io_status /= 0) error stop "cannot open numeric table"',
+                "  row_count = 0",
+                "  column_count = 0",
+                "  do",
+                '    read(unit,"(a)",iostat=io_status) line',
+                "    if (io_status < 0) exit",
+                '    if (io_status > 0) error stop "cannot read numeric table"',
+                "    if (len_trim(line) == 0) cycle",
+                "    line_columns = 0",
+                "    in_field = .false.",
+                "    do position = 1, len_trim(line)",
+                "      separator = line(position:position) == ' ' .or. &",
+                "        iachar(line(position:position)) == 9 .or. line(position:position) == ','",
+                "      if (.not. separator .and. .not. in_field) line_columns = line_columns + 1",
+                "      in_field = .not. separator",
+                "    end do",
+                "    if (column_count == 0) column_count = line_columns",
+                '    if (line_columns /= column_count) error stop "inconsistent numeric table width"',
+                "    row_count = row_count + 1",
+                "  end do",
+                "  rewind(unit)",
+                "  allocate(values(row_count, column_count))",
+                "  row = 0",
+                "  do",
+                '    read(unit,"(a)",iostat=io_status) line',
+                "    if (io_status < 0) exit",
+                '    if (io_status > 0) error stop "cannot read numeric table"',
+                "    if (len_trim(line) == 0) cycle",
+                "    row = row + 1",
+                "    read(line,*,iostat=io_status) values(row, :)",
+                '    if (io_status /= 0) error stop "invalid numeric table row"',
+                "  end do",
+                "  close(unit)",
+                "end function j_mread",
+                "",
+            ]
+        )
     if "write_text" in helpers:
         result.extend(
             [
@@ -4191,11 +4239,14 @@ def _inline_single_use_array_designators(
             consumer = result[consumer_index]
             if consumer.name == "ok":
                 continue
+            inlined_expression = pattern.sub(
+                assignment.expression, consumer.expression
+            )
+            if re.search(r"\)\s*\(", inlined_expression):
+                continue
             result[consumer_index] = dataclasses.replace(
                 consumer,
-                expression=pattern.sub(
-                    assignment.expression, consumer.expression
-                ),
+                expression=inlined_expression,
                 updates=tuple(
                     pattern.sub(assignment.expression, update)
                     for update in consumer.updates

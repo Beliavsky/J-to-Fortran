@@ -71,6 +71,57 @@ exit 0
 
 @pytest.mark.parametrize("runtime", ["embedded", "external"])
 @pytest.mark.requires_gfortran
+def test_mread_numeric_table_compiles_and_runs(
+    tmp_path: Path, runtime: str
+) -> None:
+    compiler = shutil.which("gfortran")
+    if compiler is None:
+        pytest.skip("gfortran is not installed")
+    table = tmp_path / "table.dat"
+    table.write_text("1 2\n3 4\n5 6\n", encoding="utf-8")
+    source = tmp_path / "read_table.ijs"
+    source.write_text(
+        "data =: |: mread 'table.dat'\nsmoutput data\n",
+        encoding="utf-8",
+    )
+    generated = xj2f.transpile_path(source, runtime=runtime)
+    fortran_source = tmp_path / "read_table.f90"
+    executable = tmp_path / "read_table.exe"
+    fortran_source.write_text(generated, encoding="utf-8")
+    sources = [str(fortran_source)]
+    if runtime == "external":
+        sources.insert(0, str(ROOT / "j.f90"))
+        assert "use j2f_runtime, only: j_mread" in generated
+    else:
+        assert "function j_mread" in generated
+    compiled = subprocess.run(
+        [compiler, "-std=f2018", *sources, "-o", str(executable)],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert compiled.returncode == 0, compiled.stdout + compiled.stderr
+    completed = subprocess.run(
+        [str(executable)],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert [float(token) for token in completed.stdout.split()] == [
+        1.0,
+        3.0,
+        5.0,
+        2.0,
+        4.0,
+        6.0,
+    ]
+
+
+@pytest.mark.parametrize("runtime", ["embedded", "external"])
+@pytest.mark.requires_gfortran
 def test_real_polynomial_compiles_and_runs(
     tmp_path: Path, runtime: str
 ) -> None:
@@ -2535,6 +2586,36 @@ smoutput bad 4
 
     with pytest.raises(xj2f.UnsupportedJError, match="changes type/rank"):
         xj2f.emit_fortran(program)
+
+
+def test_homogeneous_boxed_numeric_vectors_become_matrix_rows() -> None:
+    source = """left =: 1 2 3
+right =: 4 5 6
+boxed =: left;right
+smoutput boxed
+"""
+    program = xj2f.parse_j_source(Path("boxed_numeric.ijs"), source)
+    generated = xj2f.emit_fortran(program)
+
+    assert (
+        "transpose(reshape([left, right], [size(left), 2]))"
+        in generated
+    )
+
+
+def test_array_section_is_not_inlined_into_computed_selection() -> None:
+    source = """matrix =: 2 3 $ 10 11 12 20 21 22
+row =: 0 { matrix
+indices =: 0 2
+selected =: indices { row
+smoutput selected
+"""
+    program = xj2f.parse_j_source(Path("section_selection.ijs"), source)
+    generated = xj2f.emit_fortran(program)
+
+    assert "row = matrix(1, :)" in generated
+    assert 'write (*,"(*(i0, 1x))") row(indices + 1)' in generated
+    assert "matrix(1, :)(indices + 1)" not in generated
 
 
 def test_conditional_without_else_is_not_a_total_result() -> None:

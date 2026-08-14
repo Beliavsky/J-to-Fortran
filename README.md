@@ -264,6 +264,8 @@ The parser currently recognizes:
 - rational literals represented as `dp` numerator/denominator quotients;
 - integer base decode and mixed-radix encode;
 - integer and real polynomial evaluation through Horner's method;
+- numeric whitespace or comma-delimited text tables read by `mread`;
+- equal-length homogeneous boxed numeric vectors lowered to matrix rows;
 - heterogeneous top-level boxed test matches decomposed element by element;
 - mixed Boolean expressions and integer literal `0`/`1` branches, inferred as
   logical results and emitted with `.false.`/`.true.` literals;

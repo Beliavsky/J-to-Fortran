@@ -732,6 +732,10 @@ def infer_type(
             )
             return TypeInfo(atom_type)
         if isinstance(expression.verb, NamedVerb):
+            if expression.verb.identifier == "mread":
+                if operand_type.atom_type is not AtomType.CHARACTER:
+                    raise LoweringError("mread requires a character filename")
+                return TypeInfo(AtomType.REAL, Shape.matrix())
             if (
                 operand_type.atom_type not in {AtomType.INTEGER, AtomType.REAL}
                 or operand_type.rank not in {0, 1, 2}
@@ -1458,6 +1462,32 @@ def infer_type(
                 infer_type(item, names, name_transform, named_verbs=named_verbs)
                 for item in items
             ]
+            if all(
+                item_type.atom_type in {AtomType.INTEGER, AtomType.REAL}
+                and item_type.rank == 1
+                for item_type in item_types
+            ):
+                known_extents = {
+                    item_type.shape.extents[0]
+                    for item_type in item_types
+                    if item_type.shape.extents[0] is not None
+                }
+                if len(known_extents) > 1:
+                    raise LoweringError(
+                        "boxed numeric vectors must have equal lengths"
+                    )
+                extent = next(iter(known_extents), None)
+                atom_type = (
+                    AtomType.REAL
+                    if any(
+                        item_type.atom_type is AtomType.REAL
+                        for item_type in item_types
+                    )
+                    else AtomType.INTEGER
+                )
+                return TypeInfo(
+                    atom_type, Shape.matrix(len(items), extent)
+                )
             if any(
                 item_type.atom_type is not AtomType.CHARACTER or item_type.boxed
                 for item_type in item_types
@@ -1977,8 +2007,13 @@ def _render_fortran_expression(
             operand, _, _ = _render_fortran_expression(
                 expression.operand, name_transform
             )
+            name = (
+                "j_mread"
+                if expression.verb.identifier == "mread"
+                else name_transform(expression.verb.identifier)
+            )
             return (
-                f"{name_transform(expression.verb.identifier)}({operand})",
+                f"{name}({operand})",
                 _ATOM_PRECEDENCE,
                 "call",
             )
@@ -2429,6 +2464,8 @@ def render_fortran_expression(
             names=names,
             named_verbs=named_verbs,
         )
+        if bare_expression.verb.identifier == "mread":
+            return f"j_mread({operand})"
         return f"{name_transform(bare_expression.verb.identifier)}({operand})"
     if (
         isinstance(bare_expression, DyadicApply)
@@ -2964,6 +3001,27 @@ def render_fortran_expression(
                 for item in items
             ]
             return f"[character(len={width}) :: {', '.join(rendered)}]"
+        if all(
+            item_type.atom_type in {AtomType.INTEGER, AtomType.REAL}
+            and item_type.rank == 1
+            for item_type in item_types
+        ):
+            rendered = [
+                render_fortran_expression(
+                    item, name_transform, names=names, named_verbs=named_verbs
+                )
+                for item in items
+            ]
+            constructor = ", ".join(rendered)
+            if any(
+                item_type.atom_type is AtomType.REAL
+                for item_type in item_types
+            ):
+                constructor = f"real(kind=dp) :: {constructor}"
+            return (
+                f"transpose(reshape([{constructor}], "
+                f"[size({rendered[0]}), {len(items)}]))"
+            )
     matrix_division = dyad(bare_expression, "%.")
     if matrix_division is not None and names is not None:
         result_type = infer_type(
@@ -3558,6 +3616,11 @@ def required_runtime_helpers(
         )
     if isinstance(expression, MonadicApply):
         spelling = primitive_spelling(expression.verb)
+        if (
+            isinstance(expression.verb, NamedVerb)
+            and expression.verb.identifier == "mread"
+        ):
+            helpers.add("mread")
         if is_determinant(expression.verb) and names is not None:
             operand_type = infer_type(
                 expression.operand,

@@ -435,6 +435,17 @@ Dyadic `p.` evaluates a polynomial whose coefficients are ordered from the
 constant term upward. Integer and real coefficients with a scalar numeric
 argument are lowered to a type-appropriate Horner-method helper.
 
+The common files-addon verb `mread` reads a rectangular numeric text table:
+
+```j
+data =: mread 'table.dat'
+```
+
+It is lowered to `j_mread`, which accepts whitespace- or comma-separated real
+data, ignores blank lines, validates a consistent row width, and returns an
+allocatable rank-2 `real(kind=dp)` array. The helper is available in both
+embedded and external runtime modes.
+
 ## Reductions and Scans
 
 J inserts an adverb such as `/` or `\` after a verb:
