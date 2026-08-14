@@ -265,6 +265,8 @@ The parser currently recognizes:
 - top-level scalar and vector assignments, including integer copy `#`;
 - integer power with constant nonnegative exponents, dyadic minimum and maximum,
   absolute value, integer signum, factorial, and binomial;
+- integer bases with dynamic or negative integer exponents, promoted to `dp`
+  real results;
 - exact integer and logical Match plus J-tolerant real and mixed numeric Match
   using dyadic `-:`, including Matches nested in Boolean expressions;
 - a final noun as an array-valued verb result;

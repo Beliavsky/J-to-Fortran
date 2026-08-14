@@ -1678,11 +1678,11 @@ def infer_type(
                 and right_type.atom_type is AtomType.INTEGER
             ):
                 exponents = _integer_values(expression.right)
-                if exponents is None or any(exponent < 0 for exponent in exponents):
-                    raise LoweringError(
-                        "integer power currently requires constant nonnegative exponents"
-                    )
-                return TypeInfo(left_type.atom_type, shape)
+                if exponents is not None and all(
+                    exponent >= 0 for exponent in exponents
+                ):
+                    return TypeInfo(left_type.atom_type, shape)
+                return TypeInfo(AtomType.REAL, shape)
             if left_type.atom_type is AtomType.COMPLEX:
                 return TypeInfo(AtomType.COMPLEX, shape)
             return TypeInfo(AtomType.REAL, shape)
@@ -3198,6 +3198,54 @@ def render_fortran_expression(
             return f"pack({values}, {selector})"
     if isinstance(bare_expression, DyadicApply) and names is not None:
         spelling = primitive_spelling(bare_expression.verb)
+        if spelling == "^":
+            result_type = infer_type(
+                bare_expression,
+                names,
+                name_transform,
+                named_verbs=named_verbs,
+            )
+            left_type = infer_type(
+                bare_expression.left,
+                names,
+                name_transform,
+                named_verbs=named_verbs,
+            )
+            left = render_fortran_expression(
+                bare_expression.left,
+                name_transform,
+                names=names,
+                named_verbs=named_verbs,
+            )
+            right = render_fortran_expression(
+                bare_expression.right,
+                name_transform,
+                names=names,
+                named_verbs=named_verbs,
+            )
+            try:
+                _, left_precedence, _ = _render_fortran_expression(
+                    bare_expression.left, name_transform
+                )
+            except LoweringError:
+                left_precedence = _ATOM_PRECEDENCE
+            try:
+                _, right_precedence, _ = _render_fortran_expression(
+                    bare_expression.right, name_transform
+                )
+            except LoweringError:
+                right_precedence = _ATOM_PRECEDENCE
+            if (
+                left_type.atom_type is AtomType.INTEGER
+                and result_type.atom_type is AtomType.REAL
+            ):
+                left = _as_real_dp(left)
+                left_precedence = _ATOM_PRECEDENCE
+            left = _parenthesize(left, left_precedence, _POWER_PRECEDENCE)
+            right = _parenthesize(right, right_precedence, _POWER_PRECEDENCE)
+            if right.startswith(("+", "-")):
+                right = f"({right})"
+            return f"{left}**{right}"
         if spelling in {"<.", ">."}:
             left_type = infer_type(
                 bare_expression.left,

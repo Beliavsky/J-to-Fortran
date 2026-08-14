@@ -1843,6 +1843,37 @@ def test_real_base_accepts_dynamic_integer_vector_exponents() -> None:
     assert render_fortran_expression(expression, names=names) == "up**exponents"
 
 
+def test_integer_base_with_dynamic_integer_exponent_promotes_to_real() -> None:
+    expression = parse_expression("base ^ exponent")
+    names = {
+        "base": TypeInfo(AtomType.INTEGER),
+        "exponent": TypeInfo(AtomType.INTEGER),
+    }
+
+    assert infer_type(expression, names) == TypeInfo(AtomType.REAL)
+    assert render_fortran_expression(expression, names=names) == (
+        "real(base, kind=dp)**exponent"
+    )
+
+
+def test_integer_base_with_negative_exponent_promotes_to_real() -> None:
+    expression = parse_expression("base ^ _2")
+    names = {"base": TypeInfo(AtomType.INTEGER)}
+
+    assert infer_type(expression, names) == TypeInfo(AtomType.REAL)
+    assert render_fortran_expression(expression, names=names) == (
+        "real(base, kind=dp)**(-2)"
+    )
+
+
+def test_constant_nonnegative_integer_power_remains_integer() -> None:
+    expression = parse_expression("base ^ 3")
+    names = {"base": TypeInfo(AtomType.INTEGER)}
+
+    assert infer_type(expression, names) == TypeInfo(AtomType.INTEGER)
+    assert render_fortran_expression(expression, names=names) == "base**3"
+
+
 @pytest.mark.parametrize(
     ("j_source", "fortran"),
     [

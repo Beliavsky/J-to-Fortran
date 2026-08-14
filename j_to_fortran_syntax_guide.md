@@ -42,6 +42,14 @@ This squares the items of `y` and then sums them:
 sum(y**2)
 ```
 
+Integer powers with constant nonnegative exponents remain integer. If an
+integer exponent is dynamic or negative, the generated base is promoted so
+the result can represent reciprocals:
+
+```fortran
+real(base, kind=dp)**exponent
+```
+
 ## Scalar Values and Types
 
 J infers types dynamically:
