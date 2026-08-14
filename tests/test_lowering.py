@@ -1175,6 +1175,51 @@ def test_integer_tables_use_pure_helpers(
     assert required_runtime_helpers(expression, names) == {helper}
 
 
+def test_reflex_power_table_swaps_cells_but_preserves_table_axes() -> None:
+    expression = parse_expression("exponents ^~/ bases")
+    names = {
+        "exponents": TypeInfo(AtomType.INTEGER, Shape.vector(3)),
+        "bases": TypeInfo(AtomType.INTEGER, Shape.vector(4)),
+    }
+
+    assert infer_type(expression, names) == TypeInfo(
+        AtomType.REAL, Shape.matrix(3, 4)
+    )
+    assert render_fortran_expression(expression, names=names) == (
+        "spread(real(bases, kind=dp), dim=1, ncopies=size(exponents))**"
+        "spread(exponents, dim=2, ncopies=size(bases))"
+    )
+    assert required_runtime_helpers(expression, names) == set()
+
+
+def test_constant_nonnegative_reflex_power_table_remains_integer() -> None:
+    expression = parse_expression("0 1 2 ^~/ bases")
+    names = {"bases": TypeInfo(AtomType.INTEGER, Shape.vector(4))}
+
+    assert infer_type(expression, names) == TypeInfo(
+        AtomType.INTEGER, Shape.matrix(3, 4)
+    )
+    assert render_fortran_expression(expression, names=names) == (
+        "spread(bases, dim=1, ncopies=size([0, 1, 2]))**"
+        "spread([0, 1, 2], dim=2, ncopies=size(bases))"
+    )
+
+
+def test_reflex_power_table_with_scalar_base_is_elementwise() -> None:
+    expression = parse_expression("exponents ^~/ base")
+    names = {
+        "exponents": TypeInfo(AtomType.INTEGER, Shape.vector(3)),
+        "base": TypeInfo(AtomType.INTEGER),
+    }
+
+    assert infer_type(expression, names) == TypeInfo(
+        AtomType.REAL, Shape.vector(3)
+    )
+    assert render_fortran_expression(expression, names=names) == (
+        "real(base, kind=dp)**exponents"
+    )
+
+
 def test_real_subtraction_table_lowers_to_spread() -> None:
     expression = parse_expression("terminal -/ strikes")
     names = {

@@ -193,6 +193,8 @@ The parser currently recognizes:
 - structured `if.`/`elseif.`/`else.` branches;
 - integer arithmetic, comparisons, Boolean `*.` and `-.`, integer residue `|`,
   and rank-1 Boolean OR reduction `+./` in the demonstrated forms;
+- reflex power tables `^~/` on numeric vectors, with J table-axis order
+  preserved;
 - integer iota `i.` with a scalar bound or constant shape vector through rank 3,
   lowered through a pure helper;
 - monadic shape and constant-shape reshape through rank 3, including cyclic fill;

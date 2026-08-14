@@ -194,6 +194,17 @@ def reflex_table_spelling(verb: Verb) -> str | None:
     return table_spelling(verb.operand)
 
 
+def table_of_reflex_spelling(verb: Verb) -> str | None:
+    """Return ``u`` for the dyadic table form ``u~/``."""
+
+    if not isinstance(verb, AdverbApplication) or verb.adverb != "/":
+        return None
+    reflex = verb.operand
+    if not isinstance(reflex, AdverbApplication) or reflex.adverb != "~":
+        return None
+    return primitive_spelling(reflex.operand)
+
+
 def _normalize_primitive_reflex(expression: Expression) -> DyadicApply | None:
     """Expand primitive ``u~`` application by duplicating or swapping nouns."""
 
@@ -1285,6 +1296,45 @@ def infer_type(
             else:
                 result_extent = None
             return TypeInfo(AtomType.INTEGER, Shape.vector(result_extent))
+        reflex_table = table_of_reflex_spelling(expression.verb)
+        if reflex_table == "^":
+            exponent_type = infer_type(
+                expression.left,
+                names,
+                name_transform,
+                named_verbs=named_verbs,
+            )
+            base_type = infer_type(
+                expression.right,
+                names,
+                name_transform,
+                named_verbs=named_verbs,
+            )
+            if (
+                exponent_type.atom_type not in {AtomType.INTEGER, AtomType.REAL}
+                or base_type.atom_type not in {AtomType.INTEGER, AtomType.REAL}
+                or exponent_type.rank not in {0, 1}
+                or base_type.rank not in {0, 1}
+            ):
+                raise LoweringError(
+                    "reflex power table currently requires numeric scalars or vectors"
+                )
+            atom_type = AtomType.REAL
+            if (
+                exponent_type.atom_type is AtomType.INTEGER
+                and base_type.atom_type is AtomType.INTEGER
+            ):
+                exponents = _integer_values(expression.left)
+                if exponents is not None and all(
+                    exponent >= 0 for exponent in exponents
+                ):
+                    atom_type = AtomType.INTEGER
+            return TypeInfo(
+                atom_type,
+                Shape(
+                    exponent_type.shape.extents + base_type.shape.extents
+                ),
+            )
         table = table_spelling(expression.verb)
         if table in {"+", "-", "*", "^", "=", "<"}:
             left_type = infer_type(
@@ -2577,6 +2627,62 @@ def render_fortran_expression(
                     )
                     return f"sum(merge(1, 0, {operand}))"
     if isinstance(bare_expression, DyadicApply) and names is not None:
+        reflex_table = table_of_reflex_spelling(bare_expression.verb)
+        if reflex_table == "^":
+            result_type = infer_type(
+                bare_expression,
+                names,
+                name_transform,
+                named_verbs=named_verbs,
+            )
+            base_type = infer_type(
+                bare_expression.right,
+                names,
+                name_transform,
+                named_verbs=named_verbs,
+            )
+            exponent_type = infer_type(
+                bare_expression.left,
+                names,
+                name_transform,
+                named_verbs=named_verbs,
+            )
+            if exponent_type.is_scalar or base_type.is_scalar:
+                power_verb = bare_expression.verb.operand.operand
+                reflected_power = DyadicApply(
+                    power_verb,
+                    bare_expression.right,
+                    bare_expression.left,
+                    bare_expression.span,
+                )
+                return render_fortran_expression(
+                    reflected_power,
+                    name_transform,
+                    names=names,
+                    named_verbs=named_verbs,
+                )
+            exponents = render_fortran_expression(
+                bare_expression.left,
+                name_transform,
+                names=names,
+                named_verbs=named_verbs,
+            )
+            bases = render_fortran_expression(
+                bare_expression.right,
+                name_transform,
+                names=names,
+                named_verbs=named_verbs,
+            )
+            base_size_source = bases
+            if (
+                base_type.atom_type is AtomType.INTEGER
+                and result_type.atom_type is AtomType.REAL
+            ):
+                bases = _as_real_dp(bases)
+            return (
+                f"spread({bases}, dim=1, ncopies=size({exponents}))**"
+                f"spread({exponents}, dim=2, ncopies=size({base_size_source}))"
+            )
         table = table_spelling(bare_expression.verb)
         if table in {"+", "-", "*", "=", "<"}:
             infer_type(

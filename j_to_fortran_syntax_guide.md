@@ -563,6 +563,10 @@ denominator %~ numerator  NB. numerator % denominator
 3 <~ value                NB. value < 3
 ```
 
+The table form `exponents ^~/ bases` computes `base ^ exponent` while retaining
+the usual table axes—exponents by rows and bases by columns. The generated
+Fortran uses appropriately oriented `spread` expressions.
+
 ## Matrix Operations
 
 J's inner product notation can express dot products and matrix multiplication:
