@@ -122,6 +122,62 @@ def test_mread_numeric_table_compiles_and_runs(
 
 @pytest.mark.parametrize("runtime", ["embedded", "external"])
 @pytest.mark.requires_gfortran
+def test_real_prefix_scans_compile_and_run(
+    tmp_path: Path, runtime: str
+) -> None:
+    compiler = shutil.which("gfortran")
+    if compiler is None:
+        pytest.skip("gfortran is not installed")
+    source_text = """values =: 1.5 2 0.5
+smoutput +/\\ values
+smoutput */\\ values
+smoutput >./\\ values
+"""
+    program = xj2f.parse_j_source(tmp_path / "real_scans.ijs", source_text)
+    generated = xj2f.emit_fortran(program, runtime=runtime)
+    source = tmp_path / "real_scans.f90"
+    executable = tmp_path / "real_scans.exe"
+    source.write_text(generated, encoding="utf-8")
+    sources = [str(source)]
+    if runtime == "external":
+        sources.insert(0, str(ROOT / "j.f90"))
+        assert "j_prefix_sum_real" in generated
+        assert "function j_prefix_sum_real" not in generated
+    else:
+        assert "function j_prefix_sum_real" in generated
+        assert "function j_prefix_product_real" in generated
+        assert "function j_prefix_max_real" in generated
+    compiled = subprocess.run(
+        [compiler, "-std=f2018", *sources, "-o", str(executable)],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert compiled.returncode == 0, compiled.stdout + compiled.stderr
+    completed = subprocess.run(
+        [str(executable)],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert [float(token) for token in completed.stdout.split()] == [
+        1.5,
+        3.5,
+        4.0,
+        1.5,
+        3.0,
+        1.5,
+        1.5,
+        2.0,
+        2.0,
+    ]
+
+
+@pytest.mark.parametrize("runtime", ["embedded", "external"])
+@pytest.mark.requires_gfortran
 def test_real_polynomial_compiles_and_runs(
     tmp_path: Path, runtime: str
 ) -> None:

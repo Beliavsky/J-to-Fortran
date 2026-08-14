@@ -131,8 +131,11 @@ RUNTIME_PROCEDURES = {
     "multiplication_table_int": "j_multiplication_table_int",
     "nub_int": "j_nub_int",
     "prefix_product_int": "j_prefix_product_int",
+    "prefix_product_real": "j_prefix_product_real",
     "prefix_max_int": "j_prefix_max_int",
+    "prefix_max_real": "j_prefix_max_real",
     "prefix_sum_int": "j_prefix_sum_int",
+    "prefix_sum_real": "j_prefix_sum_real",
     "power_table_int": "j_power_table_int",
     "polynomial_int": "j_polynomial_int",
     "polynomial_real": "j_polynomial_real",
@@ -2916,6 +2919,22 @@ def _runtime_helpers(helpers: set[str]) -> list[str]:
                 "",
             ]
         )
+    if "prefix_sum_real" in helpers:
+        result.extend(
+            [
+                "pure function j_prefix_sum_real(values) result(prefixes)",
+                "  real(kind=dp), intent(in) :: values(:)",
+                "  real(kind=dp), allocatable :: prefixes(:)",
+                "  integer :: value_index",
+                "  allocate(prefixes(size(values)))",
+                "  if (size(values) > 0) prefixes(1) = values(1)",
+                "  do value_index = 2, size(values)",
+                "    prefixes(value_index) = prefixes(value_index - 1) + values(value_index)",
+                "  end do",
+                "end function j_prefix_sum_real",
+                "",
+            ]
+        )
     if "true_indices" in helpers:
         result.extend(
             [
@@ -2952,6 +2971,22 @@ def _runtime_helpers(helpers: set[str]) -> list[str]:
                 "",
             ]
         )
+    if "prefix_product_real" in helpers:
+        result.extend(
+            [
+                "pure function j_prefix_product_real(values) result(prefixes)",
+                "  real(kind=dp), intent(in) :: values(:)",
+                "  real(kind=dp), allocatable :: prefixes(:)",
+                "  integer :: value_index",
+                "  allocate(prefixes(size(values)))",
+                "  if (size(values) > 0) prefixes(1) = values(1)",
+                "  do value_index = 2, size(values)",
+                "    prefixes(value_index) = prefixes(value_index - 1) * values(value_index)",
+                "  end do",
+                "end function j_prefix_product_real",
+                "",
+            ]
+        )
     if "prefix_max_int" in helpers:
         result.extend(
             [
@@ -2966,6 +3001,22 @@ def _runtime_helpers(helpers: set[str]) -> list[str]:
                 "    prefixes(value_index) = max(prefixes(value_index - 1), values(value_index))",
                 "  end do",
                 "end function j_prefix_max_int",
+                "",
+            ]
+        )
+    if "prefix_max_real" in helpers:
+        result.extend(
+            [
+                "pure function j_prefix_max_real(values) result(prefixes)",
+                "  real(kind=dp), intent(in) :: values(:)",
+                "  real(kind=dp), allocatable :: prefixes(:)",
+                "  integer :: value_index",
+                "  allocate(prefixes(size(values)))",
+                "  if (size(values) > 0) prefixes(1) = values(1)",
+                "  do value_index = 2, size(values)",
+                "    prefixes(value_index) = max(prefixes(value_index - 1), values(value_index))",
+                "  end do",
+                "end function j_prefix_max_real",
                 "",
             ]
         )

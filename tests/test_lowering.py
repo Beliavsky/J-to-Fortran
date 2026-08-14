@@ -992,6 +992,25 @@ def test_integer_scans_use_regular_loop_helpers(
 
 
 @pytest.mark.parametrize(
+    ("source", "expected_fortran", "helper"),
+    [
+        ("+/\\ a", "j_prefix_sum_real(a)", "prefix_sum_real"),
+        ("*/\\ a", "j_prefix_product_real(a)", "prefix_product_real"),
+        (">./\\ a", "j_prefix_max_real(a)", "prefix_max_real"),
+    ],
+)
+def test_real_prefix_scans_use_real_loop_helpers(
+    source: str, expected_fortran: str, helper: str
+) -> None:
+    expression = parse_expression(source)
+    names = {"a": TypeInfo(AtomType.REAL, Shape.vector(5))}
+
+    assert infer_type(expression, names) == names["a"]
+    assert render_fortran_expression(expression, names=names) == expected_fortran
+    assert required_runtime_helpers(expression, names) == {helper}
+
+
+@pytest.mark.parametrize(
     ("source", "atom_type", "expected_fortran"),
     [
         ("+/ a", AtomType.INTEGER, "sum(a, dim=1)"),

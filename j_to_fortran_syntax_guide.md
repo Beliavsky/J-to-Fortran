@@ -469,6 +469,8 @@ Prefix scans generally require a helper or a regular loop because standard
 Fortran has no direct inclusive-scan intrinsic. `xj2f.py` intentionally emits
 regular loops for generated sequences whose bounds are not compile-time
 constants, avoiding large implied-DO constructors that can compile slowly.
+Prefix sum, product, and maximum scans accept both integer and `dp` real
+vectors and select type-specific runtime helpers.
 
 Monadic halve promotes integer operands to `dp` real and preserves real or
 complex type and array shape:

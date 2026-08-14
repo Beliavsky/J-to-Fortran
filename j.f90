@@ -11,8 +11,9 @@ module j2f_runtime
   public :: j_inverse_real, j_iota, j_match_real
   public :: j_membership_int, j_multiplication_table_int, j_nub_int
   public :: j_mread
-  public :: j_power_table_int, j_prefix_max_int, j_prefix_product_int
-  public :: j_prefix_sum_int
+  public :: j_power_table_int, j_prefix_max_int, j_prefix_max_real
+  public :: j_prefix_product_int, j_prefix_product_real
+  public :: j_prefix_sum_int, j_prefix_sum_real
   public :: j_polynomial_int, j_polynomial_real
   public :: j_reverse_int_vector, j_signum_int, j_sort_int_vector
   public :: j_reverse_character
@@ -283,6 +284,17 @@ pure function j_prefix_sum_int(values) result(prefixes)
   end do
 end function j_prefix_sum_int
 
+pure function j_prefix_sum_real(values) result(prefixes)
+  real(kind=dp), intent(in) :: values(:)
+  real(kind=dp), allocatable :: prefixes(:)
+  integer :: value_index
+  allocate(prefixes(size(values)))
+  if (size(values) > 0) prefixes(1) = values(1)
+  do value_index = 2, size(values)
+    prefixes(value_index) = prefixes(value_index - 1) + values(value_index)
+  end do
+end function j_prefix_sum_real
+
 pure function j_prefix_product_int(values) result(prefixes)
   integer, intent(in) :: values(:)
   integer, allocatable :: prefixes(:)
@@ -295,6 +307,17 @@ pure function j_prefix_product_int(values) result(prefixes)
   end do
 end function j_prefix_product_int
 
+pure function j_prefix_product_real(values) result(prefixes)
+  real(kind=dp), intent(in) :: values(:)
+  real(kind=dp), allocatable :: prefixes(:)
+  integer :: value_index
+  allocate(prefixes(size(values)))
+  if (size(values) > 0) prefixes(1) = values(1)
+  do value_index = 2, size(values)
+    prefixes(value_index) = prefixes(value_index - 1) * values(value_index)
+  end do
+end function j_prefix_product_real
+
 pure function j_prefix_max_int(values) result(prefixes)
   integer, intent(in) :: values(:)
   integer, allocatable :: prefixes(:)
@@ -306,6 +329,17 @@ pure function j_prefix_max_int(values) result(prefixes)
     prefixes(value_index) = max(prefixes(value_index - 1), values(value_index))
   end do
 end function j_prefix_max_int
+
+pure function j_prefix_max_real(values) result(prefixes)
+  real(kind=dp), intent(in) :: values(:)
+  real(kind=dp), allocatable :: prefixes(:)
+  integer :: value_index
+  allocate(prefixes(size(values)))
+  if (size(values) > 0) prefixes(1) = values(1)
+  do value_index = 2, size(values)
+    prefixes(value_index) = max(prefixes(value_index - 1), values(value_index))
+  end do
+end function j_prefix_max_real
 
 pure function j_infix_sum_int(values, width) result(sums)
   integer, intent(in) :: values(:), width

@@ -814,11 +814,11 @@ def infer_type(
             scan = insert_scan_spelling(expression.verb)
             if scan in {"+", "*", ">."}:
                 if (
-                    operand_type.atom_type is not AtomType.INTEGER
+                    operand_type.atom_type not in {AtomType.INTEGER, AtomType.REAL}
                     or operand_type.rank != 1
                 ):
                     raise LoweringError(
-                        "prefix scan currently requires an integer vector"
+                        "prefix scan requires a numeric vector"
                     )
                 return operand_type
             reduction = primitive_spelling(expression.verb.operand)
@@ -2646,6 +2646,23 @@ def render_fortran_expression(
                 f"order=[{order}])"
             )
     if isinstance(bare_expression, MonadicApply) and names is not None:
+        scan = insert_scan_spelling(bare_expression.verb)
+        if scan in {"+", "*", ">."}:
+            operand_type = infer_type(
+                bare_expression.operand,
+                names,
+                name_transform,
+                named_verbs=named_verbs,
+            )
+            operand = render_fortran_expression(
+                bare_expression.operand,
+                name_transform,
+                names=names,
+                named_verbs=named_verbs,
+            )
+            operation = {"+": "sum", "*": "product", ">.": "max"}[scan]
+            suffix = "real" if operand_type.atom_type is AtomType.REAL else "int"
+            return f"j_prefix_{operation}_{suffix}({operand})"
         ranked_reduction = ranked_reduction_spelling(bare_expression.verb)
         if ranked_reduction in {"+", "*", "<.", ">.", "+.", "*."}:
             operand_type = infer_type(
@@ -3635,12 +3652,20 @@ def required_runtime_helpers(
         if reflex_table_spelling(expression.verb) == "+":
             helpers.add("addition_table_int")
         scan = insert_scan_spelling(expression.verb)
-        if scan == "+":
-            helpers.add("prefix_sum_int")
-        if scan == "*":
-            helpers.add("prefix_product_int")
-        if scan == ">.":
-            helpers.add("prefix_max_int")
+        if scan in {"+", "*", ">."}:
+            operand_type = (
+                infer_type(
+                    expression.operand,
+                    names,
+                    name_transform,
+                    named_verbs=named_verbs,
+                )
+                if names is not None
+                else TypeInfo(AtomType.INTEGER, Shape.vector())
+            )
+            operation = {"+": "sum", "*": "product", ">.": "max"}[scan]
+            suffix = "real" if operand_type.atom_type is AtomType.REAL else "int"
+            helpers.add(f"prefix_{operation}_{suffix}")
         if isinstance(expression.verb, AdverbApplication):
             operand_spelling = primitive_spelling(expression.verb.operand)
             if expression.verb.adverb == "~" and operand_spelling in {"/:", "\\:"}:
