@@ -67,7 +67,7 @@ from j2fortran.fortran_style import (
     wrap_fortran_comment,
     wrap_long_fortran_lines,
 )
-from j2fortran.lexer import LexerError
+from j2fortran.lexer import LexerError, TokenKind, tokenize
 from j2fortran.lowering import (
     LoweringError,
     constant_shape_extents,
@@ -205,6 +205,20 @@ class IfStatement:
 
 
 @dataclasses.dataclass(frozen=True)
+class CaseBranch:
+    line: SourceLine
+    expression: str | None
+    body: tuple[Statement, ...]
+
+
+@dataclasses.dataclass(frozen=True)
+class SelectStatement:
+    line: SourceLine
+    expression: str
+    branches: tuple[CaseBranch, ...]
+
+
+@dataclasses.dataclass(frozen=True)
 class AssertStatement:
     line: SourceLine
     expression: str
@@ -237,6 +251,7 @@ Statement = (
     | ForLoop
     | WhileLoop
     | IfStatement
+    | SelectStatement
     | AssertStatement
     | ContinueStatement
     | ReturnStatement
@@ -326,8 +341,9 @@ def _error_at(kind: type[J2FError], line: SourceLine, message: str) -> J2FError:
 
 
 _INLINE_CONTROL_WORD = re.compile(
-    r"(?<![A-Za-z0-9_])(?:elseif\.|whilst\.|while\.|if\.|else\."
-    r"|for(?:_[A-Za-z][A-Za-z0-9_]*)?\.|do\.|end\.)(?![A-Za-z0-9_])"
+    r"(?<![A-Za-z0-9_])(?:elseif\.|whilst\.|while\.|select\.|case\."
+    r"|if\.|else\.|for(?:_[A-Za-z][A-Za-z0-9_]*)?\.|do\.|end\.)"
+    r"(?![A-Za-z0-9_])"
 )
 
 
@@ -428,6 +444,8 @@ class Parser:
     _while = re.compile(r"^(?:while|whilst)\.\s+(.+?)\s+do\.\s*$")
     _if = re.compile(r"^if\.\s+(.+?)\s+do\.\s*$")
     _elseif = re.compile(r"^elseif\.\s+(.+?)\s+do\.\s*$")
+    _select = re.compile(r"^select\.\s+(.+?)\s*$")
+    _case = re.compile(r"^case\.\s*(.*?)\s+do\.\s*$")
 
     def __init__(self, source_path: Path, text: str):
         self.source_path = source_path
@@ -495,12 +513,15 @@ class Parser:
                     else ("x", "y")
                 )
                 body = one_line_verb.group("body").replace("''", "'")
+                assignments, result_expression = self._rewrite_embedded_assignments(
+                    line, body
+                )
                 items.append(
                     VerbDefinition(
                         line,
                         one_line_verb.group("name"),
                         arguments,
-                        (ExpressionStatement(line, body),),
+                        (*assignments, ExpressionStatement(line, result_expression)),
                     )
                 )
                 self.index += 1
@@ -512,6 +533,16 @@ class Parser:
                 continue
             assignment = self._assignment.fullmatch(text)
             if assignment:
+                assignments = self._expanded_assignment(
+                    line,
+                    assignment.group(1),
+                    assignment.group(2),
+                    assignment.group(3),
+                )
+                if len(assignments) > 1:
+                    items.extend(assignments)
+                    self.index += 1
+                    continue
                 try:
                     tacit_verb = parse_verb(assignment.group(3))
                 except (LexerError, ExpressionParseError, ValueError):
@@ -567,7 +598,9 @@ class Parser:
                 items.append(ExitStatement(line, text[5:].strip()))
                 self.index += 1
                 continue
-            items.append(ExpressionStatement(line, text))
+            assignments, expression = self._rewrite_embedded_assignments(line, text)
+            items.extend(assignments)
+            items.append(ExpressionStatement(line, expression))
             self.index += 1
         return Program(self.source_path, tuple(items))
 
@@ -628,6 +661,10 @@ class Parser:
             if conditional:
                 statements.append(self._parse_conditional(line, conditional.group(1)))
                 continue
+            selection = self._select.fullmatch(text)
+            if selection:
+                statements.append(self._parse_select(line, selection.group(1)))
+                continue
             assertion = re.fullmatch(r"assert\.\s+(.+)", text)
             if assertion:
                 statements.append(AssertStatement(line, assertion.group(1)))
@@ -658,8 +695,13 @@ class Parser:
                 continue
             assignment = self._assignment.fullmatch(text)
             if assignment:
-                statements.append(
-                    Assign(line, assignment.group(1), assignment.group(2), assignment.group(3))
+                statements.extend(
+                    self._expanded_assignment(
+                        line,
+                        assignment.group(1),
+                        assignment.group(2),
+                        assignment.group(3),
+                    )
                 )
                 self.index += 1
                 continue
@@ -668,9 +710,83 @@ class Parser:
                 raise _error_at(ParseError, line, f"unexpected {text!r}; expected {expected!r}")
             if text == "else." or self._elseif.fullmatch(text):
                 raise _error_at(ParseError, line, f"unexpected conditional branch {text!r}")
-            statements.append(ExpressionStatement(line, text))
+            assignments, expression = self._rewrite_embedded_assignments(line, text)
+            statements.extend(assignments)
+            statements.append(ExpressionStatement(line, expression))
             self.index += 1
         return statements
+
+    def _expanded_assignment(
+        self,
+        line: SourceLine,
+        name: str,
+        copula: str,
+        expression: str,
+    ) -> tuple[Assign, ...]:
+        assignments, rewritten = self._rewrite_embedded_assignments(line, expression)
+        return (*assignments, Assign(line, name, copula, rewritten))
+
+    def _rewrite_embedded_assignments(
+        self, line: SourceLine, expression: str
+    ) -> tuple[tuple[Assign, ...], str]:
+        """Lift right-to-left assignments out of a J value expression."""
+
+        try:
+            tokens = tuple(
+                token for token in tokenize(expression) if token.kind is not TokenKind.EOF
+            )
+        except LexerError:
+            return (), expression
+        depth = 0
+        depths: list[int] = []
+        for token in tokens:
+            depths.append(depth)
+            if token.kind is TokenKind.LPAREN:
+                depth += 1
+            elif token.kind is TokenKind.RPAREN:
+                depth -= 1
+        for index in range(len(tokens) - 1):
+            name_token = tokens[index]
+            copula_token = tokens[index + 1]
+            if (
+                name_token.kind is not TokenKind.NAME
+                or copula_token.kind is not TokenKind.COPULA
+            ):
+                continue
+            assignment_depth = depths[index]
+            rhs_start = copula_token.end
+            rhs_end = len(expression)
+            for following, following_depth in zip(
+                tokens[index + 2 :], depths[index + 2 :], strict=True
+            ):
+                if (
+                    following.kind is TokenKind.RPAREN
+                    and following_depth == assignment_depth
+                ):
+                    rhs_end = following.start
+                    break
+            rhs = expression[rhs_start:rhs_end].strip()
+            if not rhs:
+                raise _error_at(ParseError, line, "assignment requires a value")
+            nested_assignments, rewritten_rhs = self._rewrite_embedded_assignments(
+                line, rhs
+            )
+            lifted = Assign(
+                line, name_token.value, copula_token.value, rewritten_rhs
+            )
+            rewritten = (
+                expression[: name_token.start]
+                + name_token.value
+                + expression[rhs_end:]
+            )
+            remaining_assignments, rewritten = self._rewrite_embedded_assignments(
+                line, rewritten
+            )
+            return (
+                (*nested_assignments, lifted, *remaining_assignments),
+                rewritten.strip(),
+            )
+        return (), expression
 
     def _destructuring_assignments(
         self, line: SourceLine, text: str
@@ -705,7 +821,28 @@ class Parser:
     def _is_terminator(text: str, terminators: set[str]) -> bool:
         return text in terminators or (
             "elseif." in terminators and text.startswith("elseif.")
+        ) or (
+            "case." in terminators and text.startswith("case.")
         )
+
+    def _parse_select(self, line: SourceLine, expression: str) -> SelectStatement:
+        self.index += 1
+        branches: list[CaseBranch] = []
+        while self.index < len(self.lines):
+            case_line = self.lines[self.index]
+            case = self._case.fullmatch(case_line.text.strip())
+            if case is None:
+                break
+            self.index += 1
+            body = self._parse_statements({"case.", "end."})
+            case_expression = case.group(1).strip() or None
+            branches.append(CaseBranch(case_line, case_expression, tuple(body)))
+        if not branches:
+            raise _error_at(ParseError, line, "select. requires at least one case.")
+        if sum(branch.expression is None for branch in branches) > 1:
+            raise _error_at(ParseError, line, "select. has multiple default cases")
+        self._expect("end.", line, "select. statement")
+        return SelectStatement(line, expression, tuple(branches))
 
     def _parse_conditional(self, line: SourceLine, condition: str) -> IfStatement:
         self.index += 1
@@ -1015,6 +1152,16 @@ class FunctionEmitter:
                         cls._references_verb(body, verb_name)
                         for body in branch_bodies
                     )
+                ):
+                    return True
+            elif isinstance(statement, SelectStatement):
+                if pattern.search(statement.expression) or any(
+                    (
+                        branch.expression is not None
+                        and pattern.search(branch.expression)
+                    )
+                    or cls._references_verb(branch.body, verb_name)
+                    for branch in statement.branches
                 ):
                     return True
             elif isinstance(statement, (ExpressionStatement, AssertStatement)) and pattern.search(statement.expression):
@@ -1418,6 +1565,16 @@ class FunctionEmitter:
                     )
                     assignments += nested_assignments
                     references += nested_references
+            elif isinstance(statement, SelectStatement):
+                count_expression(statement.expression)
+                for branch in statement.branches:
+                    if branch.expression is not None:
+                        count_expression(branch.expression)
+                    nested_assignments, nested_references = cls._name_usage(
+                        branch.body, name
+                    )
+                    assignments += nested_assignments
+                    references += nested_references
             elif isinstance(statement, (ExpressionStatement, AssertStatement)):
                 count_expression(statement.expression)
         return assignments, references
@@ -1460,6 +1617,14 @@ class FunctionEmitter:
                     for branch in final.elseif_branches
                 )
                 and cls._body_defines_result(final.else_body)
+            )
+        if isinstance(final, SelectStatement):
+            return (
+                any(branch.expression is None for branch in final.branches)
+                and all(
+                    cls._body_defines_result(branch.body)
+                    for branch in final.branches
+                )
             )
         return False
 
@@ -1556,6 +1721,8 @@ class FunctionEmitter:
             self._emit_while(statement)
         elif isinstance(statement, IfStatement):
             self._emit_if(statement)
+        elif isinstance(statement, SelectStatement):
+            self._emit_select(statement)
         elif isinstance(statement, AssertStatement):
             self._emit_assert(statement)
         elif isinstance(statement, ContinueStatement):
@@ -1836,6 +2003,52 @@ class FunctionEmitter:
             self._emit_statements(conditional.else_body)
             self.indent -= 1
         self._write("end if")
+
+    def _emit_select(self, selection: SelectStatement) -> None:
+        expression = self._parse_expression(selection.expression, selection.line)
+        try:
+            selector_type = infer_type(
+                expression,
+                self.types,
+                _fortran_name,
+                named_verbs=self.named_verbs,
+            )
+            rendered_selector = render_fortran_expression(
+                expression,
+                _fortran_name,
+                names=self.types,
+                named_verbs=self.named_verbs,
+            )
+        except LoweringError as exc:
+            raise _error_at(UnsupportedJError, selection.line, str(exc)) from exc
+        if selector_type != TypeInfo(AtomType.INTEGER):
+            raise _error_at(
+                UnsupportedJError,
+                selection.line,
+                "select. currently requires an integer scalar selector",
+            )
+        self._write(f"select case ({rendered_selector})")
+        self.indent += 1
+        for branch in selection.branches:
+            if branch.expression is None:
+                self._write("case default")
+            else:
+                case_expression = self._parse_expression(
+                    branch.expression, branch.line
+                )
+                case_value = integer_value(case_expression)
+                if case_value is None:
+                    raise _error_at(
+                        UnsupportedJError,
+                        branch.line,
+                        "case. currently requires a constant integer value",
+                    )
+                self._write(f"case ({case_value})")
+            self.indent += 1
+            self._emit_statements(branch.body)
+            self.indent -= 1
+        self.indent -= 1
+        self._write("end select")
 
     def _render_condition(self, condition: str, line: SourceLine) -> str:
         expression = self._parse_expression(condition, line)
@@ -3832,6 +4045,12 @@ def _captured_top_names(
                     inspect(branch.body)
                 if statement.else_body is not None:
                     inspect(statement.else_body)
+            elif isinstance(statement, SelectStatement):
+                texts.append(statement.expression)
+                for branch in statement.branches:
+                    if branch.expression is not None:
+                        texts.append(branch.expression)
+                    inspect(branch.body)
             for text in texts:
                 for j_name, fortran_name in top_names.items():
                     if re.search(rf"\b{re.escape(j_name)}\b", text):
@@ -3891,6 +4110,12 @@ def _definition_argument_shape_hint(
                     inspect(branch.body)
                 if statement.else_body is not None:
                     inspect(statement.else_body)
+            elif isinstance(statement, SelectStatement):
+                texts.append(statement.expression)
+                for branch in statement.branches:
+                    if branch.expression is not None:
+                        texts.append(branch.expression)
+                    inspect(branch.body)
             for text in texts:
                 for argument in definition.arguments:
                     selection = re.compile(
@@ -4122,6 +4347,24 @@ def _definition_argument_types(
                 if statement.else_body is not None:
                     branches.append(statement.else_body)
                 visit_statements(tuple(sum((list(branch) for branch in branches), [])), dict(names))
+                continue
+            if isinstance(statement, SelectStatement):
+                try:
+                    expression = parse_expression(
+                        statement.expression, noun_names=set(names)
+                    )
+                except (LexerError, ExpressionParseError):
+                    pass
+                else:
+                    visit(expression, names)
+                visit_statements(
+                    tuple(
+                        child
+                        for branch in statement.branches
+                        for child in branch.body
+                    ),
+                    dict(names),
+                )
 
     def visit_top_level() -> None:
         for item in program.items:
@@ -5914,6 +6157,25 @@ def expression_ast_report(program: Program) -> dict[str, object]:
                 ),
             }
             children = [statement_report(child) for child in statement.body]
+        elif isinstance(statement, SelectStatement):
+            role = "select"
+            expression = statement.expression
+            extra = {
+                "cases": [
+                    {
+                        "line": branch.line.number,
+                        "source": branch.expression,
+                        "ast": (
+                            ast_to_dict(parse_expression(branch.expression))
+                            if branch.expression is not None
+                            else None
+                        ),
+                        "body": [statement_report(child) for child in branch.body],
+                    }
+                    for branch in statement.branches
+                ]
+            }
+            children = []
         elif isinstance(statement, AssertStatement):
             role = "assert"
             expression = statement.expression

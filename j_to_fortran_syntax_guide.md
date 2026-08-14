@@ -129,6 +129,16 @@ as `a = y(1)` and `b = y(2)`. A nontrivial right-hand side is first saved in a
 generated temporary so it is evaluated only once. Heterogeneous boxed values
 remain outside the currently supported subset.
 
+Chained assignments are evaluated from right to left, as in J:
+
+```j
+x21 =. - x12 =. x1 - x2
+```
+
+The generated Fortran first assigns `x12`, then assigns `x21 = -x12`.
+Assignments inside parenthesized subexpressions are lifted without consuming
+the expression following the closing parenthesis.
+
 ## Explicit Verbs and Procedures
 
 A monadic explicit J verb is commonly written with `3 : 0`. Its argument is
@@ -524,7 +534,18 @@ if. y < 0 do. -y else. y end.
 ```
 
 Quoted text is not split when it happens to contain words such as `if.` or
-`end.`. `select.`/`case.` dispatch remains outside the current subset.
+`end.`. Scalar integer selection is translated to Fortran `select case`:
+
+```j
+select. choice
+case. 1 do. value =. 10
+case. 2 do. value =. 20
+case. do. value =. 0
+end.
+```
+
+The final `case. do.` is the optional default branch. Boxed case lists and
+fall-through `fcase.` remain outside the current subset.
 
 Fortran equivalents:
 

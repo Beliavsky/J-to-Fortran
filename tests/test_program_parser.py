@@ -2075,6 +2075,87 @@ smoutput countup 3
     assert "do while (n < y)" in generated
 
 
+def test_chained_assignments_are_lifted_in_right_to_left_order() -> None:
+    source = """differences =: monad define
+  x21 =. - x12 =. (0 { y) - 1 { y
+  x21 , x12
+)
+smoutput differences 8 3
+"""
+    program = xj2f.parse_j_source(Path("chained_assignment.ijs"), source)
+    verb = program.items[0]
+
+    assert isinstance(verb, xj2f.VerbDefinition)
+    assignments = [
+        statement for statement in verb.body if isinstance(statement, xj2f.Assign)
+    ]
+    assert [(item.name, item.expression) for item in assignments] == [
+        ("x12", "(0 { y) - 1 { y"),
+        ("x21", "- x12"),
+    ]
+
+
+def test_parenthesized_assignment_is_lifted_without_consuming_its_suffix() -> None:
+    source = """pick =: monad define
+  (1 + (n =. 1) { y) + n
+)
+smoutput pick 3 4
+"""
+    program = xj2f.parse_j_source(Path("parenthesized_assignment.ijs"), source)
+    verb = program.items[0]
+
+    assert isinstance(verb, xj2f.VerbDefinition)
+    assert isinstance(verb.body[0], xj2f.Assign)
+    assert verb.body[0].name == "n"
+    assert verb.body[0].expression == "1"
+    assert isinstance(verb.body[1], xj2f.ExpressionStatement)
+    assert verb.body[1].expression == "(1 + (n) { y) + n"
+
+
+def test_integer_select_case_emits_fortran_select_case() -> None:
+    source = """classify =: monad define
+  select. y
+  case. 1 do. 10
+  case. 2 do.
+    20
+  case. do. 0
+  end.
+)
+smoutput classify 2
+"""
+    program = xj2f.parse_j_source(Path("select_case.ijs"), source)
+    generated = xj2f.emit_fortran(program)
+
+    verb = program.items[0]
+    assert isinstance(verb, xj2f.VerbDefinition)
+    assert isinstance(verb.body[0], xj2f.SelectStatement)
+    assert [branch.expression for branch in verb.body[0].branches] == [
+        "1",
+        "2",
+        None,
+    ]
+    assert "select case (y)" in generated
+    assert "case (1)" in generated
+    assert "case (2)" in generated
+    assert "case default" in generated
+    assert "end select" in generated
+
+
+def test_select_result_requires_a_default_case() -> None:
+    source = """classify =: monad define
+  select. y
+  case. 1 do. 10
+  end.
+)
+smoutput classify 1
+"""
+
+    with pytest.raises(
+        xj2f.UnsupportedJError, match="does not produce a result on every path"
+    ):
+        xj2f.emit_fortran(xj2f.parse_j_source(Path("partial_select.ijs"), source))
+
+
 def test_ambivalent_explicit_verb_has_two_specific_definitions() -> None:
     source = "f =: 3 : 0\n  y * y\n:\n  x + y\n)\n"
     program = xj2f.parse_j_source(Path("ambivalent.ijs"), source)

@@ -183,6 +183,8 @@ The parser currently recognizes:
   supported inside translated verbs;
 - homogeneous multiple assignment such as `'a b' =. y`, lowered to selections
   while evaluating a nontrivial right-hand side only once;
+- right-to-left chained assignments, including assignments nested in
+  parenthesized subexpressions;
 - `for_name. 1 + i. expression do. ... end.`;
 - structured `if.`/`elseif.`/`else.` branches;
 - integer arithmetic, comparisons, Boolean `*.` and `-.`, integer residue `|`,
@@ -214,6 +216,8 @@ The parser currently recognizes:
 - scalar `while.` and `whilst.` loops with loop-carried local assignments;
 - compact control sentences, including assignments before `while.` and
   `if. ... do. ... else. ... end.` on one physical source line;
+- scalar integer `select.`/`case.` dispatch with an optional default
+  `case. do.` branch;
 - explicit `for_name.` iteration over zero-based `i. y` sequences;
 - explicit `for_name.` iteration over integer vectors using regular indexed loops;
 - pure recursive scalar integer explicit verbs;
