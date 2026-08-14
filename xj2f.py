@@ -107,6 +107,8 @@ PRINT_EXPRESSION_INLINE_LIMIT = 100
 RUNTIME_MODULE = "j2f_runtime"
 RUNTIME_PROCEDURES = {
     "addition_table_int": "j_addition_table_int",
+    "reflex_ge_table_int": "j_reflex_ge_table_int",
+    "reflex_lt_table_int": "j_reflex_lt_table_int",
     "append": "j_append_int_row",
     "binomial": "j_binomial",
     "cartesian": "j_cartesian_square",
@@ -254,6 +256,12 @@ class CommentStatement:
     text: str
 
 
+@dataclasses.dataclass(frozen=True)
+class EchoStatement:
+    line: SourceLine
+    expression: str
+
+
 Statement = (
     Assign
     | ForLoop
@@ -265,6 +273,7 @@ Statement = (
     | ReturnStatement
     | ExpressionStatement
     | CommentStatement
+    | EchoStatement
 )
 
 
@@ -282,12 +291,6 @@ class TacitVerbDefinition:
     line: SourceLine
     name: str
     verb: Verb
-
-
-@dataclasses.dataclass(frozen=True)
-class EchoStatement:
-    line: SourceLine
-    expression: str
 
 
 @dataclasses.dataclass(frozen=True)
@@ -866,7 +869,11 @@ class Parser:
                 continue
             conditional = self._if.fullmatch(text)
             if conditional:
-                statements.append(self._parse_conditional(line, conditional.group(1)))
+                condition_assignments, condition = self._rewrite_embedded_assignments(
+                    line, conditional.group(1)
+                )
+                statements.extend(condition_assignments)
+                statements.append(self._parse_conditional(line, condition))
                 continue
             selection = self._select.fullmatch(text)
             if selection:
@@ -900,6 +907,13 @@ class Parser:
                 statements.extend(destructuring)
                 self.index += 1
                 continue
+            output = re.fullmatch(r"(?:echo|smoutput|print)\s+(.+)", text)
+            if output:
+                statements.append(EchoStatement(line, output.group(1)))
+                self.index += 1
+                continue
+            if text in {"echo", "smoutput", "print"}:
+                raise _error_at(ParseError, line, f"{text} requires an expression")
             assignment = self._assignment.fullmatch(text)
             if assignment:
                 statements.extend(
@@ -1119,6 +1133,15 @@ def _normalized_expression(expression: str) -> str:
     return " ".join(expression.strip().split())
 
 
+def _echo_items(expression: Expression) -> list[Expression]:
+    """Split a J boxed-list expression into its semicolon-separated items."""
+
+    linked = dyad(expression, ";")
+    if linked is None:
+        return [expression]
+    return [*_echo_items(linked[0]), *_echo_items(linked[1])]
+
+
 def _numeric_csv_statistics_spec(
     program: Program,
 ) -> NumericCsvStatisticsSpec | None:
@@ -1320,6 +1343,7 @@ class FunctionEmitter:
         self.needs_cartesian = False
         self.needs_compress_hcat = False
         self.expression_helpers: set[str] = set()
+        self.has_echo = False
         self.result_type: TypeInfo | None = None
         self.integer_results_boolean_compatible = True
         callable_name = definition.generic_name or definition.name
@@ -1457,7 +1481,7 @@ class FunctionEmitter:
             self.types[_fortran_name(argument)]
             for argument in self.definition.arguments
         ]
-        if "write_text" in self.expression_helpers:
+        if "write_text" in self.expression_helpers or self.has_echo:
             purity = "impure"
         else:
             purity = (
@@ -2099,6 +2123,8 @@ class FunctionEmitter:
             self._emit_select(statement)
         elif isinstance(statement, AssertStatement):
             self._emit_assert(statement)
+        elif isinstance(statement, EchoStatement):
+            self._emit_verb_echo(statement)
         elif isinstance(statement, ContinueStatement):
             if self.loop_depth == 0:
                 raise _error_at(
@@ -2415,6 +2441,57 @@ class FunctionEmitter:
         self._write(
             f'if (.not. ({condition})) error stop "J assertion failure"'
         )
+
+    def _emit_verb_echo(self, echo: EchoStatement) -> None:
+        self.has_echo = True
+        expression = self._parse_expression(echo.expression, echo.line)
+        descriptors: list[str] = []
+        arguments: list[str] = []
+        for item in _echo_items(expression):
+            try:
+                item_type = infer_type(
+                    item, self.types, self._name, named_verbs=self.named_verbs
+                )
+                rendered = render_fortran_expression(
+                    item,
+                    self._name,
+                    names=self.types,
+                    named_verbs=self.named_verbs,
+                )
+            except LoweringError as exc:
+                raise _error_at(UnsupportedJError, echo.line, str(exc)) from exc
+            if item_type.atom_type is not AtomType.CHARACTER and item_type.rank != 0:
+                raise _error_at(
+                    UnsupportedJError,
+                    echo.line,
+                    "print currently supports only scalar items",
+                )
+            self.expression_helpers.update(
+                required_runtime_helpers(
+                    item, self.types, self._name, named_verbs=self.named_verbs
+                )
+            )
+            if item_type.atom_type is AtomType.CHARACTER:
+                descriptors.append("a")
+                arguments.append(rendered)
+            elif item_type.atom_type is AtomType.LOGICAL:
+                descriptors.append("i0")
+                arguments.append(f"merge(1, 0, {rendered})")
+            elif item_type.atom_type is AtomType.REAL:
+                descriptors.append("g0")
+                arguments.append(rendered)
+            elif item_type.atom_type is AtomType.INTEGER:
+                descriptors.append("i0")
+                arguments.append(rendered)
+            else:
+                raise _error_at(
+                    UnsupportedJError,
+                    echo.line,
+                    "print currently supports only character, logical, or "
+                    "numeric scalar items",
+                )
+        format_spec = ",".join(descriptors)
+        self._write(f'write (*,"({format_spec})") {", ".join(arguments)}')
 
     def _emit_if(self, conditional: IfStatement) -> None:
         condition = self._render_condition(conditional.condition, conditional.line)
@@ -3114,6 +3191,38 @@ def _runtime_helpers(helpers: set[str]) -> list[str]:
                 "    table_values(row_index, :) = values(row_index) + values",
                 "  end do",
                 "end function j_addition_table_int",
+                "",
+            ]
+        )
+    if "reflex_ge_table_int" in helpers:
+        result.extend(
+            [
+                "pure function j_reflex_ge_table_int(values) result(table_values)",
+                "  integer, intent(in) :: values(:)",
+                "  logical, allocatable :: table_values(:,:)",
+                "  integer :: row_index",
+                "",
+                "  allocate(table_values(size(values), size(values)))",
+                "  do row_index = 1, size(values)",
+                "    table_values(row_index, :) = values(row_index) >= values",
+                "  end do",
+                "end function j_reflex_ge_table_int",
+                "",
+            ]
+        )
+    if "reflex_lt_table_int" in helpers:
+        result.extend(
+            [
+                "pure function j_reflex_lt_table_int(values) result(table_values)",
+                "  integer, intent(in) :: values(:)",
+                "  logical, allocatable :: table_values(:,:)",
+                "  integer :: row_index",
+                "",
+                "  allocate(table_values(size(values), size(values)))",
+                "  do row_index = 1, size(values)",
+                "    table_values(row_index, :) = values(row_index) < values",
+                "  end do",
+                "end function j_reflex_lt_table_int",
                 "",
             ]
         )
@@ -3872,8 +3981,44 @@ def _runtime_helpers(helpers: set[str]) -> list[str]:
     return result
 
 
+def _statements_contain_echo(statements: tuple[Statement, ...]) -> bool:
+    """Detect a `print`/`echo`/`smoutput` statement anywhere in a verb body."""
+
+    for statement in statements:
+        if isinstance(statement, EchoStatement):
+            return True
+        if isinstance(statement, (ForLoop, WhileLoop)):
+            if _statements_contain_echo(statement.body):
+                return True
+        elif isinstance(statement, IfStatement):
+            bodies = [statement.body]
+            bodies.extend(branch.body for branch in statement.elseif_branches)
+            if statement.else_body is not None:
+                bodies.append(statement.else_body)
+            if any(_statements_contain_echo(body) for body in bodies):
+                return True
+        elif isinstance(statement, SelectStatement):
+            if any(
+                _statements_contain_echo(branch.body)
+                for branch in statement.branches
+            ):
+                return True
+    return False
+
+
+def _verbs_with_echo(program: Program) -> set[str]:
+    """Names of verbs whose body prints, directly or through control flow."""
+
+    return {
+        item.name
+        for item in program.items
+        if isinstance(item, VerbDefinition) and _statements_contain_echo(item.body)
+    }
+
+
 def _print_only_top_names(program: Program) -> set[str]:
     assignments = [item for item in program.items if isinstance(item, Assign)]
+    echoing_verbs = _verbs_with_echo(program)
     result: set[str] = set()
     for assignment in assignments:
         name = assignment.name
@@ -3888,7 +4033,11 @@ def _print_only_top_names(program: Program) -> set[str]:
             and _normalized_expression(item.expression) == name
             for item in program.items
         )
-        if uses == 1 and directly_echoed:
+        calls_echoing_verb = any(
+            re.search(rf"\b{re.escape(verb_name)}\b", assignment.expression)
+            for verb_name in echoing_verbs
+        )
+        if uses == 1 and directly_echoed and not calls_echoing_verb:
             result.add(_fortran_name(name))
     return result
 
@@ -5410,6 +5559,27 @@ def _explicit_definitions(program: Program) -> list[VerbDefinition]:
                     )
                 )
                 continue
+        if (
+            isinstance(item.verb, ForkVerb)
+            and isinstance(item.verb.left, PrimitiveVerb)
+            and item.verb.left.spelling == "[:"
+        ):
+            center = _simple_verb_source(item.verb.center)
+            right = _simple_verb_source(item.verb.right)
+            if center is not None and right is not None:
+                definitions.append(
+                    VerbDefinition(
+                        item.line,
+                        item.name,
+                        ("x", "y"),
+                        (
+                            ExpressionStatement(
+                                item.line, f"{center} (x {right} y)"
+                            ),
+                        ),
+                    )
+                )
+                continue
         if isinstance(item.verb, ForkVerb):
             left = _monadic_tacit_source(item.verb.left, "y")
             center = _simple_verb_source(item.verb.center)
@@ -6723,8 +6893,19 @@ def emit_fortran(
             tuple[str, str, str, int] | None,
         ]
     ] = []
+    echoing_verbs = _verbs_with_echo(program)
     for echo in echos:
         normalized_echo = _normalized_expression(echo.expression)
+        if any(
+            re.search(rf"\b{re.escape(verb_name)}\b", normalized_echo)
+            for verb_name in echoing_verbs
+        ):
+            raise _error_at(
+                UnsupportedJError,
+                echo.line,
+                "echo of a verb call that itself prints is not supported "
+                "(Fortran forbids nested console I/O)",
+            )
         try:
             echo_ast = parse_expression(
                 normalized_echo, noun_names=top_noun_names

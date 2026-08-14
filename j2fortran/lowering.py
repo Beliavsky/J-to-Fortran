@@ -211,6 +211,11 @@ def reflex_table_spelling(verb: Verb) -> str | None:
     return table_spelling(verb.operand)
 
 
+# Reflex comparison tables (``u/~``) supported alongside the addition table;
+# each maps to the runtime helper suffix that renders ``y(i) u y(j)``.
+_REFLEX_COMPARISON_TABLES = {">:": "ge", "<": "lt"}
+
+
 def table_of_reflex_spelling(verb: Verb) -> str | None:
     """Return ``u`` for the dyadic table form ``u~/``."""
 
@@ -321,6 +326,8 @@ def integer_value(expression: Expression) -> int | None:
     if not isinstance(expression, NumberLiteral):
         return None
     spelling = expression.text.replace("_", "-")
+    if spelling.endswith("x"):
+        spelling = spelling[:-1]
     try:
         return int(spelling)
     except ValueError:
@@ -834,6 +841,16 @@ def infer_type(
                 )
             extent = operand_type.shape.extents[0]
             return TypeInfo(AtomType.INTEGER, Shape.matrix(extent, extent))
+        if reflex_table in _REFLEX_COMPARISON_TABLES:
+            if (
+                operand_type.atom_type is not AtomType.INTEGER
+                or operand_type.rank != 1
+            ):
+                raise LoweringError(
+                    "reflex comparison table currently requires an integer vector"
+                )
+            extent = operand_type.shape.extents[0]
+            return TypeInfo(AtomType.LOGICAL, Shape.matrix(extent, extent))
         ranked_reduction = ranked_reduction_spelling(expression.verb)
         if ranked_reduction in {"+", "*", "<.", ">.", "+.", "*."}:
             if operand_type.rank < 2:
@@ -1032,6 +1049,8 @@ def infer_type(
                 raise LoweringError("conjugate requires a numeric operand")
             return operand_type
         if spelling in {"-", "*:"}:
+            if spelling == "-" and operand_type.atom_type is AtomType.LOGICAL:
+                return TypeInfo(AtomType.INTEGER, operand_type.shape)
             if operand_type.atom_type not in {
                 AtomType.INTEGER,
                 AtomType.REAL,
@@ -2156,6 +2175,11 @@ def _apply_vector_matrix_agreement(
 def _fortran_number(spelling: str) -> str:
     if spelling in {"_", "_."}:
         raise LoweringError(f"special J number {spelling!r} is not supported")
+    if spelling.endswith("x"):
+        # Extended-precision integer literals (e.g. ``2x``) are rendered as
+        # ordinary Fortran integers; arbitrary-precision arithmetic is not
+        # modeled.
+        spelling = spelling[:-1]
     if "p" in spelling:
         coefficient, exponent = spelling.split("p", 1)
         coefficient = coefficient.replace("_", "-")
@@ -2298,6 +2322,12 @@ def _render_fortran_expression(
                 expression.operand, name_transform
             )
             return f"j_addition_table_int({operand})", _ATOM_PRECEDENCE, "call"
+        if reflex_table in _REFLEX_COMPARISON_TABLES:
+            operand, _, _ = _render_fortran_expression(
+                expression.operand, name_transform
+            )
+            suffix = _REFLEX_COMPARISON_TABLES[reflex_table]
+            return f"j_reflex_{suffix}_table_int({operand})", _ATOM_PRECEDENCE, "call"
         ranked_reduction = ranked_reduction_spelling(expression.verb)
         if ranked_reduction in {"+", "*", "<.", ">.", "+.", "*."}:
             operand, _, _ = _render_fortran_expression(
@@ -3237,6 +3267,8 @@ def render_fortran_expression(
             )
             if spelling == "|":
                 return f"abs({operand})"
+            if spelling == "-" and operand_type.atom_type is AtomType.LOGICAL:
+                return f"-merge(1, 0, {operand})"
             operand_expression = ungroup(bare_expression.operand)
             if (
                 isinstance(operand_expression, DyadicApply)
@@ -4190,8 +4222,11 @@ def required_runtime_helpers(
                 helpers.add("determinant_real")
         if spelling == "%.":
             helpers.add("inverse_real")
-        if reflex_table_spelling(expression.verb) == "+":
+        reflex_table = reflex_table_spelling(expression.verb)
+        if reflex_table == "+":
             helpers.add("addition_table_int")
+        elif reflex_table in _REFLEX_COMPARISON_TABLES:
+            helpers.add(f"reflex_{_REFLEX_COMPARISON_TABLES[reflex_table]}_table_int")
         scan = insert_scan_spelling(expression.verb)
         if scan in {"+", "*", ">."}:
             operand_type = (

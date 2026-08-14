@@ -3,6 +3,7 @@ module j2f_runtime
   implicit none
   private
   public :: j_addition_table_int, j_append_int_row, j_binomial
+  public :: j_reflex_ge_table_int, j_reflex_lt_table_int
   public :: j_cartesian_square, j_compress_hcat
   public :: j_copy_int_vector, j_factorial, j_grade_up_int, j_index_of_int
   public :: j_decode_int, j_determinant_real, j_diagonal_int, j_diagonal_real
@@ -248,6 +249,28 @@ pure function j_addition_table_int(values) result(table_values)
     table_values(row_index, :) = values(row_index) + values
   end do
 end function j_addition_table_int
+
+pure function j_reflex_ge_table_int(values) result(table_values)
+  integer, intent(in) :: values(:)
+  logical, allocatable :: table_values(:,:)
+  integer :: row_index
+
+  allocate(table_values(size(values), size(values)))
+  do row_index = 1, size(values)
+    table_values(row_index, :) = values(row_index) >= values
+  end do
+end function j_reflex_ge_table_int
+
+pure function j_reflex_lt_table_int(values) result(table_values)
+  integer, intent(in) :: values(:)
+  logical, allocatable :: table_values(:,:)
+  integer :: row_index
+
+  allocate(table_values(size(values), size(values)))
+  do row_index = 1, size(values)
+    table_values(row_index, :) = values(row_index) < values
+  end do
+end function j_reflex_lt_table_int
 
 pure function j_multiplication_table_int(left, right) result(table_values)
   integer, intent(in) :: left(:), right(:)
