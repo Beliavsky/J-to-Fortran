@@ -143,16 +143,18 @@ default mode is the read-only `--check`:
 ```powershell
 python xj2f_batch.py test_suite indexing_tests --jobs 4
 python xj2f_batch.py
+python xj2f_batch.py examples --translate --out-dir examples\fortran --output-names source
 python xj2f_batch.py "examples\*.ijs" --recursive --compile
 python xj2f_batch.py examples --run-both
 python xj2f_batch.py @programs.txt --run-diff --jconsole C:\J\bin\jconsole.exe
 ```
 
-Use `--limit` for a small sample and `--max-fail` with sequential execution to
-stop early. The summary distinguishes translation, compilation, execution, J,
-comparison, and timeout failures. An editable or regular installation also
-provides the `xj2f-batch` command. Build and run modes use unique
-`<input>_j.f90` names so parallel cases do not overwrite one another.
+Use `--translate` to write Fortran without compiling, `--limit` for a small
+sample, and `--max-fail` with sequential execution to stop early. The summary
+distinguishes translation, compilation, execution, J, comparison, and timeout
+failures. An editable or regular installation also provides the `xj2f-batch`
+command. Output defaults to `<input>_j.f90`; `--output-names source` instead
+uses the J source base name, such as `pythag.f90`.
 
 ## Runtime helpers
 

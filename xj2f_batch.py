@@ -144,7 +144,9 @@ def _classify_failure(output: str) -> str:
     return "translate_fail"
 
 
-def _mode_flag(args: argparse.Namespace) -> str:
+def _mode_flag(args: argparse.Namespace) -> str | None:
+    if args.translate:
+        return None
     for flag in ("run_diff", "run_both", "run", "compile"):
         if getattr(args, flag):
             return "--" + flag.replace("_", "-")
@@ -153,7 +155,10 @@ def _mode_flag(args: argparse.Namespace) -> str:
 
 def _case_command(source: Path, args: argparse.Namespace) -> list[str]:
     command = [sys.executable, str(Path(xj2f.__file__).resolve()), str(source)]
-    command.extend([_mode_flag(args), "--runtime", args.runtime])
+    mode_flag = _mode_flag(args)
+    if mode_flag:
+        command.append(mode_flag)
+    command.extend(["--runtime", args.runtime])
     command.extend(["--source-comments", args.source_comments])
     if args.function_result_style:
         command.extend(["--function-result-style", args.function_result_style])
@@ -173,9 +178,10 @@ def _case_command(source: Path, args: argparse.Namespace) -> list[str]:
         command.append("--ifx")
     if args.jconsole:
         command.extend(["--jconsole", args.jconsole])
-    if _mode_flag(args) != "--check":
+    if mode_flag != "--check":
         output_directory = Path(args.out_dir).resolve() if args.out_dir else source.parent
-        command.extend(["--out", str(output_directory / f"{source.stem}_j.f90")])
+        suffix = "" if args.output_names == "source" else "_j"
+        command.extend(["--out", str(output_directory / f"{source.stem}{suffix}.f90")])
     return command
 
 
@@ -238,6 +244,7 @@ def build_argument_parser() -> argparse.ArgumentParser:
         help="recursively expand ordinary glob patterns",
     )
     mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--translate", action="store_true", help="write Fortran without compiling")
     mode.add_argument("--compile", action="store_true", help="transpile and compile")
     mode.add_argument("--run", action="store_true", help="transpile, compile, and run")
     mode.add_argument(
@@ -304,6 +311,12 @@ def build_argument_parser() -> argparse.ArgumentParser:
         help="emit safe top-level constant nouns as Fortran parameters",
     )
     parser.add_argument("--out-dir", help="directory forwarded to xj2f.py")
+    parser.add_argument(
+        "--output-names",
+        choices=("generated", "source"),
+        default="generated",
+        help="name output STEM_j.f90 or STEM.f90 (default: generated)",
+    )
     parser.add_argument("--verbose", action="store_true", help="show successful output")
     parser.add_argument("--terse", action="store_true", help="show only failures and totals")
     parser.add_argument("--version", action="version", version=f"%(prog)s {xj2f.VERSION}")

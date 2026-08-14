@@ -175,6 +175,27 @@ def test_batch_build_outputs_are_unique(tmp_path: Path) -> None:
     assert second_command[-2:] == ["--out", str(tmp_path / "second_j.f90")]
 
 
+def test_translate_can_reuse_source_base_names(tmp_path: Path) -> None:
+    source = tmp_path / "example.ijs"
+    output_directory = tmp_path / "fortran"
+    args = xj2f_batch.build_argument_parser().parse_args(
+        [
+            str(source),
+            "--translate",
+            "--out-dir",
+            str(output_directory),
+            "--output-names",
+            "source",
+        ]
+    )
+
+    command = xj2f_batch._case_command(source, args)
+
+    assert "--check" not in command
+    assert "--compile" not in command
+    assert command[-2:] == ["--out", str(output_directory / "example.f90")]
+
+
 def test_batch_separates_script_results_with_a_blank_line(
     tmp_path: Path, capsys, monkeypatch
 ) -> None:
