@@ -11,6 +11,7 @@ from dataclasses import dataclass
 import glob
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import xj2f
@@ -324,6 +325,7 @@ def build_argument_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    started = time.perf_counter()
     parser = build_argument_parser()
     args = parser.parse_args(argv)
     if args.jobs < 1:
@@ -392,6 +394,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             if outcome != "pass"
         )
         print(f"Failures: {details}")
+    print(f"Elapsed: {time.perf_counter() - started:.3f} s")
     return 1 if failed else 0
 
 

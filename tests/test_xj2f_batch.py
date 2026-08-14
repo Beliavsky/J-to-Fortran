@@ -216,3 +216,21 @@ def test_batch_separates_script_results_with_a_blank_line(
 
     second_header = f"[2/2] PASS pass {sources[1]}"
     assert f"--- Fortran output ---\n1\n\n{second_header}" in output
+
+
+def test_batch_prints_total_elapsed_time(tmp_path: Path, capsys, monkeypatch) -> None:
+    source = tmp_path / "valid.ijs"
+    source.write_text("result =: 1\n", encoding="utf-8")
+    readings = iter((100.0, 101.23456))
+    monkeypatch.setattr(xj2f_batch.time, "perf_counter", lambda: next(readings))
+    monkeypatch.setattr(
+        xj2f_batch,
+        "_run_case",
+        lambda indexed_source, _args: xj2f_batch.CaseResult(
+            indexed_source[0], indexed_source[1], 0, "pass", ""
+        ),
+    )
+
+    assert xj2f_batch.main([str(source), "--terse"]) == 0
+
+    assert capsys.readouterr().out.endswith("Elapsed: 1.235 s\n")
