@@ -1729,10 +1729,25 @@ def infer_type(
                 else AtomType.INTEGER
             )
             return TypeInfo(atom_type)
-        try:
-            shape = agree_shapes(left_type.shape, right_type.shape)
-        except ShapeMismatchError as exc:
-            raise LoweringError(f"length error: {exc}") from exc
+        if {left_type.rank, right_type.rank} == {1, 2}:
+            vector_type = left_type if left_type.rank == 1 else right_type
+            matrix_type = left_type if left_type.rank == 2 else right_type
+            vector_extent = vector_type.shape.extents[0]
+            trailing_extent = matrix_type.shape.extents[1]
+            if (
+                isinstance(vector_extent, int)
+                and isinstance(trailing_extent, int)
+                and vector_extent != trailing_extent
+            ):
+                raise LoweringError(
+                    "length error: vector length does not match the matrix trailing axis"
+                )
+            shape = matrix_type.shape
+        else:
+            try:
+                shape = agree_shapes(left_type.shape, right_type.shape)
+            except ShapeMismatchError as exc:
+                raise LoweringError(f"length error: {exc}") from exc
         if spelling in {"=", "~:", "<", "<:", ">", ">:"}:
             return TypeInfo(AtomType.LOGICAL, shape)
         if spelling in {"*.", "+."}:
@@ -1876,6 +1891,21 @@ def _as_real_dp(rendered: str) -> str:
     if digits.isdecimal():
         return f"{rendered}.0_dp"
     return f"real({rendered}, kind=dp)"
+
+
+def _apply_vector_matrix_agreement(
+    left: str,
+    right: str,
+    left_type: TypeInfo,
+    right_type: TypeInfo,
+) -> tuple[str, str]:
+    """Render J trailing-axis agreement between a vector and matrix."""
+
+    if left_type.rank == 1 and right_type.rank == 2:
+        left = f"spread({left}, dim=1, ncopies=size({right}, 1))"
+    elif left_type.rank == 2 and right_type.rank == 1:
+        right = f"spread({right}, dim=1, ncopies=size({left}, 1))"
+    return left, right
 
 
 def _fortran_number(spelling: str) -> str:
@@ -3372,6 +3402,21 @@ def render_fortran_expression(
             names=names,
             named_verbs=named_verbs,
         )
+        left_type = infer_type(
+            bare_expression.left,
+            names,
+            name_transform,
+            named_verbs=named_verbs,
+        )
+        right_type = infer_type(
+            bare_expression.right,
+            names,
+            name_transform,
+            named_verbs=named_verbs,
+        )
+        left, right = _apply_vector_matrix_agreement(
+            left, right, left_type, right_type
+        )
         operator = _DYADIC_FORTRAN[logical_spelling]
         precedence = _FORTRAN_PRECEDENCE[operator]
         left_spelling = _logical_dyad_spelling(bare_expression.left)
@@ -3429,6 +3474,12 @@ def render_fortran_expression(
                 names=names,
                 named_verbs=named_verbs,
             )
+            right_type = infer_type(
+                bare_expression.right,
+                names,
+                name_transform,
+                named_verbs=named_verbs,
+            )
             try:
                 _, left_precedence, _ = _render_fortran_expression(
                     bare_expression.left, name_transform
@@ -3440,6 +3491,12 @@ def render_fortran_expression(
                     bare_expression.right, name_transform
                 )
             except LoweringError:
+                right_precedence = _ATOM_PRECEDENCE
+            left, right = _apply_vector_matrix_agreement(
+                left, right, left_type, right_type
+            )
+            if left_type.rank != right_type.rank:
+                left_precedence = _ATOM_PRECEDENCE
                 right_precedence = _ATOM_PRECEDENCE
             if (
                 left_type.atom_type is AtomType.INTEGER
@@ -3476,6 +3533,9 @@ def render_fortran_expression(
                 name_transform,
                 names=names,
                 named_verbs=named_verbs,
+            )
+            left, right = _apply_vector_matrix_agreement(
+                left, right, left_type, right_type
             )
             if AtomType.REAL in {left_type.atom_type, right_type.atom_type}:
                 if left_type.atom_type is AtomType.INTEGER:
@@ -3539,6 +3599,9 @@ def render_fortran_expression(
                 right_type.atom_type is AtomType.LOGICAL
             ):
                 right = f"merge(1, 0, {right})"
+            left, right = _apply_vector_matrix_agreement(
+                left, right, left_type, right_type
+            )
             try:
                 _, left_precedence, left_operator = _render_fortran_expression(
                     bare_expression.left, name_transform

@@ -761,6 +761,40 @@ def test_ranked_row_broadcasting_lowers_to_spread(
     assert render_fortran_expression(expression, names=names) == expected
 
 
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    [
+        (
+            "vector * matrix",
+            "spread(vector, dim=1, ncopies=size(matrix, 1)) * matrix",
+        ),
+        (
+            "matrix + vector",
+            "matrix + spread(vector, dim=1, ncopies=size(matrix, 1))",
+        ),
+        (
+            "matrix >. vector",
+            "max(matrix, spread(vector, dim=1, ncopies=size(matrix, 1)))",
+        ),
+        (
+            "matrix ^ vector",
+            "matrix**spread(vector, dim=1, ncopies=size(matrix, 1))",
+        ),
+    ],
+)
+def test_implicit_vector_matrix_agreement_uses_spread(
+    source: str, expected: str
+) -> None:
+    expression = parse_expression(source)
+    names = {
+        "vector": TypeInfo(AtomType.REAL, Shape.vector(4)),
+        "matrix": TypeInfo(AtomType.REAL, Shape.matrix(20, 4)),
+    }
+
+    assert infer_type(expression, names) == names["matrix"]
+    assert render_fortran_expression(expression, names=names) == expected
+
+
 def test_prime_expression_primitives_lower_generically() -> None:
     names = {
         "limit": TypeInfo(AtomType.INTEGER),

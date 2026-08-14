@@ -431,6 +431,19 @@ Fortran also performs elemental arithmetic on conforming arrays, but does not
 implement every J agreement and rank behavior implicitly. Code with explicit,
 stable shapes is the most reliable to translate.
 
+For a vector agreeing with the trailing axis of a matrix, the translator uses
+`spread` to make the replication explicit. For example, `weights * matrix`
+with a vector matching the matrix column count becomes:
+
+```fortran
+spread(weights, dim=1, ncopies=size(matrix, 1)) * matrix
+```
+
+When an explicit verb unpacks an argument and then uses the unpacked numeric
+items as arrays, the supported homogeneous-box convention represents those
+items as matrix rows. This is intentionally narrower than J's fully
+heterogeneous boxed arrays.
+
 Dyadic `p.` evaluates a polynomial whose coefficients are ordered from the
 constant term upward. Integer and real coefficients with a scalar numeric
 argument are lowered to a type-appropriate Horner-method helper.

@@ -2674,6 +2674,64 @@ smoutput selected
     assert "matrix(1, :)(indices + 1)" not in generated
 
 
+def test_unpacked_array_items_infer_a_matrix_argument() -> None:
+    source = """scans =: 3 : 0
+  'left right' =. y
+  (+/\\ left), */\\ right
+)
+"""
+    program = xj2f.parse_j_source(Path("boxed_rows.ijs"), source)
+    generated = xj2f.emit_fortran(program)
+
+    assert "integer, intent(in) :: y(:,:)" in generated
+    assert "y(1, :)" in generated
+    assert "y(2, :)" in generated
+    assert "j_prefix_sum_int(y(1, :))" in generated
+    assert "j_prefix_product_int(y(2, :))" in generated
+
+
+@pytest.mark.requires_gfortran
+def test_implicit_vector_matrix_agreement_compiles_and_runs(
+    tmp_path: Path,
+) -> None:
+    compiler = shutil.which("gfortran")
+    if compiler is None:
+        pytest.skip("gfortran is not installed")
+    source_text = """matrix =: 2 3 $ 1 2 3 4 5 6
+vector =: 10 20 30
+smoutput vector * matrix
+"""
+    program = xj2f.parse_j_source(tmp_path / "agreement.ijs", source_text)
+    generated = xj2f.emit_fortran(program)
+    source = tmp_path / "agreement.f90"
+    executable = tmp_path / "agreement.exe"
+    source.write_text(generated, encoding="utf-8")
+    compiled = subprocess.run(
+        [compiler, "-std=f2018", str(source), "-o", str(executable)],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert compiled.returncode == 0, compiled.stdout + compiled.stderr
+    completed = subprocess.run(
+        [str(executable)],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert [int(token) for token in completed.stdout.split()] == [
+        10,
+        40,
+        90,
+        40,
+        100,
+        180,
+    ]
+
+
 def test_conditional_without_else_is_not_a_total_result() -> None:
     source = """f =: 3 : 0
   if. y > 0 do.

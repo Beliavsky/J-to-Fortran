@@ -267,6 +267,10 @@ The parser currently recognizes:
 - integer and real prefix sum, product, and maximum scans using regular loops;
 - numeric whitespace or comma-delimited text tables read by `mread`;
 - equal-length homogeneous boxed numeric vectors lowered to matrix rows;
+- homogeneous boxed row arguments inferred as matrices when unpacked items are
+  subsequently used as arrays;
+- implicit vector-matrix agreement on the trailing matrix axis, lowered with
+  `spread`;
 - heterogeneous top-level boxed test matches decomposed element by element;
 - mixed Boolean expressions and integer literal `0`/`1` branches, inferred as
   logical results and emitted with `.false.`/`.true.` literals;

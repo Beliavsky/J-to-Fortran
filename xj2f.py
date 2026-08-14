@@ -4446,9 +4446,11 @@ def _captured_top_names(
 def _definition_argument_shape_hint(
     definition: VerbDefinition,
 ) -> tuple[TypeInfo, ...] | None:
-    """Infer a minimum vector extent from unpacking and constant selection."""
+    """Infer argument ranks from unpacking, selection, and array use."""
 
     minimum_extents: dict[str, int | None] = {}
+    unpacked_names: dict[str, tuple[str, ...]] = {}
+    expression_texts: list[str] = []
 
     def require_vector(name: str, extent: int | None) -> None:
         if name not in definition.arguments:
@@ -4470,10 +4472,13 @@ def _definition_argument_shape_hint(
                 if destructuring is not None:
                     source = destructuring.group("expression").strip()
                     if re.fullmatch(r"[A-Za-z][A-Za-z0-9_]*", source):
-                        count = len(
-                            destructuring.group("names").replace("''", "'").split()
+                        names = tuple(
+                            destructuring.group("names")
+                            .replace("''", "'")
+                            .split()
                         )
-                        require_vector(source, count)
+                        unpacked_names[source] = names
+                        require_vector(source, len(names))
             elif isinstance(statement, ExpressionStatement):
                 texts.append(statement.expression)
             elif isinstance(statement, AssertStatement):
@@ -4499,6 +4504,7 @@ def _definition_argument_shape_hint(
                         texts.append(branch.expression)
                     inspect(branch.body)
             for text in texts:
+                expression_texts.append(text)
                 for argument in definition.arguments:
                     selection = re.compile(
                         rf"(?<![A-Za-z0-9_])(?P<index>_?\d+)\s*\{{\s*"
@@ -4509,12 +4515,39 @@ def _definition_argument_shape_hint(
                         require_vector(argument, index + 1 if index >= 0 else None)
 
     inspect(definition.body)
-    if not minimum_extents:
+    matrix_extents: dict[str, tuple[int, None]] = {}
+    for source, names in unpacked_names.items():
+        if source not in definition.arguments:
+            continue
+        for name in names:
+            name_pattern = rf"(?<![A-Za-z0-9_]){re.escape(name)}(?![A-Za-z0-9_])"
+            used_as_array = any(
+                re.search(name_pattern, text)
+                and (
+                    re.search(r"(?:\+|\*|>\.)/\\", text)
+                    or re.search(rf"#\s*{name_pattern}", text)
+                )
+                for text in expression_texts
+            )
+            if used_as_array:
+                matrix_extents[source] = (len(names), None)
+                minimum_extents.pop(source, None)
+                break
+    if not minimum_extents and not matrix_extents:
         return None
     return tuple(
-        TypeInfo(AtomType.INTEGER, Shape.vector(minimum_extents[argument]))
-        if argument in minimum_extents
-        else TypeInfo(AtomType.INTEGER)
+        (
+            TypeInfo(AtomType.INTEGER, Shape(matrix_extents[argument]))
+            if argument in matrix_extents
+            else (
+                TypeInfo(
+                    AtomType.INTEGER,
+                    Shape.vector(minimum_extents[argument]),
+                )
+                if argument in minimum_extents
+                else TypeInfo(AtomType.INTEGER)
+            )
+        )
         for argument in definition.arguments
     )
 
