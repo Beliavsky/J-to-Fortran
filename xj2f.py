@@ -9,6 +9,7 @@ location instead of being translated speculatively.
 from __future__ import annotations
 
 import argparse
+import ast
 import dataclasses
 import json
 import math
@@ -101,6 +102,7 @@ from j2fortran.type_system import (
 VERSION = "0.1.0"
 SOURCE_COMMENT_MODES = {"all", "commented", "none"}
 FUNCTION_RESULT_STYLES = {"named", "concise"}
+PRINT_EXPRESSION_INLINE_LIMIT = 100
 RUNTIME_MODULE = "j2f_runtime"
 RUNTIME_PROCEDURES = {
     "addition_table_int": "j_addition_table_int",
@@ -174,7 +176,7 @@ class Assign:
 @dataclasses.dataclass(frozen=True)
 class ForLoop:
     line: SourceLine
-    variable: str
+    variable: str | None
     expression: str
     body: tuple[Statement, ...]
 
@@ -203,6 +205,22 @@ class IfStatement:
 
 
 @dataclasses.dataclass(frozen=True)
+class AssertStatement:
+    line: SourceLine
+    expression: str
+
+
+@dataclasses.dataclass(frozen=True)
+class ContinueStatement:
+    line: SourceLine
+
+
+@dataclasses.dataclass(frozen=True)
+class ReturnStatement:
+    line: SourceLine
+
+
+@dataclasses.dataclass(frozen=True)
 class ExpressionStatement:
     line: SourceLine
     expression: str
@@ -219,6 +237,9 @@ Statement = (
     | ForLoop
     | WhileLoop
     | IfStatement
+    | AssertStatement
+    | ContinueStatement
+    | ReturnStatement
     | ExpressionStatement
     | CommentStatement
 )
@@ -322,7 +343,8 @@ class Parser:
         r"^([A-Za-z][A-Za-z0-9_]*)\s*(=[:.])\s*(.*?)\s*$"
     )
     _for = re.compile(
-        r"^for_([A-Za-z][A-Za-z0-9_]*)\.\s+(.+?)\s+do\.\s*$"
+        r"^for(?:_(?P<variable>[A-Za-z][A-Za-z0-9_]*))?\.\s+"
+        r"(?P<expression>.+?)\s+do\.\s*$"
     )
     _while = re.compile(r"^while\.\s+(.+?)\s+do\.\s*$")
     _if = re.compile(r"^if\.\s+(.+?)\s+do\.\s*$")
@@ -469,8 +491,20 @@ class Parser:
             if loop:
                 self.index += 1
                 body = self._parse_statements({"end."})
-                self._expect("end.", line, f"for_{loop.group(1)}. loop")
-                statements.append(ForLoop(line, loop.group(1), loop.group(2), tuple(body)))
+                label = (
+                    f"for_{loop.group('variable')}."
+                    if loop.group("variable")
+                    else "for."
+                )
+                self._expect("end.", line, f"{label} loop")
+                statements.append(
+                    ForLoop(
+                        line,
+                        loop.group("variable"),
+                        loop.group("expression"),
+                        tuple(body),
+                    )
+                )
                 continue
             while_loop = self._while.fullmatch(text)
             if while_loop:
@@ -484,6 +518,29 @@ class Parser:
             conditional = self._if.fullmatch(text)
             if conditional:
                 statements.append(self._parse_conditional(line, conditional.group(1)))
+                continue
+            assertion = re.fullmatch(r"assert\.\s+(.+)", text)
+            if assertion:
+                statements.append(AssertStatement(line, assertion.group(1)))
+                self.index += 1
+                continue
+            returned = re.fullmatch(r"(.+?)\s+return\.", text)
+            if returned:
+                statements.extend(
+                    [
+                        ExpressionStatement(line, returned.group(1)),
+                        ReturnStatement(line),
+                    ]
+                )
+                self.index += 1
+                continue
+            if text == "return.":
+                statements.append(ReturnStatement(line))
+                self.index += 1
+                continue
+            if text == "continue.":
+                statements.append(ContinueStatement(line))
+                self.index += 1
                 continue
             assignment = self._assignment.fullmatch(text)
             if assignment:
@@ -760,6 +817,7 @@ class FunctionEmitter:
         self.types: dict[str, TypeInfo] = dict(global_types or {})
         self.body: list[str] = []
         self.indent = 1
+        self.loop_depth = 0
         self.returned = False
         self.needs_append = False
         self.needs_cartesian = False
@@ -816,7 +874,7 @@ class FunctionEmitter:
                     )
                 ):
                     return True
-            elif pattern.search(statement.expression):
+            elif isinstance(statement, (ExpressionStatement, AssertStatement)) and pattern.search(statement.expression):
                 return True
         return False
 
@@ -855,6 +913,10 @@ class FunctionEmitter:
                 f"verb {self.definition.name!r} does not produce a result on every path",
             )
         self._eliminate_final_temporary()
+        self._eliminate_single_use_locals()
+        semantic_result_type = self.result_type
+        if self._can_scalarize_elemental():
+            self._scalarize_elemental_declarations()
 
         name = _fortran_name(self.definition.name)
         argument_types = [
@@ -919,7 +981,105 @@ class FunctionEmitter:
         if self.needs_compress_hcat:
             helpers.add("compress_hcat")
         helpers.update(self.expression_helpers)
-        return result, helpers, self.result_type
+        return result, helpers, semantic_result_type
+
+    @staticmethod
+    def _is_elementwise_expression(expression: Expression) -> bool:
+        expression = ungroup(expression)
+        if isinstance(expression, (NumberLiteral, Name)):
+            return True
+        if isinstance(expression, MonadicApply):
+            return (
+                isinstance(expression.verb, PrimitiveVerb)
+                and expression.verb.spelling
+                in {
+                    "]", "+", "-", "*", "*:", "|", "%:", "^.", "^",
+                    "<.", ">.", "-.", "<", ">",
+                }
+                and FunctionEmitter._is_elementwise_expression(
+                    expression.operand
+                )
+            )
+        if isinstance(expression, DyadicApply):
+            return (
+                isinstance(expression.verb, PrimitiveVerb)
+                and expression.verb.spelling
+                in {
+                    "+", "-", "*", "%", "^", "=", "~:", "<", "<:",
+                    ">", ">:", "*.", "+.", "o.", "<.", ">.",
+                }
+                and FunctionEmitter._is_elementwise_expression(expression.left)
+                and FunctionEmitter._is_elementwise_expression(expression.right)
+            )
+        return False
+
+    def _can_scalarize_elemental(self) -> bool:
+        """Return whether a rank-1 J verb is a scalar elemental operation."""
+
+        if (
+            self.is_recursive
+            or "write_text" in self.expression_helpers
+            or self.result_type is None
+            or self.result_type.rank != 1
+            or not self.argument_types
+            or any(
+                argument_type.rank != 1
+                or argument_type.atom_type
+                not in {AtomType.INTEGER, AtomType.REAL, AtomType.LOGICAL}
+                for argument_type in self.argument_types
+            )
+        ):
+            return False
+        declared_names = set(self.declarations)
+        if any(
+            type_info.rank > 0 and name not in declared_names
+            for name, type_info in self.types.items()
+        ):
+            return False
+        if any(type_info.rank not in {0, 1} for type_info in self.types.values()):
+            return False
+        noun_names = set(self.definition.arguments)
+        noun_names.update(
+            statement.name
+            for statement in self.definition.body
+            if isinstance(statement, Assign)
+        )
+        for statement in self.definition.body:
+            if isinstance(statement, CommentStatement):
+                continue
+            if not isinstance(statement, (Assign, ExpressionStatement)):
+                return False
+            try:
+                expression = parse_expression(
+                    statement.expression, noun_names=noun_names
+                )
+            except (LexerError, ExpressionParseError):
+                return False
+            if not self._is_elementwise_expression(expression):
+                return False
+        return True
+
+    def _scalarize_elemental_declarations(self) -> None:
+        """Represent an array-wise J verb as a scalar elemental procedure."""
+
+        for name, declaration in self.declarations.items():
+            if self.types[name].rank != 1:
+                continue
+            self.declarations[name] = declaration.replace(
+                ", allocatable-vector", ""
+            ).replace("-vector", "")
+            type_info = self.types[name]
+            self.types[name] = TypeInfo(
+                type_info.atom_type,
+                character_length=type_info.character_length,
+                boxed=type_info.boxed,
+            )
+        if self.result_type is not None:
+            self.result_type = TypeInfo(
+                self.result_type.atom_type,
+                character_length=self.result_type.character_length,
+                boxed=self.result_type.boxed,
+            )
 
     def _eliminate_final_temporary(self) -> None:
         """Inline a single-use local assigned immediately before its return."""
@@ -969,6 +1129,100 @@ class FunctionEmitter:
         self.body[result_index] = f"  j_result = {match.group('expression')}"
         del self.body[assignment_index]
         self.declarations.pop(name, None)
+
+    def _eliminate_single_use_locals(self) -> None:
+        """Inline short pure locals referenced by one later assignment."""
+
+        arguments = {
+            _fortran_name(argument) for argument in self.definition.arguments
+        }
+        commented_assignments = {
+            _fortran_name(statement.name)
+            for index, statement in enumerate(self.definition.body)
+            if isinstance(statement, Assign)
+            and index > 0
+            and isinstance(self.definition.body[index - 1], CommentStatement)
+        }
+        changed = True
+        while changed:
+            changed = False
+            for statement in self.definition.body:
+                if not (
+                    isinstance(statement, Assign)
+                    and statement.copula == "=."
+                ):
+                    continue
+                name = _fortran_name(statement.name)
+                if (
+                    name in arguments
+                    or name in commented_assignments
+                    or name not in self.declarations
+                ):
+                    continue
+                assignments, references = self._name_usage(
+                    self.definition.body, statement.name
+                )
+                if assignments != 1 or references != 1:
+                    continue
+                assignment_pattern = re.compile(
+                    rf"^  {re.escape(name)}\s*=\s*(?P<expression>.+)$"
+                )
+                defining_lines = [
+                    (index, match)
+                    for index, line in enumerate(self.body)
+                    if (match := assignment_pattern.fullmatch(line)) is not None
+                ]
+                if len(defining_lines) != 1:
+                    continue
+                definition_index, match = defining_lines[0]
+                name_pattern = re.compile(
+                    rf"(?<![A-Za-z0-9_]){re.escape(name)}(?![A-Za-z0-9_])"
+                )
+                consumers = [
+                    index
+                    for index, line in enumerate(self.body)
+                    if index > definition_index
+                    and name_pattern.search(line)
+                    and re.match(r"^  [a-z][a-z0-9_]*\s*=", line)
+                ]
+                if len(consumers) != 1:
+                    continue
+                consumer_index = consumers[0]
+                expression = match.group("expression")
+                dependencies = set(
+                    re.findall(r"[a-z][a-z0-9_]*", expression, re.IGNORECASE)
+                )
+                reassigned_between = any(
+                    assigned.group(1) in dependencies
+                    for line in self.body[definition_index + 1:consumer_index]
+                    if (assigned := re.match(
+                        r"^  ([a-z][a-z0-9_]*)\s*=", line, re.IGNORECASE
+                    )) is not None
+                )
+                if reassigned_between:
+                    continue
+                replacement = (
+                    expression
+                    if re.fullmatch(
+                        r"[a-z][a-z0-9_]*(?:\([^()]*\))?",
+                        expression,
+                        re.IGNORECASE,
+                    )
+                    else f"({expression})"
+                )
+                if "merge(" in self.body[consumer_index] and replacement != expression:
+                    continue
+                rewritten = name_pattern.sub(
+                    replacement, self.body[consumer_index]
+                )
+                if len(rewritten) > 120:
+                    continue
+                self.body[consumer_index] = rewritten
+                del self.body[definition_index]
+                self.declarations.pop(name, None)
+                self.types.pop(name, None)
+                changed = True
+                break
 
     @classmethod
     def _name_usage(
@@ -1021,7 +1275,7 @@ class FunctionEmitter:
                     )
                     assignments += nested_assignments
                     references += nested_references
-            else:
+            elif isinstance(statement, (ExpressionStatement, AssertStatement)):
                 count_expression(statement.expression)
         return assignments, references
 
@@ -1159,7 +1413,31 @@ class FunctionEmitter:
             self._emit_while(statement)
         elif isinstance(statement, IfStatement):
             self._emit_if(statement)
+        elif isinstance(statement, AssertStatement):
+            self._emit_assert(statement)
+        elif isinstance(statement, ContinueStatement):
+            if self.loop_depth == 0:
+                raise _error_at(
+                    UnsupportedJError,
+                    statement.line,
+                    "continue. requires an enclosing loop",
+                )
+            self._write("cycle")
+        elif isinstance(statement, ReturnStatement):
+            if self.result_type is None:
+                raise _error_at(
+                    UnsupportedJError,
+                    statement.line,
+                    "return. requires a previously computed result",
+                )
+            self._write("return")
         elif statement.expression == "break.":
+            if self.loop_depth == 0:
+                raise _error_at(
+                    UnsupportedJError,
+                    statement.line,
+                    "break. requires an enclosing loop",
+                )
             self._write("exit")
         else:
             self._emit_result(statement)
@@ -1295,15 +1573,34 @@ class FunctionEmitter:
                 loop.line,
                 "for loops currently require an integer vector or iota sequence",
             )
-        variable = _fortran_name(loop.variable)
-        self._declare(variable, "integer")
+        variable = (
+            _fortran_name(loop.variable) if loop.variable is not None else None
+        )
+        if variable is not None:
+            self._declare(variable, "integer")
+        needs_j_index = (
+            loop.variable is not None
+            and self._name_usage(
+                loop.body, f"{loop.variable}_index"
+            )[1] > 0
+        )
         if vector_name is not None:
-            index = safe_fortran_identifier(f"{variable}_index")
-            self._declare(index, "integer")
-            self._write(f"do {index} = 1, size({vector_name})")
+            loop_index = safe_fortran_identifier(
+                f"{variable}_loop_index" if variable else "j_for_index"
+            )
+            self._declare(loop_index, "integer")
+            if variable is not None and needs_j_index:
+                j_index = safe_fortran_identifier(f"{variable}_index")
+                self._declare(j_index, "integer")
+            self._write(f"do {loop_index} = 1, size({vector_name})")
             self.indent += 1
-            self._write(f"{variable} = {vector_name}({index})")
+            if variable is not None:
+                self._write(f"{variable} = {vector_name}({loop_index})")
+                if needs_j_index:
+                    self._write(f"{j_index} = {loop_index} - 1")
+            self.loop_depth += 1
             self._emit_statements(loop.body)
+            self.loop_depth -= 1
             self.indent -= 1
             self._write("end do")
             return
@@ -1313,12 +1610,23 @@ class FunctionEmitter:
             upper = render_fortran_expression(bound, _fortran_name)
         except LoweringError as exc:
             raise _error_at(UnsupportedJError, loop.line, str(exc)) from exc
-        if zero_based_bound is not None:
+        if variable is None:
+            loop_index = safe_fortran_identifier("j_for_index")
+            self._declare(loop_index, "integer")
+            self._write(f"do {loop_index} = 1, {upper}")
+        elif zero_based_bound is not None:
             self._write(f"do {variable} = 0, {upper} - 1")
         else:
             self._write(f"do {variable} = 1, {upper}")
         self.indent += 1
+        if variable is not None and needs_j_index:
+            j_index = safe_fortran_identifier(f"{variable}_index")
+            self._declare(j_index, "integer")
+            index_expression = variable if zero_based_bound is not None else f"{variable} - 1"
+            self._write(f"{j_index} = {index_expression}")
+        self.loop_depth += 1
         self._emit_statements(loop.body)
+        self.loop_depth -= 1
         self.indent -= 1
         self._write("end do")
 
@@ -1326,9 +1634,46 @@ class FunctionEmitter:
         condition = self._render_condition(loop.condition, loop.line)
         self._write(f"do while ({condition})")
         self.indent += 1
+        self.loop_depth += 1
         self._emit_statements(loop.body)
+        self.loop_depth -= 1
         self.indent -= 1
         self._write("end do")
+
+    def _emit_assert(self, assertion: AssertStatement) -> None:
+        expression = self._parse_expression(
+            assertion.expression, assertion.line
+        )
+        try:
+            assertion_type = infer_type(
+                expression,
+                self.types,
+                _fortran_name,
+                named_verbs=self.named_verbs,
+            )
+            rendered = render_fortran_expression(
+                expression,
+                _fortran_name,
+                names=self.types,
+                named_verbs=self.named_verbs,
+            )
+        except LoweringError as exc:
+            raise _error_at(UnsupportedJError, assertion.line, str(exc)) from exc
+        if assertion_type.atom_type is AtomType.LOGICAL:
+            condition = rendered
+        elif assertion_type.atom_type in {AtomType.INTEGER, AtomType.REAL}:
+            condition = f"{rendered} == 1"
+        else:
+            raise _error_at(
+                UnsupportedJError,
+                assertion.line,
+                "assert. requires a numeric or logical value",
+            )
+        if assertion_type.rank > 0:
+            condition = f"all({condition})"
+        self._write(
+            f'if (.not. ({condition})) error stop "J assertion failure"'
+        )
 
     def _emit_if(self, conditional: IfStatement) -> None:
         condition = self._render_condition(conditional.condition, conditional.line)
@@ -1419,6 +1764,49 @@ class FunctionEmitter:
                 named_verbs=self.named_verbs,
             )
         )
+        selection = self._boolean_weighted_selection(expression)
+        if selection is not None and result_type.rank == 1:
+            condition, true_source, false_source = selection
+            self._record_result_type(result_type, statement.line)
+            if self._can_scalarize_elemental():
+                rendered_condition = render_fortran_expression(
+                    condition,
+                    _fortran_name,
+                    names=self.types,
+                    named_verbs=self.named_verbs,
+                )
+                rendered_true = render_fortran_expression(
+                    true_source,
+                    _fortran_name,
+                    names=self.types,
+                    named_verbs=self.named_verbs,
+                )
+                rendered_false = render_fortran_expression(
+                    false_source,
+                    _fortran_name,
+                    names=self.types,
+                    named_verbs=self.named_verbs,
+                )
+                simple_source_types = (Name, NumberLiteral)
+                if isinstance(ungroup(true_source), simple_source_types) and isinstance(
+                    ungroup(false_source), simple_source_types
+                ):
+                    self._write(
+                        f"j_result = merge({rendered_true}, {rendered_false}, "
+                        f"{rendered_condition})"
+                    )
+                else:
+                    self._write(f"if ({rendered_condition}) then")
+                    self.indent += 1
+                    self._write(f"j_result = {rendered_true}")
+                    self.indent -= 1
+                    self._write("else")
+                    self.indent += 1
+                    self._write(f"j_result = {rendered_false}")
+                    self.indent -= 1
+                    self._write("end if")
+                self.returned = True
+                return
         if result_type.atom_type in {
             AtomType.INTEGER,
             AtomType.REAL,
@@ -1437,6 +1825,95 @@ class FunctionEmitter:
             UnsupportedJError,
             statement.line,
             f"unsupported result expression {statement.expression!r}",
+        )
+
+    def _boolean_weighted_selection(
+        self, expression: Expression
+    ) -> tuple[Expression, Expression, Expression] | None:
+        """Match complementary Boolean masks selecting between two sources."""
+
+        expression = ungroup(expression)
+        if not (
+            isinstance(expression, DyadicApply)
+            and isinstance(expression.verb, PrimitiveVerb)
+            and expression.verb.spelling == "+"
+        ):
+            return None
+
+        def masked_source(
+            term: Expression,
+        ) -> tuple[Expression, Expression] | None:
+            term = ungroup(term)
+            if not (
+                isinstance(term, DyadicApply)
+                and isinstance(term.verb, PrimitiveVerb)
+                and term.verb.spelling == "*"
+            ):
+                return None
+            for condition, source in (
+                (term.left, term.right),
+                (term.right, term.left),
+            ):
+                try:
+                    condition_type = infer_type(
+                        condition,
+                        self.types,
+                        _fortran_name,
+                        named_verbs=self.named_verbs,
+                    )
+                except LoweringError:
+                    continue
+                if condition_type.atom_type is AtomType.LOGICAL:
+                    return ungroup(condition), ungroup(source)
+            return None
+
+        left = masked_source(expression.left)
+        right = masked_source(expression.right)
+        if left is None or right is None:
+            return None
+        left_condition, left_source = left
+        right_condition, right_source = right
+        if not self._complementary_conditions(
+            left_condition, right_condition
+        ):
+            return None
+        return left_condition, left_source, right_source
+
+    @staticmethod
+    def _complementary_conditions(
+        left: Expression, right: Expression
+    ) -> bool:
+        left = ungroup(left)
+        right = ungroup(right)
+        if not (
+            isinstance(left, DyadicApply)
+            and isinstance(right, DyadicApply)
+            and isinstance(left.verb, PrimitiveVerb)
+            and isinstance(right.verb, PrimitiveVerb)
+        ):
+            return False
+        complements = {
+            ("<", ">:"), (">:", "<"),
+            (">", "<:"), ("<:", ">"),
+            ("=", "~:"), ("~:", "="),
+        }
+        if (left.verb.spelling, right.verb.spelling) not in complements:
+            return False
+
+        def key(node: Expression):
+            node = ungroup(node)
+            if isinstance(node, Name):
+                return "name", node.identifier
+            if isinstance(node, NumberLiteral):
+                return "number", node.text
+            if isinstance(node, MonadicApply) and isinstance(
+                node.verb, PrimitiveVerb
+            ):
+                return "monad", node.verb.spelling, key(node.operand)
+            return None
+
+        return key(left.left) == key(right.left) and key(left.right) == key(
+            right.right
         )
 
     def _coerce_scalar_result(
@@ -2738,7 +3215,8 @@ def _lower_top_assignments(
                 name in print_only
                 and not updates
                 and not has_side_effect
-                and not is_parameter,
+                and not is_parameter
+                and len(rendered) <= PRINT_EXPRESSION_INLINE_LIMIT,
                 updates,
                 temporary_declarations,
                 is_parameter,
@@ -2797,25 +3275,357 @@ def _main_entity_declaration(assignment: LoweredTopAssignment) -> tuple[str, str
 def _assignment_declarations(
     assignments: list[LoweredTopAssignment],
 ) -> list[str]:
-    """Combine declarations without hiding parameter dependency order."""
+    """Combine declarations while preserving parameter dependency order."""
 
     result: list[str] = []
-    pending: list[tuple[str, str]] = []
+    pending: list[tuple[LoweredTopAssignment, tuple[str, str]]] = []
+    declared: set[str] = set()
 
     def flush() -> None:
         if pending:
-            result.extend(combine_declarations(pending))
+            result.extend(
+                combine_declarations(
+                    declaration for _, declaration in pending
+                )
+            )
+            declared.update(assignment.name for assignment, _ in pending)
             pending.clear()
 
     for assignment in assignments:
         declaration = _main_entity_declaration(assignment)
         if assignment.is_parameter and assignment.parameter_dependencies:
-            flush()
-            result.extend(combine_declarations([declaration]))
-        else:
-            pending.append(declaration)
+            specification = declaration[0]
+            group_order = list(dict.fromkeys(
+                pending_declaration[0]
+                for _, pending_declaration in pending
+            ))
+            specification_index = (
+                group_order.index(specification)
+                if specification in group_order
+                else len(group_order)
+            )
+            pending_by_name = {
+                pending_assignment.name: (
+                    group_order.index(pending_declaration[0]),
+                    pending_declaration[0],
+                )
+                for pending_assignment, pending_declaration in pending
+            }
+            unsafe_dependency = any(
+                dependency not in declared
+                and (
+                    dependency not in pending_by_name
+                    or pending_by_name[dependency][0] > specification_index
+                )
+                for dependency in assignment.parameter_dependencies
+            )
+            if unsafe_dependency:
+                flush()
+        pending.append((assignment, declaration))
     flush()
     return result
+
+
+def _combine_module_public_statements(lines: list[str]) -> list[str]:
+    """Represent a module's public entities with one PUBLIC statement."""
+
+    try:
+        module_start = next(
+            index for index, line in enumerate(lines)
+            if line.startswith("module ")
+        )
+        specification_end = lines.index("contains", module_start)
+    except (StopIteration, ValueError):
+        return lines
+    public_pattern = re.compile(r"^  public :: (.+)$")
+    public_entries: list[str] = []
+    public_indices: list[int] = []
+    for index in range(module_start + 1, specification_end):
+        match = public_pattern.fullmatch(lines[index])
+        if match is None:
+            continue
+        public_indices.append(index)
+        public_entries.extend(
+            entry.strip() for entry in match.group(1).split(",")
+        )
+    if len(public_indices) < 2:
+        return lines
+    first = public_indices[0]
+    public_line = "  public :: " + ", ".join(dict.fromkeys(public_entries))
+    public_index_set = set(public_indices)
+    return [
+        public_line if index == first else line
+        for index, line in enumerate(lines)
+        if index == first or index not in public_index_set
+    ]
+
+
+def _reuse_identical_module_parameters(
+    lines: list[str],
+    assignments: list[LoweredTopAssignment],
+) -> list[str]:
+    """Remove locals that duplicate an identically defined module parameter."""
+
+    parameters = {
+        assignment.name: assignment.expression
+        for assignment in assignments
+        if assignment.is_parameter and assignment.type_info.rank == 0
+    }
+    if not parameters:
+        return lines
+    result = list(lines)
+    try:
+        module_end = next(
+            index for index, line in enumerate(result)
+            if line.startswith("end module ")
+        )
+    except StopIteration:
+        return result
+    for name, expression in parameters.items():
+        assignment_line = f"  {name} = {expression}"
+        index = 0
+        while index < module_end:
+            if result[index] != assignment_line:
+                index += 1
+                continue
+            procedure_start = next(
+                (
+                    candidate
+                    for candidate in range(index - 1, -1, -1)
+                    if re.match(
+                        r"^(?:pure |impure |elemental |recursive |integer |"
+                        r"real\(kind=dp\) |logical )*"
+                        r"(?:function|subroutine)\b",
+                        result[candidate],
+                    )
+                ),
+                None,
+            )
+            if procedure_start is None:
+                index += 1
+                continue
+            declaration_index = None
+            replacement_declaration = None
+            for candidate in range(procedure_start + 1, index):
+                prefix, separator, entities_text = result[candidate].partition(
+                    " :: "
+                )
+                if not separator:
+                    continue
+                entities = entities_text.split(", ")
+                if name not in entities:
+                    continue
+                entities.remove(name)
+                declaration_index = candidate
+                replacement_declaration = (
+                    f"{prefix} :: {', '.join(entities)}" if entities else None
+                )
+                break
+            if declaration_index is None:
+                index += 1
+                continue
+            if replacement_declaration is None:
+                del result[declaration_index]
+                index -= 1
+                module_end -= 1
+            else:
+                result[declaration_index] = replacement_declaration
+            del result[index]
+            module_end -= 1
+    return result
+
+
+def _coalesced_random_allocations(
+    assignments: list[LoweredTopAssignment],
+) -> tuple[dict[str, str], dict[str, tuple[str, ...]]]:
+    """Combine random allocations whose extents are already available."""
+
+    allocation = re.compile(
+        r"^allocate\(([a-z][a-z0-9_]*)\((.+)\)\)$", re.IGNORECASE
+    )
+    replacements: dict[str, str] = {}
+    hoisted_guards: dict[str, tuple[str, ...]] = {}
+    run: list[tuple[LoweredTopAssignment, str, str]] = []
+    run_available: set[str] = set()
+    assignment_names = {assignment.name for assignment in assignments}
+
+    def flush() -> None:
+        if len(run) > 1:
+            entities = ", ".join(
+                f"{target}({shape})" for _, target, shape in run
+            )
+            replacements[run[0][0].name] = f"allocate({entities})"
+            for assignment, _, _ in run[1:]:
+                replacements[assignment.name] = ""
+            guards = tuple(dict.fromkeys(
+                update
+                for assignment, _, _ in run
+                for update in assignment.updates
+                if update.endswith(
+                    'error stop "negative random array extent"'
+                )
+            ))
+            if guards:
+                hoisted_guards[run[0][0].name] = guards
+        run.clear()
+
+    available: set[str] = set()
+    for assignment in assignments:
+        if assignment.is_parameter:
+            available.add(assignment.name)
+            continue
+        matched = next(
+            (
+                match
+                for update in assignment.updates
+                if (match := allocation.fullmatch(update)) is not None
+            ),
+            None,
+        )
+        if matched is None or (
+            f"call random_number({matched.group(1)})"
+            not in assignment.updates
+        ):
+            flush()
+            available.add(assignment.name)
+            continue
+        target, shape = matched.groups()
+        shape_dependencies = (
+            set(re.findall(r"[a-z][a-z0-9_]*", shape, re.IGNORECASE))
+            & assignment_names
+        )
+        if run and not shape_dependencies <= run_available:
+            flush()
+        if not run:
+            run_available = set(available)
+        run.append((assignment, target, shape))
+        available.add(assignment.name)
+    flush()
+    return replacements, hoisted_guards
+
+
+def _inline_single_use_array_designators(
+    assignments: list[LoweredTopAssignment],
+    protected_names: set[str],
+    commented_lines: set[int],
+) -> list[LoweredTopAssignment]:
+    """Inline safe array elements or sections used by one later assignment."""
+
+    result = list(assignments)
+    designator = re.compile(
+        r"^(?P<base>[a-z][a-z0-9_]*)\([^()]*(?::|,)[^()]*\)$",
+        re.IGNORECASE,
+    )
+    changed = True
+    while changed:
+        changed = False
+        for index, assignment in enumerate(result):
+            matched_designator = designator.fullmatch(assignment.expression)
+            known_array_names = {
+                previous.name
+                for previous in result[:index]
+                if previous.type_info.rank > 0
+            }
+            if (
+                assignment.name in protected_names
+                or assignment.line.number in commented_lines
+                or assignment.is_parameter
+                or assignment.updates
+                or assignment.temporary_declarations
+                or matched_designator is None
+                or matched_designator.group("base") not in known_array_names
+            ):
+                continue
+            pattern = re.compile(
+                rf"(?<![A-Za-z0-9_]){re.escape(assignment.name)}"
+                rf"(?![A-Za-z0-9_])"
+            )
+            uses: list[tuple[int, str]] = []
+            for consumer_index in range(index + 1, len(result)):
+                consumer = result[consumer_index]
+                texts = (consumer.expression, *consumer.updates)
+                for text in texts:
+                    uses.extend(
+                        (consumer_index, text)
+                        for _ in pattern.findall(text)
+                    )
+            if len(uses) != 1:
+                continue
+            consumer_index, _ = uses[0]
+            consumer = result[consumer_index]
+            if consumer.name == "ok":
+                continue
+            result[consumer_index] = dataclasses.replace(
+                consumer,
+                expression=pattern.sub(
+                    assignment.expression, consumer.expression
+                ),
+                updates=tuple(
+                    pattern.sub(assignment.expression, update)
+                    for update in consumer.updates
+                ),
+            )
+            del result[index]
+            changed = True
+            break
+    return result
+
+
+def _known_integer_assignment_values(
+    assignments: list[LoweredTopAssignment],
+) -> dict[str, int]:
+    """Evaluate simple deterministic integer scalar assignments."""
+
+    values: dict[str, int] = {}
+
+    def evaluate(node: ast.AST) -> int:
+        if isinstance(node, ast.Constant) and type(node.value) is int:
+            return node.value
+        if isinstance(node, ast.Name) and node.id in values:
+            return values[node.id]
+        if isinstance(node, ast.UnaryOp):
+            operand = evaluate(node.operand)
+            if isinstance(node.op, ast.UAdd):
+                return operand
+            if isinstance(node.op, ast.USub):
+                return -operand
+        if isinstance(node, ast.BinOp):
+            left, right = evaluate(node.left), evaluate(node.right)
+            if isinstance(node.op, ast.Add):
+                return left + right
+            if isinstance(node.op, ast.Sub):
+                return left - right
+            if isinstance(node.op, ast.Mult):
+                return left * right
+            if isinstance(node.op, ast.Pow) and 0 <= right <= 1000:
+                return left**right
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and not node.keywords
+        ):
+            arguments = [evaluate(argument) for argument in node.args]
+            if node.func.id == "abs" and len(arguments) == 1:
+                return abs(arguments[0])
+            if node.func.id == "min" and arguments:
+                return min(arguments)
+            if node.func.id == "max" and arguments:
+                return max(arguments)
+        raise ValueError("not a supported integer constant expression")
+
+    for assignment in assignments:
+        if not (
+            assignment.type_info == TypeInfo(AtomType.INTEGER)
+            and assignment.expression
+            and not assignment.updates
+        ):
+            continue
+        try:
+            parsed = ast.parse(assignment.expression, mode="eval")
+            values[assignment.name] = evaluate(parsed.body)
+        except (SyntaxError, ValueError, OverflowError):
+            continue
+    return values
 
 
 def _infer_top_assignment_types(
@@ -2862,6 +3672,8 @@ def _captured_top_names(
             if isinstance(statement, Assign):
                 texts.append(statement.expression)
             elif isinstance(statement, ExpressionStatement):
+                texts.append(statement.expression)
+            elif isinstance(statement, AssertStatement):
                 texts.append(statement.expression)
             elif isinstance(statement, ForLoop):
                 texts.append(statement.expression)
@@ -3055,6 +3867,15 @@ def _definition_argument_types(
                     continue
                 visit(expression, names)
                 continue
+            if isinstance(statement, AssertStatement):
+                try:
+                    expression = parse_expression(
+                        statement.expression, noun_names=set(names)
+                    )
+                except (LexerError, ExpressionParseError):
+                    continue
+                visit(expression, names)
+                continue
             if isinstance(statement, ForLoop):
                 try:
                     expression = parse_expression(
@@ -3065,9 +3886,10 @@ def _definition_argument_types(
                 else:
                     visit(expression, names)
                 loop_names = dict(names)
-                loop_names[_fortran_name(statement.variable)] = TypeInfo(
-                    AtomType.INTEGER
-                )
+                if statement.variable is not None:
+                    loop_names[_fortran_name(statement.variable)] = TypeInfo(
+                        AtomType.INTEGER
+                    )
                 visit_statements(statement.body, loop_names)
                 continue
             if isinstance(statement, WhileLoop):
@@ -4309,6 +5131,18 @@ def emit_fortran(
         function_types,
         parameterize_constants=parameterize_constants,
     )
+    echo_references = {
+        _fortran_name(name)
+        for echo in (
+            item for item in program.items if isinstance(item, EchoStatement)
+        )
+        for name in re.findall(r"[A-Za-z][A-Za-z0-9_]*", echo.expression)
+    }
+    top_assignments = _inline_single_use_array_designators(
+        top_assignments,
+        captured_top_names | echo_references,
+        set(comment_groups),
+    )
     parameter_assignments = {
         assignment.name: assignment
         for assignment in top_assignments
@@ -4616,13 +5450,46 @@ def emit_fortran(
     for assignment in active_assignments:
         if assignment.is_parameter:
             append_comments(lines, assignment.line.number, indent="  ")
+    emitted_random_extent_checks: set[str] = set()
+    unnecessary_random_extent_checks = {
+        f'if ({name} < 0) error stop "negative random array extent"'
+        for name, value in _known_integer_assignment_values(
+            active_assignments
+        ).items()
+        if value >= 0
+    }
+    random_allocations, hoisted_random_guards = (
+        _coalesced_random_allocations(active_assignments)
+    )
     for assignment in active_assignments:
         if assignment.is_parameter:
             continue
         append_comments(lines, assignment.line.number, indent="  ")
         if assignment.expression:
             lines.append(f"  {assignment.name} = {assignment.expression}")
-        lines.extend(f"  {update}" for update in assignment.updates)
+        for guard in hoisted_random_guards.get(assignment.name, ()):
+            if guard in unnecessary_random_extent_checks:
+                continue
+            if guard not in emitted_random_extent_checks:
+                lines.append(f"  {guard}")
+                emitted_random_extent_checks.add(guard)
+        for update in assignment.updates:
+            if update.startswith("allocate(") and assignment.name in random_allocations:
+                replacement = random_allocations[assignment.name]
+                if replacement:
+                    lines.append(f"  {replacement}")
+                continue
+            if update.endswith(
+                'error stop "negative random array extent"'
+            ):
+                if update in unnecessary_random_extent_checks:
+                    continue
+                if assignment.name in random_allocations:
+                    continue
+                if update in emitted_random_extent_checks:
+                    continue
+                emitted_random_extent_checks.add(update)
+            lines.append(f"  {update}")
     for index, (expression, result_type, comment_targets, mapped_echo) in enumerate(
         echo_calls, 1
     ):
@@ -4739,6 +5606,8 @@ def emit_fortran(
             lines.extend(wrap_fortran_comment(comment.text, indent="  "))
     lines.append(f"end program {program_name}")
     lines.append("")
+    lines = _reuse_identical_module_parameters(lines, top_assignments)
+    lines = _combine_module_public_statements(lines)
     lines = combine_adjacent_row_extension_assignments(lines)
     lines = coalesce_adjacent_allocate_statements(lines)
     lines = combine_adjacent_literal_writes(lines)
@@ -4827,6 +5696,25 @@ def expression_ast_report(program: Program) -> dict[str, object]:
                 ),
             }
             children = [statement_report(child) for child in statement.body]
+        elif isinstance(statement, AssertStatement):
+            role = "assert"
+            expression = statement.expression
+            extra = {}
+            children = []
+        elif isinstance(statement, ContinueStatement):
+            return {
+                "role": "continue",
+                "line": statement.line.number,
+                "source": "continue.",
+                "body": [],
+            }
+        elif isinstance(statement, ReturnStatement):
+            return {
+                "role": "return",
+                "line": statement.line.number,
+                "source": "return.",
+                "body": [],
+            }
         else:
             role = "result"
             expression = statement.expression

@@ -130,9 +130,8 @@ def test_monte_carlo_pi_uses_symbolic_random_array_extent() -> None:
     generated = xj2f.emit_fortran(program)
 
     assert "real(kind=dp), allocatable :: x(:), y(:)" in generated
-    assert "allocate(x(n))" in generated
+    assert "allocate(x(n), y(n))" in generated
     assert "call random_number(x)" in generated
-    assert "allocate(y(n))" in generated
     assert "call random_number(y)" in generated
     assert "sum(merge(1, 0, inside))" in generated
     assert "acos(-1.0_dp)" in generated
@@ -150,6 +149,75 @@ exit 0
     assert "allocate(values(n))" in generated
     assert "call random_number(values)" in generated
     assert "values = max(1e-12_dp, values)" in generated
+
+
+def test_random_arrays_with_known_different_shapes_share_allocation() -> None:
+    source = """n =: 10
+m =: 5
+u =: ? n $ 0
+v =: ? m $ 0
+smoutput # u
+smoutput # v
+exit 0
+"""
+    generated = xj2f.emit_fortran(
+        xj2f.parse_j_source(Path("random_shapes.ijs"), source)
+    )
+
+    assert "allocate(u(n), v(m))" in generated
+    assert 'error stop "negative random array extent"' not in generated
+
+
+def test_short_output_only_temporary_is_printed_directly() -> None:
+    source = """total =: 1 + 2
+smoutput total
+exit 0
+"""
+    generated = xj2f.emit_fortran(
+        xj2f.parse_j_source(Path("direct_output.ijs"), source)
+    )
+
+    assert "integer :: total" not in generated
+    assert "total =" not in generated
+    assert 'write (*,"(i0)") 1 + 2' in generated
+
+
+def test_boolean_weighted_simple_sources_use_merge() -> None:
+    source = """absolute =: 3 : 0
+  negative =. -y
+  ((y >: 0) * y) + (y < 0) * negative
+)
+values =: absolute _2 3
+smoutput values
+exit 0
+"""
+    generated = xj2f.emit_fortran(
+        xj2f.parse_j_source(Path("weighted_selection.ijs"), source)
+    )
+
+    function_source = generated.split(
+        "pure elemental function absolute", 1
+    )[1].split("end function absolute", 1)[0]
+    assert "j_result = merge(y, negative, y >= 0)" in function_source
+    assert "if (y >= 0)" not in function_source
+
+
+def test_random_array_allocation_is_not_hoisted_before_shape_is_known() -> None:
+    source = """n =: 10
+u =: ? n $ 0
+m =: # u
+v =: ? m $ 0
+smoutput # v
+exit 0
+"""
+    generated = xj2f.emit_fortran(
+        xj2f.parse_j_source(Path("dependent_random_shape.ijs"), source)
+    )
+
+    assert "allocate(u(n), v(m))" not in generated
+    assert "allocate(u(n))" in generated
+    assert "m = size(u, 1)" in generated
+    assert "allocate(v(m))" in generated
 
 
 @pytest.mark.requires_gfortran
@@ -241,7 +309,59 @@ def test_black_scholes_example_compiles_and_runs(tmp_path: Path) -> None:
         ROOT / "black_scholes.ijs",
         (ROOT / "black_scholes.ijs").read_text(encoding="utf-8"),
     )
-    source.write_text(xj2f.emit_fortran(program), encoding="utf-8")
+    ordinary = xj2f.emit_fortran(program)
+    generated = xj2f.emit_fortran(program, parameterize_constants=True)
+    source.write_text(generated, encoding="utf-8")
+
+    assert "pure elemental function normal_cdf(y) result(j_result)" in generated
+    assert "real(kind=dp), intent(in) :: y" in generated
+    assert "real(kind=dp) :: j_result" in generated
+    assert "real(kind=dp) :: t, polynomial, tail" in generated
+    normal_cdf_source = generated.split(
+        "pure elemental function normal_cdf", 1
+    )[1].split("end function normal_cdf", 1)[0]
+    assert "allocatable" not in normal_cdf_source
+    assert "if (y >= 0) then" in normal_cdf_source
+    assert "j_result = 1 - tail" in normal_cdf_source
+    assert "else\n    j_result = tail" in normal_cdf_source
+    assert "merge(1, 0, y >= 0)" not in normal_cdf_source
+    assert "density" not in normal_cdf_source
+    assert (
+        "tail = (exp(-0.5_dp * y**2) / sqrt(2 * acos(-1.0_dp))) * "
+        "polynomial" in normal_cdf_source
+    )
+    assert (
+        "public :: normal_cdf, black_scholes, spot, rate, volatility, "
+        "maturity, discount" in generated
+    )
+    assert generated.count("public ::") == 1
+    assert (
+        "real(kind=dp), parameter :: rate = 0.05_dp, volatility = 0.2_dp, "
+        "discount = exp(-(rate * maturity))" in generated.replace("&\n     & ", "")
+    )
+    assert "analytic_call" not in generated
+    assert "analytic_put" not in generated
+    assert (
+        "results = reshape([real(kind=dp) :: strikes, analytic(1, :), "
+        "mc_call, analytic(2, :), mc_put]," in generated
+    )
+    assert "[size(strikes), 5])" in generated
+    assert 'write (*,"(5(g0, 1x))") transpose(results)' in generated
+    assert "size(reshape(" not in generated
+    assert 'if (n < 0) error stop "negative random array extent"' not in generated
+    assert 'if (n < 0) error stop "negative random array extent"' not in ordinary
+    assert "allocate(u1(n), u2(n))" in generated
+    assert "allocate(u1(n))" not in generated
+    assert "allocate(u2(n))" not in generated
+    black_scholes_source = generated.split(
+        "pure function black_scholes", 1
+    )[1].split("end function black_scholes", 1)[0]
+    ordinary_black_scholes = ordinary.split(
+        "pure function black_scholes", 1
+    )[1].split("end function black_scholes", 1)[0]
+    assert "discount = exp(-(rate * maturity))" not in black_scholes_source
+    assert ":: discount" not in black_scholes_source
+    assert "discount = exp(-(rate * maturity))" in ordinary_black_scholes
 
     compiled = subprocess.run(
         [compiler, "-std=f2018", str(source), "-o", str(executable)],
@@ -691,6 +811,146 @@ def test_break_exits_the_enclosing_fortran_loop() -> None:
     assert "if (i > 2) then\n      exit\n    end if" in generated
 
 
+def test_continue_advances_to_the_next_for_iteration() -> None:
+    source = """sumodd =: 3 : 0
+  result =. 0
+  for_i. i. y do.
+    if. 0 = 2 | i do.
+      continue.
+    end.
+    result =. result + i
+  end.
+  result
+)
+smoutput sumodd 6
+exit 0
+"""
+    generated = xj2f.emit_fortran(
+        xj2f.parse_j_source(Path("continue.ijs"), source)
+    )
+
+    assert "cycle" in generated
+
+
+def test_bare_for_repeats_without_binding_an_item() -> None:
+    source = """countitems =: 3 : 0
+  result =. 0
+  for. i. y do.
+    result =. result + 1
+  end.
+  result
+)
+smoutput countitems 5
+exit 0
+"""
+    generated = xj2f.emit_fortran(
+        xj2f.parse_j_source(Path("bare_for.ijs"), source)
+    )
+
+    assert "do j_for_index = 1, y" in generated
+    assert "j_for_index" in generated.split("contains", 1)[1]
+
+
+def test_named_for_exposes_a_zero_based_index_when_used() -> None:
+    source = """sumindices =: 3 : 0
+  values =. i. y
+  result =. 0
+  for_item. values do.
+    result =. result + item_index
+  end.
+  result
+)
+smoutput sumindices 4
+exit 0
+"""
+    generated = xj2f.emit_fortran(
+        xj2f.parse_j_source(Path("for_index.ijs"), source)
+    )
+
+    assert "item_index = item_loop_index - 1" in generated
+
+
+def test_assert_checks_every_atom() -> None:
+    source = """positive_sum =: 3 : 0
+  assert. y > 0
+  +/ y
+)
+smoutput positive_sum 1 2 3
+exit 0
+"""
+    generated = xj2f.emit_fortran(
+        xj2f.parse_j_source(Path("assert.ijs"), source)
+    )
+
+    assert (
+        'if (.not. (all(y > 0))) error stop "J assertion failure"'
+        in generated
+    )
+
+
+def test_value_return_short_circuits_a_function() -> None:
+    source = """nonnegative =: 3 : 0
+  if. y < 0 do.
+    0 return.
+  end.
+  y
+)
+smoutput nonnegative _2
+smoutput nonnegative 3
+exit 0
+"""
+    generated = xj2f.emit_fortran(
+        xj2f.parse_j_source(Path("return.ijs"), source)
+    )
+
+    assert "j_result = 0\n    return" in generated
+
+
+@pytest.mark.requires_gfortran
+def test_new_control_words_compile_and_run(tmp_path: Path) -> None:
+    compiler = shutil.which("gfortran")
+    if compiler is None:
+        pytest.skip("gfortran is not installed")
+    source_text = """control =: 3 : 0
+  assert. y >: 0
+  total =. 0
+  for. i. y do.
+    total =. total + 1
+  end.
+  for_i. i. y do.
+    if. 0 = 2 | i do.
+      continue.
+    end.
+    total =. total + i
+  end.
+  if. total > 10 do.
+    total return.
+  end.
+  total
+)
+smoutput control 6
+exit 0
+"""
+    generated = xj2f.emit_fortran(
+        xj2f.parse_j_source(Path("control.ijs"), source_text)
+    )
+    source = tmp_path / "control.f90"
+    executable = tmp_path / "control.exe"
+    source.write_text(generated, encoding="utf-8")
+    compiled = subprocess.run(
+        [compiler, "-std=f2018", str(source), "-o", str(executable)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert compiled.returncode == 0, compiled.stdout + compiled.stderr
+    completed = subprocess.run(
+        [str(executable)], capture_output=True, text=True, check=False
+    )
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert completed.stdout.strip() == "15"
+
+
 def test_single_use_final_local_is_inlined_into_function_result() -> None:
     source = """square =: 3 : 0
   result =. y * y
@@ -787,13 +1047,34 @@ exit 0
         program, parameterize_constants=True
     )
 
-    assert "integer, parameter :: n_uppercase_1 = 10" in generated
-    assert "integer, parameter :: count_j = n_uppercase_1 + 2" in generated
-    assert "integer, parameter :: values(3) = [1, 2, 3]" in generated
-    assert "character(len=6), parameter :: label = 'sample'" in generated
+    assert (
+        "integer, parameter :: n_uppercase_1 = 10, "
+        "count_j = n_uppercase_1 + 2, values(3) = [1, 2, 3]"
+        in generated
+    )
+    assert 'character(len=6), parameter :: label = "sample"' in generated
     assert "real(kind=dp), allocatable :: random(:)" in generated
+    assert (
+        'if (count_j < 0) error stop "negative random array extent"'
+        not in generated
+    )
     assert "\n  count_j = n_uppercase_1 + 2" not in generated
     assert "parameter ::" not in ordinary
+
+
+def test_parameterized_negative_random_extent_keeps_runtime_guard() -> None:
+    source = """n =: _1
+random =: ? n $ 0
+smoutput # random
+exit 0
+"""
+    generated = xj2f.emit_fortran(
+        xj2f.parse_j_source(Path("negative_extent.ijs"), source),
+        parameterize_constants=True,
+    )
+
+    assert "integer, parameter :: n = -1" in generated
+    assert 'if (n < 0) error stop "negative random array extent"' in generated
 
 
 @pytest.mark.requires_gfortran
@@ -966,9 +1247,9 @@ ok =: result -: expected
     program = xj2f.parse_j_source(Path("horner.ijs"), source)
     generated = xj2f.emit_fortran(program)
 
-    assert "integer :: z, i, i_index" in generated
-    assert "do i_index = 1, size(c)" in generated
-    assert "i = c(i_index)" in generated
+    assert "integer :: z, i, i_loop_index" in generated
+    assert "do i_loop_index = 1, size(c)" in generated
+    assert "i = c(i_loop_index)" in generated
     assert "z = i + y * z" in generated
 
 
@@ -1038,7 +1319,13 @@ ok =: result -: expected
     generated = xj2f.emit_fortran(program)
 
     assert isinstance(program.items[0], xj2f.TacitVerbDefinition)
-    assert "integer, intent(in) :: y(:)" in generated
+    function_name = xj2f._fortran_name(definition.split()[0])
+    assert (
+        f"pure elemental function {function_name}(y) result(j_result)"
+        in generated
+    )
+    assert "integer, intent(in) :: y" in generated
+    assert "integer, intent(in) :: y(:)" not in generated
     assert f"j_result = {expected_expression}" in generated
 
 

@@ -386,6 +386,18 @@ def _flatten_semicolon_list(expression: Expression) -> list[Expression]:
     return [*_flatten_semicolon_list(linked[0]), *_flatten_semicolon_list(linked[1])]
 
 
+def _flatten_stitch_columns(expression: Expression) -> list[Expression]:
+    """Flatten a left-associated `,.` tree into its column expressions."""
+
+    stitched = dyad(ungroup(expression), ",.")
+    if stitched is None:
+        return [expression]
+    return [
+        *_flatten_stitch_columns(stitched[0]),
+        *_flatten_stitch_columns(stitched[1]),
+    ]
+
+
 def _constant_index_axes(selector: Expression) -> tuple[IndexAxis, ...] | None:
     boxed = monad(selector, "<")
     if boxed is None:
@@ -1694,6 +1706,15 @@ _UNARY_PRECEDENCE = 55
 _NOT_PRECEDENCE = 25
 
 
+def _as_real_dp(rendered: str) -> str:
+    """Convert an integer expression to dp, using a literal when possible."""
+
+    digits = rendered[1:] if rendered.startswith(("+", "-")) else rendered
+    if digits.isdecimal():
+        return f"{rendered}.0_dp"
+    return f"real({rendered}, kind=dp)"
+
+
 def _fortran_number(spelling: str) -> str:
     if spelling in {"_", "_."}:
         raise LoweringError(f"special J number {spelling!r} is not supported")
@@ -1719,7 +1740,7 @@ def _fortran_number(spelling: str) -> str:
         denominator = denominator.replace("_", "-")
         if denominator in {"0", "-0"}:
             raise LoweringError("rational literal denominator must not be zero")
-        return f"real({numerator}, kind=dp) / {denominator}"
+        return f"{_as_real_dp(numerator)} / {denominator}"
     if "j" in spelling:
         real_part, imaginary_part = spelling.split("j", 1)
 
@@ -1777,6 +1798,16 @@ def _parenthesize(text: str, precedence: int, required: int) -> str:
     return f"({text})" if precedence < required else text
 
 
+def _fortran_character_literal(value: str) -> str:
+    """Quote a character literal using the shorter Fortran representation."""
+
+    single_count = value.count("'")
+    double_count = value.count('"')
+    if double_count > single_count:
+        return "'" + value.replace("'", "''") + "'"
+    return '"' + value.replace('"', '""') + '"'
+
+
 def _render_fortran_expression(
     expression: Expression,
     name_transform: Callable[[str], str],
@@ -1804,8 +1835,7 @@ def _render_fortran_expression(
                 values = f"{type_spec} :: {values}"
         return f"[{values}]", _ATOM_PRECEDENCE, None
     if isinstance(expression, StringLiteral):
-        escaped = expression.value.replace("'", "''")
-        return f"'{escaped}'", _ATOM_PRECEDENCE, None
+        return _fortran_character_literal(expression.value), _ATOM_PRECEDENCE, None
     if isinstance(expression, MonadicApply):
         if isinstance(expression.verb, NamedVerb):
             operand, _, _ = _render_fortran_expression(
@@ -1919,7 +1949,7 @@ def _render_fortran_expression(
             return f"j_iota({operand})", _ATOM_PRECEDENCE, "call"
         if spelling == "%:":
             return (
-                f"sqrt(real({operand}, kind=dp))",
+                f"sqrt({_as_real_dp(operand)})",
                 _ATOM_PRECEDENCE,
                 "call",
             )
@@ -2330,7 +2360,7 @@ def render_fortran_expression(
         )
         if operand_type.atom_type is AtomType.REAL:
             return f"sqrt({operand})"
-        return f"sqrt(real({operand}, kind=dp))"
+        return f"sqrt({_as_real_dp(operand)})"
     decoded = dyad(bare_expression, "#.")
     if decoded is not None and names is not None:
         infer_type(bare_expression, names, name_transform, named_verbs=named_verbs)
@@ -2512,7 +2542,7 @@ def render_fortran_expression(
                 named_verbs=named_verbs,
             )
             if operand_type.atom_type is AtomType.INTEGER:
-                operand = f"real({operand}, kind=dp)"
+                operand = _as_real_dp(operand)
             intrinsic = "exp" if spelling == "^" else "log"
             return f"{intrinsic}({operand})"
         if spelling == "+" and operand_type.atom_type is AtomType.COMPLEX:
@@ -2579,6 +2609,44 @@ def render_fortran_expression(
         return f"[{left}, {right}]"
     stitched = dyad(bare_expression, ",.")
     if stitched is not None and names is not None:
+        columns = _flatten_stitch_columns(bare_expression)
+        column_types = [
+            infer_type(
+                column,
+                names,
+                name_transform,
+                named_verbs=named_verbs,
+            )
+            for column in columns
+        ]
+        if len(columns) > 2 and all(
+            column_type.rank == 1 for column_type in column_types
+        ):
+            infer_type(
+                bare_expression,
+                names,
+                name_transform,
+                named_verbs=named_verbs,
+            )
+            rendered_columns = [
+                render_fortran_expression(
+                    column,
+                    name_transform,
+                    names=names,
+                    named_verbs=named_verbs,
+                )
+                for column in columns
+            ]
+            constructor = ", ".join(rendered_columns)
+            if any(
+                column_type.atom_type is AtomType.REAL
+                for column_type in column_types
+            ):
+                constructor = f"real(kind=dp) :: {constructor}"
+            return (
+                f"reshape([{constructor}], "
+                f"[size({rendered_columns[0]}), {len(columns)}])"
+            )
         left_type = infer_type(
             stitched[0], names, name_transform, named_verbs=named_verbs
         )
@@ -2774,7 +2842,7 @@ def render_fortran_expression(
         if isinstance(ungroup(divided[1]), DyadicApply):
             right = f"({right})"
         if left_type.atom_type is AtomType.INTEGER:
-            left = f"real({left}, kind=dp)"
+            left = _as_real_dp(left)
         elif isinstance(ungroup(divided[0]), DyadicApply):
             left = f"({left})"
         return f"{left} / {right}"
@@ -2930,9 +2998,9 @@ def render_fortran_expression(
         )
         if AtomType.REAL in {left_type.atom_type, right_type.atom_type}:
             if left_type.atom_type is AtomType.INTEGER:
-                left = f"real({left}, kind=dp)"
+                left = _as_real_dp(left)
             if right_type.atom_type is AtomType.INTEGER:
-                right = f"real({right}, kind=dp)"
+                right = _as_real_dp(right)
             comparison = f"j_match_real({left}, {right})"
         elif left_type.atom_type is AtomType.LOGICAL:
             if right_type.atom_type is AtomType.LOGICAL:
@@ -3025,9 +3093,9 @@ def render_fortran_expression(
             )
             if AtomType.REAL in {left_type.atom_type, right_type.atom_type}:
                 if left_type.atom_type is AtomType.INTEGER:
-                    left = f"real({left}, kind=dp)"
+                    left = _as_real_dp(left)
                 if right_type.atom_type is AtomType.INTEGER:
-                    right = f"real({right}, kind=dp)"
+                    right = _as_real_dp(right)
             intrinsic = "min" if spelling == "<." else "max"
             return f"{intrinsic}({left}, {right})"
         if spelling in _DYADIC_FORTRAN:

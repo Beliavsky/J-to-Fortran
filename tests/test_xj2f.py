@@ -360,9 +360,9 @@ exit 0
     )
 
     assert "! J: smoutput 'HEADING'" in generated
-    assert 'write (*,"(a)") \'HEADING\'' in generated
-    assert 'write (*,"(a)") \'\'' in generated
-    assert 'write (*,"(a)") \'J isn\'\'t verbose\'' in generated
+    assert 'write (*,"(a)") "HEADING"' in generated
+    assert 'write (*,"(a)") ""' in generated
+    assert 'write (*,"(a)") "J isn\'t verbose"' in generated
 
 
 def test_top_level_only_test_program_emits_an_executable_assertion() -> None:
@@ -383,7 +383,7 @@ def test_character_literals_emit_deferred_length_strings() -> None:
     generated = xj2f.emit_fortran(program)
 
     assert "character(len=:), allocatable :: result_j, expected" in generated
-    assert "result_j = 'hello'" in generated
+    assert 'result_j = "hello"' in generated
     assert "ok = result_j == expected" in generated
 
 

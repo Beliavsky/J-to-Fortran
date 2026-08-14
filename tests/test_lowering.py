@@ -71,6 +71,16 @@ def test_j_division_converts_integer_numerator_to_real() -> None:
     )
 
 
+def test_integer_literal_is_converted_to_dp_with_a_real_literal() -> None:
+    expression = parse_expression("0 >. values")
+    names = {"values": TypeInfo(AtomType.REAL, Shape.vector())}
+
+    assert (
+        render_fortran_expression(expression, names=names)
+        == "max(0.0_dp, values)"
+    )
+
+
 def test_character_literal_and_match_lowering() -> None:
     literal = parse_expression("'hello'")
     matched = parse_expression("result -: expected")
@@ -78,24 +88,38 @@ def test_character_literal_and_match_lowering() -> None:
     names = {"result": character, "expected": character}
 
     assert infer_type(literal, {}) == character
-    assert render_fortran_expression(literal, names={}) == "'hello'"
+    assert render_fortran_expression(literal, names={}) == '"hello"'
     assert infer_type(matched, names) == TypeInfo(AtomType.LOGICAL)
     assert render_fortran_expression(matched, names=names) == "result == expected"
+
+
+def test_character_literal_uses_single_quotes_around_double_quotes() -> None:
+    literal = parse_expression("'say \"hello\"'")
+
+    assert render_fortran_expression(literal, names={}) == "'say \"hello\"'"
+
+
+def test_character_literal_chooses_delimiter_needing_fewer_escapes() -> None:
+    apostrophe = parse_expression("'J isn''t verbose'")
+    both = parse_expression("'it''s \"quoted\"'")
+
+    assert render_fortran_expression(apostrophe, names={}) == '"J isn\'t verbose"'
+    assert render_fortran_expression(both, names={}) == "'it''s \"quoted\"'"
 
 
 @pytest.mark.parametrize(
     ("source", "expected_type", "expected_fortran"),
     [
-        ("# 'abcdef'", TypeInfo(AtomType.INTEGER), "len('abcdef')"),
+        ("# 'abcdef'", TypeInfo(AtomType.INTEGER), 'len("abcdef")'),
         (
             "'abc' , 'def'",
             TypeInfo(AtomType.CHARACTER, Shape.vector(6)),
-            "'abc' // 'def'",
+            '"abc" // "def"',
         ),
         (
             "|. 'abcdef'",
             TypeInfo(AtomType.CHARACTER, Shape.vector(6), 6),
-            "j_reverse_character('abcdef')",
+            'j_reverse_character("abcdef")',
         ),
     ],
 )
@@ -122,7 +146,7 @@ def test_character_indexing_uses_one_based_runtime_indices() -> None:
     )
     assert (
         render_fortran_expression(expression, names={})
-        == "j_select_character('abcdef', [2, 4, 6])"
+        == 'j_select_character("abcdef", [2, 4, 6])'
     )
     assert required_runtime_helpers(expression, {}) == {"select_character"}
 
@@ -148,7 +172,7 @@ def test_boxed_character_list_index_and_raze() -> None:
     assert infer_type(boxed, {}) == boxed_type
     assert (
         render_fortran_expression(boxed, names={})
-        == "[character(len=5) :: 'one', 'two', 'three']"
+        == '[character(len=5) :: "one", "two", "three"]'
     )
     assert infer_type(selected, names) == TypeInfo(
         AtomType.CHARACTER, Shape.vector()
@@ -235,7 +259,7 @@ def test_rational_literals_lower_to_dp_quotients() -> None:
     assert infer_type(expression, {}) == TypeInfo(AtomType.REAL)
     assert (
         render_fortran_expression(expression, names={})
-        == "real(1, kind=dp) / 3 + real(1, kind=dp) / 6"
+        == "1.0_dp / 3 + 1.0_dp / 6"
     )
 
 
@@ -368,7 +392,7 @@ def test_whole_file_text_write_lowering(source: str, append: str) -> None:
 
     assert infer_type(expression, {}) == TypeInfo(AtomType.INTEGER)
     assert render_fortran_expression(expression, names={}) == (
-        f"j_write_text('hello', 'output.txt', {append})"
+        f'j_write_text("hello", "output.txt", {append})'
     )
     assert required_runtime_helpers(expression, {}) == {"write_text"}
 
@@ -932,6 +956,23 @@ def test_stitch_promotes_integer_column_to_real() -> None:
     )
     assert render_fortran_expression(expression, names=names) == (
         "reshape([real(kind=dp) :: strikes, prices], [size(strikes), 2])"
+    )
+
+
+def test_nested_stitch_flattens_all_columns_into_one_reshape() -> None:
+    expression = parse_expression(
+        "(((strikes ,. analytic) ,. monte_carlo) ,. puts)"
+    )
+    names = {
+        "strikes": TypeInfo(AtomType.INTEGER, Shape.vector(7)),
+        "analytic": TypeInfo(AtomType.REAL, Shape.vector(7)),
+        "monte_carlo": TypeInfo(AtomType.REAL, Shape.vector(7)),
+        "puts": TypeInfo(AtomType.REAL, Shape.vector(7)),
+    }
+
+    assert render_fortran_expression(expression, names=names) == (
+        "reshape([real(kind=dp) :: strikes, analytic, monte_carlo, puts], "
+        "[size(strikes), 4])"
     )
 
 
