@@ -213,7 +213,8 @@ The parser currently recognizes:
 - leading-axis and rank-1 matrix reductions plus integer arithmetic tables;
 - constant multidimensional `{` selection through rank 3: scalar coordinates,
   leading-axis rows, independent vector selectors, negative indices, and slices;
-- top-level noun-derived `}` amendment with scalar or conforming array values;
+- noun-derived `}` amendment with constant, computed, or `I.` Boolean indices,
+  including chained amendments lowered to ordered Fortran assignments;
 - zero-row integer matrix construction such as `0 3 $ 0`;
 - row append using `,` in the demonstrated explicit-loop form;
 - the array pipeline used by `pythag_array.ijs`: catalogue/cartesian product,
@@ -227,6 +228,7 @@ The parser currently recognizes:
 - scalar `while.` and `whilst.` loops with loop-carried local assignments;
 - compact control sentences, including assignments before `while.` and
   `if. ... do. ... else. ... end.` on one physical source line;
+- assignments inside a `while.` condition, evaluated before every test;
 - scalar integer `select.`/`case.` dispatch with an optional default
   `case. do.` branch;
 - explicit `for_name.` iteration over zero-based `i. y` sequences;
@@ -243,6 +245,7 @@ The parser currently recognizes:
 - explicitly omitted monadic or dyadic `plot` and `pd` visualization
   directives;
 - monadic and dyadic reflexes of supported primitives, integer-noun bond,
+  left-noun bond of translated dyadic verbs,
   monadic `@:` composition, and monadic forks;
 - sum-product inner products lowered to `dot_product` and `matmul`;
 - direct determinants of statically known 2 by 2 matrices;
@@ -271,6 +274,8 @@ The parser currently recognizes:
   subsequently used as arrays;
 - implicit vector-matrix agreement on the trailing matrix axis, lowered with
   `spread`;
+- straight-line local reuse across type or rank changes, lowered to versioned
+  Fortran variables;
 - heterogeneous top-level boxed test matches decomposed element by element;
 - mixed Boolean expressions and integer literal `0`/`1` branches, inferred as
   logical results and emitted with `.false.`/`.true.` literals;

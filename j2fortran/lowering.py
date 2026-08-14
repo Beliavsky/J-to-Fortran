@@ -58,6 +58,20 @@ class Amendment:
     selection: IndexSelection
 
 
+@dataclass(frozen=True, slots=True)
+class MaskAmendment:
+    replacement: Expression
+    mask: Expression
+    source: Expression
+
+
+@dataclass(frozen=True, slots=True)
+class IndexedAmendment:
+    replacement: Expression
+    selector: Expression
+    source: Expression
+
+
 def ungroup(expression: Expression) -> Expression:
     while isinstance(expression, Group):
         expression = expression.expression
@@ -274,6 +288,22 @@ def dyad(expression: Expression, spelling: str) -> tuple[Expression, Expression]
     return None
 
 
+def match_left_bond_named_application(
+    expression: Expression,
+) -> tuple[str, Expression, Expression] | None:
+    """Match J's ``x&verb y`` spelling after ordinary expression parsing."""
+    bonded = dyad(expression, "&")
+    if bonded is None:
+        return None
+    left, right = bonded
+    right = ungroup(right)
+    if not isinstance(right, MonadicApply) or not isinstance(
+        right.verb, NamedVerb
+    ):
+        return None
+    return right.verb.identifier, left, right.operand
+
+
 def name_value(expression: Expression) -> str | None:
     expression = ungroup(expression)
     return expression.identifier if isinstance(expression, Name) else None
@@ -367,6 +397,11 @@ def constant_shape_extents(
     name_transform: Callable[[str], str] = str.lower,
 ) -> tuple[int | str, ...] | None:
     expression = ungroup(expression)
+    shaped = monad(expression, "$")
+    if shaped is not None and isinstance(ungroup(shaped), Name) and names is not None:
+        type_info = names.get(name_transform(ungroup(shaped).identifier))
+        if type_info is not None:
+            return type_info.shape.extents
     catenated = dyad(expression, ",")
     if catenated is not None:
         left = constant_shape_extents(catenated[0], names, name_transform)
@@ -483,16 +518,24 @@ def match_matrix_diagonal(expression: Expression) -> Expression | None:
     return transposed[1]
 
 
-def match_amendment(expression: Expression) -> Amendment | None:
+def match_amendment(
+    expression: Expression,
+) -> Amendment | MaskAmendment | IndexedAmendment | None:
     expression = ungroup(expression)
     if not isinstance(expression, DyadicApply) or not isinstance(
         expression.verb, AmendVerb
     ):
         return None
     axes = _constant_index_axes(expression.verb.selector)
-    if axes is None:
-        return None
-    return Amendment(expression.left, IndexSelection(axes, expression.right))
+    if axes is not None:
+        return Amendment(expression.left, IndexSelection(axes, expression.right))
+    selector = ungroup(expression.verb.selector)
+    if (
+        isinstance(selector, MonadicApply)
+        and primitive_spelling(selector.verb) == "I."
+    ):
+        return MaskAmendment(expression.left, selector.operand, expression.right)
+    return IndexedAmendment(expression.left, selector, expression.right)
 
 
 def _validate_index_selection(
@@ -1075,6 +1118,17 @@ def infer_type(
             return TypeInfo(AtomType.CHARACTER, Shape.vector(), None, False)
         raise LoweringError(f"cannot infer the result type of monadic {spelling!r}")
     if isinstance(expression, DyadicApply):
+        bonded = match_left_bond_named_application(expression)
+        if bonded is not None:
+            verb_name, left, right = bonded
+            infer_type(left, names, name_transform, named_verbs=named_verbs)
+            infer_type(right, names, name_transform, named_verbs=named_verbs)
+            if named_verbs is None:
+                raise LoweringError(f"type of verb {verb_name!r} is unknown")
+            try:
+                return named_verbs[name_transform(verb_name)]
+            except KeyError as exc:
+                raise LoweringError(f"type of verb {verb_name!r} is unknown") from exc
         monadic_chain = _monadic_verb_chain(
             expression, named_verbs, name_transform
         )
@@ -1183,6 +1237,98 @@ def infer_type(
             return TypeInfo(result_type.atom_type, Shape.vector(result_extent))
         amendment = match_amendment(expression)
         if amendment is not None:
+            if isinstance(amendment, IndexedAmendment):
+                source_type = infer_type(
+                    amendment.source, names, name_transform, named_verbs=named_verbs
+                )
+                selector_type = infer_type(
+                    amendment.selector, names, name_transform, named_verbs=named_verbs
+                )
+                replacement_type = infer_type(
+                    amendment.replacement,
+                    names,
+                    name_transform,
+                    named_verbs=named_verbs,
+                )
+                if source_type.rank != 1:
+                    raise LoweringError(
+                        "computed-index amendment currently requires a vector source"
+                    )
+                if (
+                    selector_type.atom_type is not AtomType.INTEGER
+                    or selector_type.rank not in {0, 1}
+                ):
+                    raise LoweringError(
+                        "computed-index amendment requires integer scalar or vector indices"
+                    )
+                if replacement_type.atom_type is not source_type.atom_type and not (
+                    {source_type.atom_type, replacement_type.atom_type}
+                    <= {AtomType.INTEGER, AtomType.REAL}
+                ):
+                    raise LoweringError(
+                        "amendment replacement and source atom types differ"
+                    )
+                if (
+                    not replacement_type.is_scalar
+                    and replacement_type.shape != selector_type.shape
+                ):
+                    raise LoweringError(
+                        "computed-index amendment replacement must be scalar or conforming"
+                    )
+                atom_type = (
+                    AtomType.REAL
+                    if AtomType.REAL
+                    in {source_type.atom_type, replacement_type.atom_type}
+                    else source_type.atom_type
+                )
+                return TypeInfo(atom_type, source_type.shape)
+            if isinstance(amendment, MaskAmendment):
+                source_type = infer_type(
+                    amendment.source,
+                    names,
+                    name_transform,
+                    named_verbs=named_verbs,
+                )
+                mask_type = infer_type(
+                    amendment.mask,
+                    names,
+                    name_transform,
+                    named_verbs=named_verbs,
+                )
+                if (
+                    mask_type.atom_type is not AtomType.LOGICAL
+                    or mask_type.shape != source_type.shape
+                ):
+                    raise LoweringError(
+                        "mask amendment requires a conforming logical value"
+                    )
+                replacement_type = infer_type(
+                    amendment.replacement,
+                    names,
+                    name_transform,
+                    named_verbs=named_verbs,
+                )
+                if replacement_type.atom_type is not source_type.atom_type and not (
+                    {source_type.atom_type, replacement_type.atom_type}
+                    <= {AtomType.INTEGER, AtomType.REAL}
+                ):
+                    raise LoweringError(
+                        "amendment replacement and source atom types differ"
+                    )
+                if (
+                    not replacement_type.is_scalar
+                    and replacement_type.shape != source_type.shape
+                ):
+                    raise LoweringError(
+                        "mask amendment replacement must be scalar or conforming"
+                    )
+                atom_type = (
+                    AtomType.REAL
+                    if AtomType.REAL
+                    in {source_type.atom_type, replacement_type.atom_type}
+                    else source_type.atom_type
+                )
+                return TypeInfo(atom_type, source_type.shape)
             source_type = infer_type(
                 amendment.selection.source,
                 names,
@@ -1198,7 +1344,10 @@ def infer_type(
                 name_transform,
                 named_verbs=named_verbs,
             )
-            if replacement_type.atom_type is not source_type.atom_type:
+            if replacement_type.atom_type is not source_type.atom_type and not (
+                {source_type.atom_type, replacement_type.atom_type}
+                <= {AtomType.INTEGER, AtomType.REAL}
+            ):
                 raise LoweringError(
                     "amendment replacement and source atom types differ"
                 )
@@ -1206,7 +1355,13 @@ def infer_type(
                 raise LoweringError(
                     "amendment replacement shape does not match selected shape"
                 )
-            return source_type
+            atom_type = (
+                AtomType.REAL
+                if AtomType.REAL
+                in {source_type.atom_type, replacement_type.atom_type}
+                else source_type.atom_type
+            )
+            return TypeInfo(atom_type, source_type.shape)
         if isinstance(expression.verb, NamedVerb):
             left_type = infer_type(
                 expression.left, names, name_transform, named_verbs=named_verbs
@@ -1758,6 +1913,16 @@ def infer_type(
                 raise LoweringError("Boolean operation requires logical operands")
             return TypeInfo(AtomType.LOGICAL, shape)
         if spelling == "#":
+            if (
+                left_type.atom_type is AtomType.INTEGER
+                and left_type.is_scalar
+                and right_type.is_scalar
+            ):
+                extent = integer_value(expression.left)
+                return TypeInfo(
+                    right_type.atom_type,
+                    Shape.vector(extent if extent is not None else None),
+                )
             if left_type.atom_type not in {AtomType.INTEGER, AtomType.LOGICAL} or left_type.rank != 1:
                 raise LoweringError(
                     "copy currently requires a rank-1 integer or logical selector"
@@ -2220,6 +2385,20 @@ def _render_fortran_expression(
             return operand, operand_precedence, None
         raise LoweringError(f"monadic verb {spelling!r} needs a dedicated lowering rule")
     if isinstance(expression, DyadicApply):
+        bonded = match_left_bond_named_application(expression)
+        if bonded is not None:
+            verb_name, left_expression, right_expression = bonded
+            left, _, _ = _render_fortran_expression(
+                left_expression, name_transform
+            )
+            right, _, _ = _render_fortran_expression(
+                right_expression, name_transform
+            )
+            return (
+                f"{name_transform(verb_name)}({left}, {right})",
+                _ATOM_PRECEDENCE,
+                "call",
+            )
         write_mode = file_write_mode(expression.verb)
         if write_mode is not None:
             text, _, _ = _render_fortran_expression(
@@ -2467,6 +2646,25 @@ def render_fortran_expression(
             bare_expression, name_transform
         )
         return rendered
+    bonded = match_left_bond_named_application(bare_expression)
+    if bonded is not None and names is not None:
+        infer_type(
+            bare_expression, names, name_transform, named_verbs=named_verbs
+        )
+        verb_name, left_expression, right_expression = bonded
+        left = render_fortran_expression(
+            left_expression,
+            name_transform,
+            names=names,
+            named_verbs=named_verbs,
+        )
+        right = render_fortran_expression(
+            right_expression,
+            name_transform,
+            names=names,
+            named_verbs=named_verbs,
+        )
+        return f"{name_transform(verb_name)}({left}, {right})"
     diagonal = match_matrix_diagonal(bare_expression)
     if diagonal is not None and names is not None:
         diagonal_type = infer_type(
@@ -3324,6 +3522,8 @@ def render_fortran_expression(
             names=names,
             named_verbs=named_verbs,
         )
+        if not extents:
+            return source if source_type.is_scalar else f"{source}(1)"
         source_array = f"[{source}]" if source_type.is_scalar else source
         arguments = [source_array, f"[{', '.join(map(str, extents))}]"]
         source_size = (
@@ -3433,6 +3633,23 @@ def render_fortran_expression(
         selector_type = infer_type(
             copied[0], names, name_transform, named_verbs=named_verbs
         )
+        values_type = infer_type(
+            copied[1], names, name_transform, named_verbs=named_verbs
+        )
+        if selector_type == TypeInfo(AtomType.INTEGER) and values_type.is_scalar:
+            count = render_fortran_expression(
+                copied[0],
+                name_transform,
+                names=names,
+                named_verbs=named_verbs,
+            )
+            value = render_fortran_expression(
+                copied[1],
+                name_transform,
+                names=names,
+                named_verbs=named_verbs,
+            )
+            return f"spread({value}, dim=1, ncopies={count})"
         if selector_type.atom_type is AtomType.LOGICAL:
             selector = render_fortran_expression(
                 copied[0],
@@ -3495,8 +3712,9 @@ def render_fortran_expression(
             left, right = _apply_vector_matrix_agreement(
                 left, right, left_type, right_type
             )
-            if left_type.rank != right_type.rank:
+            if left_type.rank == 1 and right_type.rank == 2:
                 left_precedence = _ATOM_PRECEDENCE
+            elif left_type.rank == 2 and right_type.rank == 1:
                 right_precedence = _ATOM_PRECEDENCE
             if (
                 left_type.atom_type is AtomType.INTEGER
@@ -3635,10 +3853,74 @@ def render_fortran_amendment(
     name_transform: Callable[[str], str] = str.lower,
     *,
     named_verbs: Mapping[str, TypeInfo] | None = None,
-) -> tuple[str, str] | None:
+) -> tuple[str, tuple[str, ...]] | None:
     amendment = match_amendment(expression)
     if amendment is None:
         return None
+    source_expression = (
+        amendment.selection.source
+        if isinstance(amendment, Amendment)
+        else amendment.source
+    )
+    nested = render_fortran_amendment(
+        source_expression,
+        target,
+        names,
+        name_transform,
+        named_verbs=named_verbs,
+    )
+    if nested is None:
+        source = render_fortran_expression(
+            source_expression,
+            name_transform,
+            names=names,
+            named_verbs=named_verbs,
+        )
+        prior_updates: tuple[str, ...] = ()
+    else:
+        source, prior_updates = nested
+    if isinstance(amendment, IndexedAmendment):
+        infer_type(expression, names, name_transform, named_verbs=named_verbs)
+        selector = render_fortran_expression(
+            amendment.selector,
+            name_transform,
+            names=names,
+            named_verbs=named_verbs,
+        )
+        replacement = render_fortran_expression(
+            amendment.replacement,
+            name_transform,
+            names=names,
+            named_verbs=named_verbs,
+        )
+        update = f"{target}({selector} + 1) = {replacement}"
+        return source, (*prior_updates, update)
+    if isinstance(amendment, MaskAmendment):
+        infer_type(expression, names, name_transform, named_verbs=named_verbs)
+        mask = render_fortran_expression(
+            amendment.mask,
+            name_transform,
+            names=names,
+            named_verbs=named_verbs,
+        )
+        replacement = render_fortran_expression(
+            amendment.replacement,
+            name_transform,
+            names=names,
+            named_verbs=named_verbs,
+        )
+        source_type = infer_type(
+            amendment.source,
+            names,
+            name_transform,
+            named_verbs=named_verbs,
+        )
+        update = (
+            f"if ({mask}) {target} = {replacement}"
+            if source_type.is_scalar
+            else f"where ({mask}) {target} = {replacement}"
+        )
+        return source, (*prior_updates, update)
     source_type = infer_type(
         amendment.selection.source,
         names,
@@ -3647,12 +3929,6 @@ def render_fortran_amendment(
     )
     # Run complete amendment inference before rendering either statement.
     infer_type(expression, names, name_transform, named_verbs=named_verbs)
-    source = render_fortran_expression(
-        amendment.selection.source,
-        name_transform,
-        names=names,
-        named_verbs=named_verbs,
-    )
     replacement = render_fortran_expression(
         amendment.replacement,
         name_transform,
@@ -3662,7 +3938,7 @@ def render_fortran_amendment(
     selected_target = _render_index_selection(
         amendment.selection, source_type, target
     )
-    return source, f"{selected_target} = {replacement}"
+    return source, (*prior_updates, f"{selected_target} = {replacement}")
 
 
 def required_runtime_helpers(

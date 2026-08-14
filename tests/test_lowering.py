@@ -1798,13 +1798,13 @@ def test_constant_selection_rejects_out_of_bounds_index() -> None:
             "99 ((<1 2)}) a",
             {"a": TypeInfo(AtomType.INTEGER, Shape.matrix(3, 4))},
             "result_j",
-            ("a", "result_j(2, 3) = 99"),
+            ("a", ("result_j(2, 3) = 99",)),
         ),
         (
             "99 ((<1 2 ; 0 3)}) a",
             {"a": TypeInfo(AtomType.INTEGER, Shape.matrix(3, 4))},
             "result_j",
-            ("a", "result_j([2, 3], [1, 4]) = 99"),
+            ("a", ("result_j([2, 3], [1, 4]) = 99",)),
         ),
         (
             "new ((<1 2 ; 0 3)}) a",
@@ -1813,7 +1813,7 @@ def test_constant_selection_rejects_out_of_bounds_index() -> None:
                 "new": TypeInfo(AtomType.INTEGER, Shape.matrix(2, 2)),
             },
             "result_j",
-            ("a", "result_j([2, 3], [1, 4]) = new"),
+            ("a", ("result_j([2, 3], [1, 4]) = new",)),
         ),
     ],
 )
@@ -1821,7 +1821,7 @@ def test_top_level_amendment_lowers_to_copy_and_section_assignment(
     source: str,
     names: dict[str, TypeInfo],
     target: str,
-    expected: tuple[str, str],
+    expected: tuple[str, tuple[str, ...]],
 ) -> None:
     expression = parse_expression(source)
 
@@ -1839,6 +1839,98 @@ def test_amendment_rejects_nonconforming_replacement() -> None:
 
     with pytest.raises(LoweringError, match="replacement shape"):
         infer_type(expression, names)
+
+
+def test_boolean_index_amendment_lowers_to_where() -> None:
+    expression = parse_expression("0 (I. values < 0)} values")
+    names = {"values": TypeInfo(AtomType.INTEGER, Shape.vector(5))}
+
+    assert infer_type(expression, names) == names["values"]
+    assert render_fortran_amendment(expression, "result_j", names) == (
+        "values",
+        ("where (values < 0) result_j = 0",),
+    )
+
+
+def test_scalar_boolean_index_amendment_lowers_to_if() -> None:
+    expression = parse_expression("0 (I. value <: 0)} value")
+    names = {"value": TypeInfo(AtomType.REAL)}
+
+    assert infer_type(expression, names) == names["value"]
+    assert render_fortran_amendment(expression, "result_j", names) == (
+        "value",
+        ("if (value <= 0) result_j = 0",),
+    )
+
+
+def test_chained_computed_index_amendment_lowers_in_source_order() -> None:
+    expression = parse_expression(
+        "high high_indices} low low_indices} zeros",
+        noun_names=["high", "high_indices", "low", "low_indices", "zeros"],
+    )
+    names = {
+        "high": TypeInfo(AtomType.REAL, Shape.vector()),
+        "high_indices": TypeInfo(AtomType.INTEGER, Shape.vector()),
+        "low": TypeInfo(AtomType.REAL, Shape.vector()),
+        "low_indices": TypeInfo(AtomType.INTEGER, Shape.vector()),
+        "zeros": TypeInfo(AtomType.REAL, Shape.vector()),
+    }
+
+    assert infer_type(expression, names) == names["zeros"]
+    assert render_fortran_amendment(expression, "result_j", names) == (
+        "zeros",
+        (
+            "result_j(low_indices + 1) = low",
+            "result_j(high_indices + 1) = high",
+        ),
+    )
+
+
+def test_scalar_copy_count_replicates_a_scalar() -> None:
+    expression = parse_expression("(# values) # 0", noun_names=["values"])
+    names = {"values": TypeInfo(AtomType.REAL, Shape.vector())}
+
+    assert infer_type(expression, names) == TypeInfo(
+        AtomType.INTEGER, Shape.vector()
+    )
+    assert render_fortran_expression(expression, names=names) == (
+        "spread(0, dim=1, ncopies=size(values, 1))"
+    )
+
+
+def test_reshape_to_shape_of_scalar_selects_first_source_item() -> None:
+    expression = parse_expression(
+        "($ scalar) $ values", noun_names=["scalar", "values"]
+    )
+    names = {
+        "scalar": TypeInfo(AtomType.REAL),
+        "values": TypeInfo(AtomType.REAL, Shape.vector()),
+    }
+
+    assert infer_type(expression, names) == TypeInfo(AtomType.REAL)
+    assert render_fortran_expression(expression, names=names) == "values(1)"
+
+
+def test_left_bond_of_named_dyad_lowers_to_two_argument_call() -> None:
+    expression = parse_expression(
+        "order&integral indices { values",
+        noun_names=["order", "indices", "values"],
+    )
+    names = {
+        "order": TypeInfo(AtomType.INTEGER),
+        "indices": TypeInfo(AtomType.INTEGER, Shape.vector()),
+        "values": TypeInfo(AtomType.REAL, Shape.vector()),
+    }
+    named_verbs = {"integral": TypeInfo(AtomType.REAL, Shape.vector())}
+
+    assert infer_type(expression, names, named_verbs=named_verbs) == named_verbs[
+        "integral"
+    ]
+    assert render_fortran_expression(
+        expression, names=names, named_verbs=named_verbs
+    ) == (
+        "integral(order, values(indices + 1))"
+    )
 
 
 @pytest.mark.parametrize(

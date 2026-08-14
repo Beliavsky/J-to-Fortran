@@ -166,6 +166,15 @@ def test_noun_derived_amend_verb_preserves_its_selector() -> None:
     assert isinstance(expression.right, Name)
 
 
+def test_parenthesized_selector_before_amend_marker_is_parsed() -> None:
+    expression = parse_expression("0 (I. values < 0)} values")
+
+    assert isinstance(expression, DyadicApply)
+    assert isinstance(expression.verb, AmendVerb)
+    assert isinstance(expression.verb.selector, MonadicApply)
+    assert isinstance(expression.right, Name)
+
+
 def test_j_evaluation_is_parsed_right_to_left() -> None:
     expression = parse_expression("1 + i. y")
 

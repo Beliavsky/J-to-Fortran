@@ -128,8 +128,13 @@ end function square
 
 When a local is first initialized with an integer and later receives a real
 value, the generated declaration is promoted to `real(kind=dp)` if its rank is
-unchanged. Scalar-to-array and other rank changes remain unsupported because
-they require separate storage or more extensive data-flow lowering.
+unchanged. Rank changes use separate storage when control flow permits it.
+
+For straight-line code, reuse that changes rank is represented by a new local
+version. For example, a vector `a` later replaced by its scalar sum uses names
+such as `a` and `a_v2` in Fortran. Rank-changing assignments inside branches
+or loops remain unsupported because they require merging versions at control-
+flow joins.
 
 Fortran is case-insensitive, while J names are case-sensitive. `xj2f.py`
 therefore disambiguates names that differ only in case and renames identifiers
@@ -402,8 +407,17 @@ head = x(:3)
 tail = x(3:)
 ```
 
-J amendment with `}` maps to assignment into a Fortran element or section when
-the selected shape is statically understandable.
+J amendment with `}` maps to assignment into a Fortran element or section.
+Constant selectors, computed integer scalar or vector selectors, and the common
+`I. mask` form are supported. Chained amendments retain J's inside-to-outside
+update order. For example:
+
+```j
+high hi} low lo} zeros
+```
+
+lowers to a copy of `zeros`, followed by assignments at `lo + 1` and `hi + 1`.
+The added one converts J's zero-based indices to Fortran indices.
 
 ## Arithmetic and Logical Operations
 

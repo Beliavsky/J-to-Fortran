@@ -933,6 +933,66 @@ def test_while_loop_parses_as_structured_control_flow() -> None:
     assert len(loop.body) == 2
 
 
+def test_assignment_in_while_condition_is_evaluated_before_each_test() -> None:
+    source = """count =: 3 : 0
+  i =. 0
+  while. (i =. >: i) < y do.
+  end.
+  i
+)
+smoutput count 4
+"""
+    program = xj2f.parse_j_source(Path("condition_assignment.ijs"), source)
+    generated = xj2f.emit_fortran(program)
+
+    verb = program.items[0]
+    assert isinstance(verb, xj2f.VerbDefinition)
+    loop = verb.body[1]
+    assert isinstance(loop, xj2f.WhileLoop)
+    assert [(item.name, item.expression) for item in loop.condition_assignments] == [
+        ("i", ">: i")
+    ]
+    assert "do\n    i = i + 1\n    if (.not. (i < y)) exit" in generated
+
+
+def test_final_conditional_assignment_is_an_implicit_result() -> None:
+    source = """absolute =: 3 : 0
+  result =. y
+  if. y < 0 do.
+    result =. -y
+  end.
+)
+smoutput absolute _3
+"""
+    generated = xj2f.emit_fortran(
+        xj2f.parse_j_source(Path("implicit_result.ijs"), source)
+    )
+
+    assert "if (y < 0) then" in generated
+    assert "j_result = result" in generated
+
+
+def test_reshape_around_chained_amendment_uses_a_temporary() -> None:
+    source = """restore =: 3 : 0
+  values =. , y
+  low_indices =. I. values < 0
+  high_indices =. I. values >: 0
+  low =. - low_indices { values
+  high =. high_indices { values
+  ($y) $ high high_indices} low low_indices} (#values)#0
+)
+smoutput restore _2
+"""
+    generated = xj2f.emit_fortran(
+        xj2f.parse_j_source(Path("restore_shape.ijs"), source)
+    )
+
+    assert "j_amended_result = spread(0, dim=1, ncopies=size(values, 1))" in generated
+    assert "j_amended_result(low_indices + 1) = low" in generated
+    assert "j_amended_result(high_indices + 1) = high" in generated
+    assert "j_result = j_amended_result(1)" in generated
+
+
 def test_while_loop_is_included_in_expression_report() -> None:
     source = "f =: 3 : 0\n  while. y > 0 do.\n    y =. y - 1\n  end.\n  y\n)\n"
     program = xj2f.parse_j_source(Path("loop.ijs"), source)
@@ -2630,7 +2690,7 @@ smoutput scale 4
     assert "z = real(y, kind=dp) / 2" in generated
 
 
-def test_local_numeric_promotion_does_not_hide_rank_changes() -> None:
+def test_straight_line_local_numeric_rank_change_uses_a_new_version() -> None:
     source = """bad =: 3 : 0
   z =. i. y
   z =. y % 2
@@ -2639,6 +2699,68 @@ def test_local_numeric_promotion_does_not_hide_rank_changes() -> None:
 smoutput bad 4
 """
     program = xj2f.parse_j_source(Path("bad.ijs"), source)
+
+    generated = xj2f.emit_fortran(program)
+
+    assert "integer, allocatable :: z(:)" in generated
+    assert "real(kind=dp) :: z_v2" in generated
+    assert "z_v2 = real(y, kind=dp) / 2" in generated
+    assert "j_result = z_v2" in generated
+
+
+@pytest.mark.requires_gfortran
+def test_sequential_local_rank_change_uses_a_new_version(
+    tmp_path: Path,
+) -> None:
+    compiler = shutil.which("gfortran")
+    if compiler is None:
+        pytest.skip("gfortran is not installed")
+    source_text = """summary =: 3 : 0
+  a =. i. y
+  a =. +/ a % 2
+  a + 1
+)
+smoutput summary 5
+"""
+    program = xj2f.parse_j_source(tmp_path / "summary.ijs", source_text)
+    generated = xj2f.emit_fortran(program)
+
+    assert "integer, allocatable :: a(:)" in generated
+    assert "real(kind=dp) :: a_v2" in generated
+    assert "a_v2 = sum(real(a, kind=dp) / 2)" in generated
+    assert "j_result = a_v2 + 1" in generated
+    source = tmp_path / "summary.f90"
+    executable = tmp_path / "summary.exe"
+    source.write_text(generated, encoding="utf-8")
+    compiled = subprocess.run(
+        [compiler, "-std=f2018", str(source), "-o", str(executable)],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert compiled.returncode == 0, compiled.stdout + compiled.stderr
+    completed = subprocess.run(
+        [str(executable)],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert float(completed.stdout) == pytest.approx(6.0)
+
+
+def test_branch_local_rank_change_remains_an_error() -> None:
+    source = """unstable =: 3 : 0
+  a =. i. y
+  if. y > 0 do.
+    a =. +/ a
+  end.
+  a
+)
+"""
+    program = xj2f.parse_j_source(Path("unstable.ijs"), source)
 
     with pytest.raises(xj2f.UnsupportedJError, match="changes type/rank"):
         xj2f.emit_fortran(program)

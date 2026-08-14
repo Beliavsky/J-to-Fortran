@@ -71,6 +71,7 @@ from j2fortran.lexer import LexerError, TokenKind, tokenize
 from j2fortran.lowering import (
     LoweringError,
     constant_shape_extents,
+    dyad,
     file_write_mode,
     infer_type,
     integer_value,
@@ -192,6 +193,7 @@ class WhileLoop:
     line: SourceLine
     condition: str
     body: tuple[Statement, ...]
+    condition_assignments: tuple[Assign, ...] = ()
 
 
 @dataclasses.dataclass(frozen=True)
@@ -852,11 +854,14 @@ class Parser:
                 continue
             while_loop = self._while.fullmatch(text)
             if while_loop:
+                condition_assignments, condition = self._rewrite_embedded_assignments(
+                    line, while_loop.group(1)
+                )
                 self.index += 1
                 body = self._parse_statements({"end."})
                 self._expect("end.", line, "while. loop")
                 statements.append(
-                    WhileLoop(line, while_loop.group(1), tuple(body))
+                    WhileLoop(line, condition, tuple(body), condition_assignments)
                 )
                 continue
             conditional = self._if.fullmatch(text)
@@ -1304,9 +1309,12 @@ class FunctionEmitter:
         )
         self.declarations: dict[str, str] = {}
         self.types: dict[str, TypeInfo] = dict(global_types or {})
+        self.local_versions: dict[str, str] = {}
+        self.local_version_counts: dict[str, int] = {}
         self.body: list[str] = []
         self.indent = 1
         self.loop_depth = 0
+        self.branch_depth = 0
         self.returned = False
         self.needs_append = False
         self.needs_cartesian = False
@@ -1322,6 +1330,21 @@ class FunctionEmitter:
         self.is_recursive = self._references_verb(
             definition.body, callable_name
         )
+
+    def _name(self, name: str) -> str:
+        base = _fortran_name(name)
+        return self.local_versions.get(base, base)
+
+    def _new_local_version(self, source_name: str) -> str:
+        base = _fortran_name(source_name)
+        version = self.local_version_counts.get(base, 1) + 1
+        candidate = f"{base}_v{version}"
+        while candidate in self.declarations or candidate in self.types:
+            version += 1
+            candidate = f"{base}_v{version}"
+        self.local_version_counts[base] = version
+        self.local_versions[base] = candidate
+        return candidate
 
     @classmethod
     def _references_verb(
@@ -1399,6 +1422,18 @@ class FunctionEmitter:
                 declaration += "-matrix"
             self._declare(argument, declaration)
         self._emit_statements(self.definition.body)
+        if self.result_type is None:
+            implicit_result = self._implicit_result_assignment(
+                self.definition.body
+            )
+            if implicit_result is not None:
+                source_name, source_line = implicit_result
+                name = self._name(source_name)
+                type_info = self.types.get(name)
+                if type_info is not None:
+                    self._write(f"j_result = {name}")
+                    self._record_result_type(type_info, source_line)
+                    self.returned = True
         if self.result_type is None:
             raise _error_at(
                 UnsupportedJError,
@@ -1818,7 +1853,7 @@ class FunctionEmitter:
         if isinstance(final, ExpressionStatement):
             return True
         if isinstance(final, IfStatement):
-            return (
+            if (
                 final.else_body is not None
                 and cls._body_defines_result(final.body)
                 and all(
@@ -1826,16 +1861,58 @@ class FunctionEmitter:
                     for branch in final.elseif_branches
                 )
                 and cls._body_defines_result(final.else_body)
-            )
+            ):
+                return True
         if isinstance(final, SelectStatement):
-            return (
+            if (
                 any(branch.expression is None for branch in final.branches)
                 and all(
                     cls._body_defines_result(branch.body)
                     for branch in final.branches
                 )
-            )
-        return False
+            ):
+                return True
+        return cls._implicit_result_assignment(body) is not None
+
+    @classmethod
+    def _implicit_result_assignment(
+        cls, body: tuple[Statement, ...]
+    ) -> tuple[str, SourceLine] | None:
+        """Find a final assignment whose value is J's implicit result."""
+        executable = tuple(
+            statement
+            for statement in body
+            if not isinstance(statement, CommentStatement)
+        )
+        if not executable:
+            return None
+        final = executable[-1]
+        if isinstance(final, Assign):
+            return final.name, final.line
+        if not isinstance(final, IfStatement):
+            return None
+
+        branch_results = [cls._implicit_result_assignment(final.body)]
+        branch_results.extend(
+            cls._implicit_result_assignment(branch.body)
+            for branch in final.elseif_branches
+        )
+        if any(result is None for result in branch_results):
+            return None
+        assert all(result is not None for result in branch_results)
+        name = branch_results[0][0]
+        if any(result[0] != name for result in branch_results[1:]):
+            return None
+        if final.else_body is not None:
+            else_result = cls._implicit_result_assignment(final.else_body)
+            if else_result is None or else_result[0] != name:
+                return None
+        elif not any(
+            isinstance(statement, Assign) and statement.name == name
+            for statement in executable[:-1]
+        ):
+            return None
+        return name, final.line
 
     @staticmethod
     def _shape_suffix(declaration: str) -> str:
@@ -1991,7 +2068,7 @@ class FunctionEmitter:
             self._emit_result(statement)
 
     def _emit_assignment(self, assignment: Assign) -> None:
-        name = _fortran_name(assignment.name)
+        name = self._name(assignment.name)
         expression = self._parse_expression(assignment.expression, assignment.line)
 
         columns = match_zero_integer_matrix(expression)
@@ -2004,7 +2081,7 @@ class FunctionEmitter:
         cartesian_bound = match_cartesian_square(expression)
         if cartesian_bound is not None:
             self._declare(name, "integer, allocatable-matrix")
-            bound = _fortran_name(cartesian_bound)
+            bound = self._name(cartesian_bound)
             self.types[name] = TypeInfo(
                 AtomType.INTEGER, Shape.matrix(f"{bound} * {bound}", 2)
             )
@@ -2015,7 +2092,7 @@ class FunctionEmitter:
         column = match_column_selection(expression)
         if column is not None:
             index, source_name = column
-            source = _fortran_name(source_name)
+            source = self._name(source_name)
             if not self._is_matrix(source):
                 raise _error_at(
                     UnsupportedJError,
@@ -2035,14 +2112,14 @@ class FunctionEmitter:
             return
 
         append = match_append_row(expression)
-        if append is not None and _fortran_name(append[0]) == name:
+        if append is not None and self._name(append[0]) == name:
             if not self._is_matrix(name):
                 raise _error_at(
                     UnsupportedJError,
                     assignment.line,
                     "row append requires a matrix initialized with shape",
                 )
-            values = ", ".join(_fortran_name(value) for value in append[1])
+            values = ", ".join(self._name(value) for value in append[1])
             self._write(f"call j_append_int_row({name}, [{values}])")
             columns = self.types[name].shape.extents[1]
             self.types[name] = TypeInfo(AtomType.INTEGER, Shape.matrix(None, columns))
@@ -2053,22 +2130,33 @@ class FunctionEmitter:
             value_type = infer_type(
                 expression,
                 self.types,
-                _fortran_name,
+                self._name,
                 named_verbs=self.named_verbs,
             )
-            rendered = render_fortran_expression(
+            amendment = render_fortran_amendment(
                 expression,
-                _fortran_name,
-                names=self.types,
+                name,
+                self.types,
+                self._name,
                 named_verbs=self.named_verbs,
             )
+            if amendment is None:
+                rendered = render_fortran_expression(
+                    expression,
+                    self._name,
+                    names=self.types,
+                    named_verbs=self.named_verbs,
+                )
+                amendment_updates: tuple[str, ...] = ()
+            else:
+                rendered, amendment_updates = amendment
         except LoweringError as exc:
             raise _error_at(UnsupportedJError, assignment.line, str(exc)) from exc
         self.expression_helpers.update(
             required_runtime_helpers(
                 expression,
                 self.types,
-                _fortran_name,
+                self._name,
                 named_verbs=self.named_verbs,
             )
         )
@@ -2095,9 +2183,25 @@ class FunctionEmitter:
                 declaration += ", allocatable-vector"
             elif value_type.rank == 2:
                 declaration += ", allocatable-matrix"
-            self._declare(name, declaration)
+            try:
+                self._declare(name, declaration)
+            except UnsupportedJError:
+                argument_names = {
+                    _fortran_name(argument)
+                    for argument in self.definition.arguments
+                }
+                if (
+                    name in argument_names
+                    or self.loop_depth > 0
+                    or self.branch_depth > 0
+                ):
+                    raise
+                name = self._new_local_version(assignment.name)
+                self._declare(name, declaration)
             self.types[name] = value_type
             self._write(f"{name} = {rendered}")
+            for update in amendment_updates:
+                self._write(update)
             return
 
         raise _error_at(
@@ -2119,7 +2223,7 @@ class FunctionEmitter:
             zero_based_bound = bare_expression.operand
         vector_name = None
         if isinstance(bare_expression, Name):
-            candidate = _fortran_name(bare_expression.identifier)
+            candidate = self._name(bare_expression.identifier)
             candidate_type = self.types.get(candidate)
             if (
                 candidate_type is not None
@@ -2134,7 +2238,7 @@ class FunctionEmitter:
                 "for loops currently require an integer vector or iota sequence",
             )
         variable = (
-            _fortran_name(loop.variable) if loop.variable is not None else None
+            self._name(loop.variable) if loop.variable is not None else None
         )
         if variable is not None:
             self._declare(variable, "integer")
@@ -2167,7 +2271,7 @@ class FunctionEmitter:
         try:
             bound = sequence_bound if sequence_bound is not None else zero_based_bound
             assert bound is not None
-            upper = render_fortran_expression(bound, _fortran_name)
+            upper = render_fortran_expression(bound, self._name)
         except LoweringError as exc:
             raise _error_at(UnsupportedJError, loop.line, str(exc)) from exc
         if variable is None:
@@ -2191,6 +2295,19 @@ class FunctionEmitter:
         self._write("end do")
 
     def _emit_while(self, loop: WhileLoop) -> None:
+        if loop.condition_assignments:
+            self._write("do")
+            self.indent += 1
+            self.loop_depth += 1
+            for assignment in loop.condition_assignments:
+                self._emit_assignment(assignment)
+            condition = self._render_condition(loop.condition, loop.line)
+            self._write(f"if (.not. ({condition})) exit")
+            self._emit_statements(loop.body)
+            self.loop_depth -= 1
+            self.indent -= 1
+            self._write("end do")
+            return
         condition = self._render_condition(loop.condition, loop.line)
         self._write(f"do while ({condition})")
         self.indent += 1
@@ -2208,12 +2325,12 @@ class FunctionEmitter:
             assertion_type = infer_type(
                 expression,
                 self.types,
-                _fortran_name,
+                self._name,
                 named_verbs=self.named_verbs,
             )
             rendered = render_fortran_expression(
                 expression,
-                _fortran_name,
+                self._name,
                 names=self.types,
                 named_verbs=self.named_verbs,
             )
@@ -2239,18 +2356,24 @@ class FunctionEmitter:
         condition = self._render_condition(conditional.condition, conditional.line)
         self._write(f"if ({condition}) then")
         self.indent += 1
+        self.branch_depth += 1
         self._emit_statements(conditional.body)
+        self.branch_depth -= 1
         self.indent -= 1
         for branch in conditional.elseif_branches:
             condition = self._render_condition(branch.condition, branch.line)
             self._write(f"else if ({condition}) then")
             self.indent += 1
+            self.branch_depth += 1
             self._emit_statements(branch.body)
+            self.branch_depth -= 1
             self.indent -= 1
         if conditional.else_body is not None:
             self._write("else")
             self.indent += 1
+            self.branch_depth += 1
             self._emit_statements(conditional.else_body)
+            self.branch_depth -= 1
             self.indent -= 1
         self._write("end if")
 
@@ -2260,12 +2383,12 @@ class FunctionEmitter:
             selector_type = infer_type(
                 expression,
                 self.types,
-                _fortran_name,
+                self._name,
                 named_verbs=self.named_verbs,
             )
             rendered_selector = render_fortran_expression(
                 expression,
-                _fortran_name,
+                self._name,
                 names=self.types,
                 named_verbs=self.named_verbs,
             )
@@ -2295,7 +2418,9 @@ class FunctionEmitter:
                     )
                 self._write(f"case ({case_value})")
             self.indent += 1
+            self.branch_depth += 1
             self._emit_statements(branch.body)
+            self.branch_depth -= 1
             self.indent -= 1
         self.indent -= 1
         self._write("end select")
@@ -2305,7 +2430,7 @@ class FunctionEmitter:
         try:
             return render_fortran_expression(
                 expression,
-                _fortran_name,
+                self._name,
                 names=self.types,
                 named_verbs=self.named_verbs,
             )
@@ -2315,17 +2440,76 @@ class FunctionEmitter:
     def _emit_result(self, statement: ExpressionStatement) -> None:
         expression = self._parse_expression(statement.expression, statement.line)
         bare = ungroup(expression)
-        if isinstance(bare, Name) and self._is_matrix(_fortran_name(bare.identifier)):
-            name = _fortran_name(bare.identifier)
+        if isinstance(bare, Name) and self._is_matrix(self._name(bare.identifier)):
+            name = self._name(bare.identifier)
             self._write(f"j_result = {name}")
             self._record_result_type(self.types[name], statement.line)
             self.returned = True
             return
+        reshaped = dyad(expression, "$")
+        if reshaped is not None:
+            temporary = "j_amended_result"
+            amendment = render_fortran_amendment(
+                reshaped[1],
+                temporary,
+                self.types,
+                self._name,
+                named_verbs=self.named_verbs,
+            )
+            if amendment is not None:
+                try:
+                    source_type = infer_type(
+                        reshaped[1],
+                        self.types,
+                        self._name,
+                        named_verbs=self.named_verbs,
+                    )
+                    declaration = {
+                        AtomType.INTEGER: "integer",
+                        AtomType.REAL: "real(kind=dp)",
+                        AtomType.LOGICAL: "logical",
+                    }[source_type.atom_type]
+                    if source_type.rank == 1:
+                        declaration += ", allocatable-vector"
+                    elif source_type.rank == 2:
+                        declaration += ", allocatable-matrix"
+                    self._declare(temporary, declaration)
+                    self.types[temporary] = source_type
+                    source, updates = amendment
+                    self._write(f"{temporary} = {source}")
+                    for update in updates:
+                        self._write(update)
+                    replacement = DyadicApply(
+                        bare.verb,
+                        reshaped[0],
+                        Name(temporary, reshaped[1].span),
+                        bare.span,
+                    )
+                    result_type = infer_type(
+                        replacement,
+                        self.types,
+                        self._name,
+                        named_verbs=self.named_verbs,
+                    )
+                    rendered = render_fortran_expression(
+                        replacement,
+                        self._name,
+                        names=self.types,
+                        named_verbs=self.named_verbs,
+                    )
+                except (KeyError, LoweringError) as exc:
+                    raise _error_at(
+                        UnsupportedJError, statement.line, str(exc)
+                    ) from exc
+                self._write(f"j_result = {rendered}")
+                self._record_result_type(result_type, statement.line)
+                self.returned = True
+                return
         compressed = match_compress_hcat(expression)
         if compressed is not None:
-            mask = _fortran_name(compressed[0])
-            matrix = _fortran_name(compressed[1])
-            column = _fortran_name(compressed[2])
+            mask = self._name(compressed[0])
+            matrix = self._name(compressed[1])
+            column = self._name(compressed[2])
             if not self._is_logical_vector(mask) or not self._is_matrix(matrix):
                 raise _error_at(
                     UnsupportedJError,
@@ -2351,12 +2535,12 @@ class FunctionEmitter:
             result_type = infer_type(
                 expression,
                 self.types,
-                _fortran_name,
+                self._name,
                 named_verbs=self.named_verbs,
             )
             rendered = render_fortran_expression(
                 expression,
-                _fortran_name,
+                self._name,
                 names=self.types,
                 named_verbs=self.named_verbs,
             )
@@ -2366,7 +2550,7 @@ class FunctionEmitter:
             required_runtime_helpers(
                 expression,
                 self.types,
-                _fortran_name,
+                self._name,
                 named_verbs=self.named_verbs,
             )
         )
@@ -2377,19 +2561,19 @@ class FunctionEmitter:
             if self._can_scalarize_elemental():
                 rendered_condition = render_fortran_expression(
                     condition,
-                    _fortran_name,
+                    self._name,
                     names=self.types,
                     named_verbs=self.named_verbs,
                 )
                 rendered_true = render_fortran_expression(
                     true_source,
-                    _fortran_name,
+                    self._name,
                     names=self.types,
                     named_verbs=self.named_verbs,
                 )
                 rendered_false = render_fortran_expression(
                     false_source,
-                    _fortran_name,
+                    self._name,
                     names=self.types,
                     named_verbs=self.named_verbs,
                 )
@@ -2464,7 +2648,7 @@ class FunctionEmitter:
                     condition_type = infer_type(
                         condition,
                         self.types,
-                        _fortran_name,
+                        self._name,
                         named_verbs=self.named_verbs,
                     )
                 except LoweringError:
@@ -3895,8 +4079,7 @@ def _lower_top_assignments(
                     )
                     updates = ()
                 else:
-                    rendered, update = amendment
-                    updates = (update,)
+                    rendered, updates = amendment
         except (LexerError, ExpressionParseError, LoweringError, ValueError) as exc:
             raise _error_at(UnsupportedJError, assignment.line, str(exc)) from exc
         if type_info.atom_type not in {

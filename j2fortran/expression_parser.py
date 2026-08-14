@@ -234,6 +234,42 @@ class ExpressionParser:
 
     def _simple_verb(self, *, allow_inner_product: bool = True) -> Verb:
         token = self._peek()
+        bare_marker = self._bare_amend_end(self.index)
+        if bare_marker is not None:
+            selector = ExpressionParser(
+                self.tokens[self.index : bare_marker], noun_names=self.noun_names
+            ).parse()
+            marker = self.tokens[bare_marker]
+            self.index = bare_marker + 1
+            return AmendVerb(
+                selector,
+                _cover(selector.span, _token_span(marker)),
+            )
+        if token.kind is TokenKind.LPAREN:
+            selector_end = self._matching_parenthesis(self.index)
+            marker_index = (
+                selector_end + 1 if selector_end is not None else None
+            )
+            if (
+                marker_index is not None
+                and marker_index < len(self.tokens)
+                and self.tokens[marker_index].kind is TokenKind.PRIMITIVE
+                and self.tokens[marker_index].value == "}"
+            ):
+                selector_tokens = self.tokens[self.index + 1 : selector_end]
+                if not selector_tokens:
+                    raise ExpressionParseError(
+                        "amend requires an index selector", token
+                    )
+                selector = ExpressionParser(
+                    selector_tokens, noun_names=self.noun_names
+                ).parse()
+                marker = self.tokens[marker_index]
+                self.index = marker_index + 1
+                return AmendVerb(
+                    selector,
+                    _cover(_token_span(token), _token_span(marker)),
+                )
         amend = self._amend_verb_end(self.index)
         if amend is not None:
             marker_index, closing_index = amend
@@ -312,9 +348,13 @@ class ExpressionParser:
         token = self._peek()
         if self._foreign_verb_end(self.index) is not None:
             return True
+        if self._bare_amend_end(self.index) is not None:
+            return True
         if token.kind is TokenKind.NAME and token.value in self.noun_names:
             return False
         if self._amend_verb_end(self.index) is not None:
+            return True
+        if self._postfixed_amend_end(self.index) is not None:
             return True
         if self._inner_product_end(self.index) is not None:
             return True
@@ -347,6 +387,39 @@ class ExpressionParser:
             TokenKind.STRING,
             TokenKind.LPAREN,
         }
+
+    def _bare_amend_end(self, start: int) -> int | None:
+        if start >= len(self.tokens):
+            return None
+        first = self.tokens[start]
+        if first.kind is TokenKind.NAME:
+            marker = start + 1
+        elif first.kind is TokenKind.NUMBER:
+            marker = start + 1
+            while marker < len(self.tokens) and self.tokens[marker].kind is TokenKind.NUMBER:
+                marker += 1
+        else:
+            return None
+        if (
+            marker < len(self.tokens)
+            and self.tokens[marker].kind is TokenKind.PRIMITIVE
+            and self.tokens[marker].value == "}"
+        ):
+            return marker
+        return None
+
+    def _postfixed_amend_end(self, start: int) -> int | None:
+        """Return the } following a parenthesized amend selector, if present."""
+        closing = self._matching_parenthesis(start)
+        marker = closing + 1 if closing is not None else None
+        if (
+            marker is not None
+            and marker < len(self.tokens)
+            and self.tokens[marker].kind is TokenKind.PRIMITIVE
+            and self.tokens[marker].value == "}"
+        ):
+            return marker
+        return None
 
     def _foreign_verb_end(self, start: int) -> int | None:
         if start + 2 >= len(self.tokens):
