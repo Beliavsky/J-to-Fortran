@@ -197,11 +197,13 @@ The parser currently recognizes:
   lowered through a pure helper;
 - monadic shape and constant-shape reshape through rank 3, including cyclic fill;
 - rectangular numeric `\". ;. _2 ] 0 : 0 ... )` data blocks;
-- tally, rank-2 ravel, vector catenate, and equal-length vector laminate;
+- tally, scalar/vector/rank-2 ravel, vector catenate, and equal-length vector
+  laminate;
 - constant in-bounds vector take/drop, plus head, tail, behead, and curtail;
 - vector reverse and constant rotate, plus rank-2 transpose;
 - integer-vector grade up and ascending or descending sort;
 - stable integer nub, membership, and zero-based index-of;
+- zero-based indices of true items with monadic `I.` on logical vectors;
 - vector sum, product, minimum, maximum, Boolean-any, and Boolean-all reductions;
 - integer prefix sum/product and fixed-width infix sum/subtraction scans;
 - leading-axis and rank-1 matrix reductions plus integer arithmetic tables;

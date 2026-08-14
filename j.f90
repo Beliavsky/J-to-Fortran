@@ -20,9 +20,24 @@ module j2f_runtime
   public :: j_select_character
   public :: j_solve_2x2_matrix_int, j_solve_2x2_vector_int
   public :: j_solve_real_vector
+  public :: j_true_indices
   public :: j_write_text
 
 contains
+
+pure function j_true_indices(mask) result(indices)
+  logical, intent(in) :: mask(:)
+  integer, allocatable :: indices(:)
+  integer :: source_index, target_index
+  allocate(indices(count(mask)))
+  target_index = 0
+  do source_index = 1, size(mask)
+    if (mask(source_index)) then
+      target_index = target_index + 1
+      indices(target_index) = source_index - 1
+    end if
+  end do
+end function j_true_indices
 
 function j_write_text(text, filename, append) result(count)
   character(len=*), intent(in) :: text, filename

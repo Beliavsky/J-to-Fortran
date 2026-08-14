@@ -143,6 +143,7 @@ RUNTIME_PROCEDURES = {
     "solve_2x2_vector_int": "j_solve_2x2_vector_int",
     "solve_real_vector": "j_solve_real_vector",
     "sort_int_vector": "j_sort_int_vector",
+    "true_indices": "j_true_indices",
     "write_text": "j_write_text",
 }
 
@@ -2807,6 +2808,25 @@ def _runtime_helpers(helpers: set[str]) -> list[str]:
                 "    prefixes(value_index) = prefixes(value_index - 1) + values(value_index)",
                 "  end do",
                 "end function j_prefix_sum_int",
+                "",
+            ]
+        )
+    if "true_indices" in helpers:
+        result.extend(
+            [
+                "pure function j_true_indices(mask) result(indices)",
+                "  logical, intent(in) :: mask(:)",
+                "  integer, allocatable :: indices(:)",
+                "  integer :: source_index, target_index",
+                "  allocate(indices(count(mask)))",
+                "  target_index = 0",
+                "  do source_index = 1, size(mask)",
+                "    if (mask(source_index)) then",
+                "      target_index = target_index + 1",
+                "      indices(target_index) = source_index - 1",
+                "    end if",
+                "  end do",
+                "end function j_true_indices",
                 "",
             ]
         )

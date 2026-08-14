@@ -842,10 +842,22 @@ def infer_type(
                 raise LoweringError("tally currently requires an array operand")
             return TypeInfo(AtomType.INTEGER)
         if spelling == ",":
+            if operand_type.rank == 0:
+                return TypeInfo(
+                    operand_type.atom_type,
+                    Shape.vector(1),
+                    operand_type.character_length,
+                    operand_type.boxed,
+                )
+            if operand_type.rank == 1:
+                return operand_type
             if operand_type.rank != 2:
-                raise LoweringError("ravel currently requires a rank-2 operand")
+                raise LoweringError("ravel currently supports ranks 0 through 2")
             return TypeInfo(
-                operand_type.atom_type, Shape.vector(_shape_size(operand_type.shape))
+                operand_type.atom_type,
+                Shape.vector(_shape_size(operand_type.shape)),
+                operand_type.character_length,
+                operand_type.boxed,
             )
         if spelling in {"{.", "{:"}:
             if operand_type.rank != 1:
@@ -981,6 +993,10 @@ def infer_type(
             if length is not None and length < 0:
                 raise LoweringError("negative constant iota bounds are not supported")
             return TypeInfo(AtomType.INTEGER, Shape.vector(length))
+        if spelling == "I.":
+            if operand_type.atom_type is not AtomType.LOGICAL or operand_type.rank != 1:
+                raise LoweringError("indices currently requires a logical vector")
+            return TypeInfo(AtomType.INTEGER, Shape.vector())
         if spelling == "%:":
             return TypeInfo(AtomType.REAL, operand_type.shape)
         if spelling == "^.":
@@ -1985,6 +2001,8 @@ def _render_fortran_expression(
             return f"j_factorial({operand})", _ATOM_PRECEDENCE, "call"
         if spelling == "i.":
             return f"j_iota({operand})", _ATOM_PRECEDENCE, "call"
+        if spelling == "I.":
+            return f"j_true_indices({operand})", _ATOM_PRECEDENCE, "call"
         if spelling == "%:":
             return (
                 f"sqrt({_as_real_dp(operand)})",
@@ -2399,6 +2417,27 @@ def render_fortran_expression(
         if operand_type.atom_type is AtomType.REAL:
             return f"sqrt({operand})"
         return f"sqrt({_as_real_dp(operand)})"
+    if (
+        isinstance(bare_expression, MonadicApply)
+        and primitive_spelling(bare_expression.verb) == ","
+        and names is not None
+    ):
+        operand_type = infer_type(
+            bare_expression.operand,
+            names,
+            name_transform,
+            named_verbs=named_verbs,
+        )
+        operand = render_fortran_expression(
+            bare_expression.operand,
+            name_transform,
+            names=names,
+            named_verbs=named_verbs,
+        )
+        if operand_type.rank == 0:
+            return f"[{operand}]"
+        if operand_type.rank == 1:
+            return operand
     decoded = dyad(bare_expression, "#.")
     if decoded is not None and names is not None:
         infer_type(bare_expression, names, name_transform, named_verbs=named_verbs)
@@ -3317,6 +3356,8 @@ def required_runtime_helpers(
                 helpers.add("sort_int_vector")
         if spelling == "i.":
             helpers.add("iota")
+        if spelling == "I.":
+            helpers.add("true_indices")
         if spelling == "!":
             helpers.add("factorial")
         if spelling == "*":

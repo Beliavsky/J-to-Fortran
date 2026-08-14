@@ -1206,6 +1206,37 @@ def test_rank_two_ravel_preserves_j_row_major_order() -> None:
     )
 
 
+def test_scalar_ravel_creates_a_length_one_vector() -> None:
+    expression = parse_expression(", a")
+    names = {"a": TypeInfo(AtomType.REAL)}
+
+    assert infer_type(expression, names) == TypeInfo(
+        AtomType.REAL, Shape.vector(1)
+    )
+    assert render_fortran_expression(expression, names=names) == "[a]"
+
+
+def test_vector_ravel_is_an_identity() -> None:
+    expression = parse_expression(", a")
+    names = {"a": TypeInfo(AtomType.INTEGER, Shape.vector(3))}
+
+    assert infer_type(expression, names) == names["a"]
+    assert render_fortran_expression(expression, names=names) == "a"
+
+
+def test_indices_of_true_items_use_zero_based_loop_helper() -> None:
+    expression = parse_expression("I. mask")
+    names = {"mask": TypeInfo(AtomType.LOGICAL, Shape.vector(5))}
+
+    assert infer_type(expression, names) == TypeInfo(
+        AtomType.INTEGER, Shape.vector()
+    )
+    assert render_fortran_expression(expression, names=names) == (
+        "j_true_indices(mask)"
+    )
+    assert required_runtime_helpers(expression, names) == {"true_indices"}
+
+
 def test_vector_catenate_combines_extents() -> None:
     expression = parse_expression("a , b")
     names = {
@@ -1247,11 +1278,11 @@ def test_vector_laminate_creates_a_row_major_matrix() -> None:
     )
 
 
-def test_ravel_rejects_ranks_not_yet_supported() -> None:
+def test_ravel_rejects_ranks_above_two() -> None:
     expression = parse_expression(", a")
-    names = {"a": TypeInfo(AtomType.INTEGER, Shape.vector(3))}
+    names = {"a": TypeInfo(AtomType.INTEGER, Shape((2, 3, 4)))}
 
-    with pytest.raises(LoweringError, match="rank-2"):
+    with pytest.raises(LoweringError, match="ranks 0 through 2"):
         infer_type(expression, names)
 
 

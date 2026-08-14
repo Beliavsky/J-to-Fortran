@@ -51,6 +51,13 @@ def test_circle_is_an_alphabetic_primitive() -> None:
     ]
 
 
+def test_indices_is_a_case_sensitive_alphabetic_primitive() -> None:
+    assert significant("I. mask") == [
+        (TokenKind.PRIMITIVE, "I."),
+        (TokenKind.NAME, "mask"),
+    ]
+
+
 def test_control_words_and_loop_names() -> None:
     tokens = significant("for_item. 1 + i. y do.\nif. y <: 3 do.\nend.")
     controls = [value for kind, value in tokens if kind is TokenKind.CONTROL]

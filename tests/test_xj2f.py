@@ -705,6 +705,25 @@ ok =: result -: expected
     assert "pure function j_prefix_max_int(values)" in runtime_source
 
 
+def test_true_indices_are_available_in_both_runtime_modes() -> None:
+    source = """mask =: 0 1 0 1
+indices =: I. mask
+smoutput indices
+"""
+    program = xj2f.parse_j_source(Path("true_indices.ijs"), source)
+
+    embedded = xj2f.emit_fortran(program)
+    external = xj2f.emit_fortran(program, runtime="external")
+    runtime_source = (ROOT / "j.f90").read_text(encoding="utf-8")
+
+    assert "j_true_indices(mask_j)" in embedded
+    assert "pure function j_true_indices(mask)" in embedded
+    assert "use j2f_runtime, only: j_true_indices" in external
+    assert "pure function j_true_indices(mask)" not in external
+    assert "public :: j_true_indices" in runtime_source
+    assert "pure function j_true_indices(mask)" in runtime_source
+
+
 def test_moving_maximum_is_available_in_both_runtime_modes() -> None:
     source = """result =: 3 >./\\ 2 5 3 8 7
 expected =: 5 8 8

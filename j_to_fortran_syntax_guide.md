@@ -316,9 +316,10 @@ Important shape-related mappings include:
 |---|---|---|
 | `# x` | tally, or leading-axis length | `size(x, 1)` |
 | `i. n` | integers from 0 through `n-1` | generated loop/helper |
+| `I. mask` | indices of true items | regular-loop helper returning zero-based indices |
 | `$ x` | shape of `x` | `shape(x)` |
 | `r $ x` | reshape or cyclic fill | `reshape(...)` or helper |
-| `, x` | ravel | `reshape(x, [size(x)])` |
+| `, x` | ravel | `[x]`, `x`, or reordered `reshape(...)` by rank |
 | `|: m` | transpose a matrix | `transpose(m)` |
 | `|. x` | reverse | a reversed section or helper |
 
@@ -336,6 +337,8 @@ matrix = reshape([1, 2, 3, 4, 5, 6], [2, 3], order=[2, 1])
 
 The `order` treatment matters because J describes arrays in row-major order,
 whereas Fortran stores arrays in column-major order.
+Scalar ravel creates a length-one vector, vector ravel is an identity, and
+matrix ravel uses `transpose` before `reshape` to retain J element order.
 
 ## Indexing
 
