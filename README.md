@@ -1,9 +1,10 @@
 # J-to-Fortran
 
-`xj2f.py` is an experimental source-to-source transpiler from a selective,
-primarily numeric subset of J to modern Fortran. It follows the command-line
-workflow of the neighboring R-to-Fortran project, while using a J-specific
-parser and lowering layer.
+`xj2f.py` is an experimental source-to-source transpiler from a
+selective, primarily numeric subset of J to modern Fortran written
+using Sol and Opus 5. It follows the command-line workflow of the
+neighboring R-to-Fortran project, while using a J-specific parser and
+lowering layer.
 
 This is not a J implementation. The supported subset now covers the repository's
 17 examples, ranging from array-oriented Pythagorean triples and indexing to
