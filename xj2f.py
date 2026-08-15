@@ -7923,6 +7923,18 @@ def build_argument_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="emit safe top-level constant nouns as Fortran parameters",
     )
+    parser.add_argument(
+        "--j2j",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "if translation fails, retry after normalizing the source with "
+            "xj2j.py (default: enabled); on success the normalized source is "
+            "written next to the input as <name>.j2j.ijs (the original .ijs "
+            "is never modified). Use --no-j2j to see raw xj2f.py support "
+            "without the fallback"
+        ),
+    )
     parser.add_argument("--compile", action="store_true", help="compile generated Fortran")
     parser.add_argument("--run", action="store_true", help="compile and run generated Fortran")
     parser.add_argument("--run-j", action="store_true", help="run the original J script")
@@ -7987,6 +7999,96 @@ def build_argument_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _emit_fortran_for_args(parsed_program: Program, args: argparse.Namespace) -> str:
+    return emit_fortran(
+        parsed_program,
+        runtime=args.runtime,
+        source_comments=args.source_comments,
+        function_result_style=args.function_result_style,
+        concise=args.concise,
+        internal_procedures=args.internal_procedures,
+        parameterize_constants=args.parameterize_constants,
+    )
+
+
+def _normalized_j2j_source(input_path: Path, source_text: str) -> str | None:
+    """Normalized source via xj2j.py, or None if it made no useful change."""
+
+    try:
+        import xj2j
+
+        normalized_text, stats = xj2j.normalize(source_text)
+    except Exception:
+        return None
+    if not any(stats.values()) or normalized_text == source_text:
+        return None
+    return normalized_text
+
+
+def _j2j_would_help(input_path: Path, source_text: str, args: argparse.Namespace) -> bool:
+    """Whether xj2j.py normalization would let this source translate."""
+
+    normalized_text = _normalized_j2j_source(input_path, source_text)
+    if normalized_text is None:
+        return False
+    try:
+        parsed_program = parse_j_source(input_path, normalized_text)
+        _emit_fortran_for_args(parsed_program, args)
+        return True
+    except Exception:
+        return False
+
+
+def _translate_source(
+    input_path: Path, source_text: str, args: argparse.Namespace
+) -> tuple[Program, str, Path | None]:
+    """Parse and emit Fortran, retrying via xj2j.py's J-to-J normalizer on
+    failure when --j2j is given (the default).
+
+    Returns the parsed program, the generated Fortran, and the path of the
+    normalized .ijs written to disk (or None when xj2j.py was not used).
+    The original input file is never modified.
+    """
+
+    try:
+        parsed_program = parse_j_source(input_path, source_text)
+        generated = _emit_fortran_for_args(parsed_program, args)
+        return parsed_program, generated, None
+    except J2FError as original_error:
+        if not args.j2j:
+            if _j2j_would_help(input_path, source_text, args):
+                raise J2FError(
+                    f"{original_error}\n"
+                    f"  hint: this translates with xj2j.py normalization; "
+                    f"retry without --no-j2j"
+                ) from original_error
+            raise
+
+        normalized_text = _normalized_j2j_source(input_path, source_text)
+        if normalized_text is None:
+            raise original_error
+
+        try:
+            parsed_program = parse_j_source(input_path, normalized_text)
+            generated = _emit_fortran_for_args(parsed_program, args)
+        except J2FError as normalized_error:
+            raise J2FError(
+                f"{original_error}\n"
+                f"  --j2j: xj2j.py normalization did not resolve it: {normalized_error}"
+            ) from normalized_error
+        except Exception:
+            raise original_error from None
+
+        j2j_path = input_path.with_name(f"{input_path.stem}.j2j.ijs")
+        j2j_path.write_text(normalized_text, encoding="utf-8", newline="\n")
+        print(
+            f"xj2f.py: original translation failed ({original_error}); "
+            f"translated after xj2j.py normalization, wrote {j2j_path}",
+            file=sys.stderr,
+        )
+        return parsed_program, generated, j2j_path
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = build_argument_parser()
     args = parser.parse_args(argv)
@@ -8008,16 +8110,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             source_text = input_path.read_text(encoding="utf-8")
         except OSError as exc:
             raise J2FError(f"cannot read {input_path}: {exc}") from exc
-        parsed_program = parse_j_source(input_path, source_text)
-        generated = emit_fortran(
-            parsed_program,
-            runtime=args.runtime,
-            source_comments=args.source_comments,
-            function_result_style=args.function_result_style,
-            concise=args.concise,
-            internal_procedures=args.internal_procedures,
-            parameterize_constants=args.parameterize_constants,
-        )
+        parsed_program, generated, j2j_path = _translate_source(input_path, source_text, args)
         translate_seconds = time.perf_counter() - translate_started
 
         if args.emit_ast:
@@ -8049,7 +8142,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
             if incompatible:
                 raise J2FError("--check cannot be combined with build, run, timing, or tee modes")
-            print(f"{input_path}: supported", file=sys.stderr)
+            if j2j_path is not None:
+                print(f"{input_path}: supported after xj2j.py normalization ({j2j_path})", file=sys.stderr)
+            else:
+                print(f"{input_path}: supported", file=sys.stderr)
             return 0
 
         output_path.parent.mkdir(parents=True, exist_ok=True)

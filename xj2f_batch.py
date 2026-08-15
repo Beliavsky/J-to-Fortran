@@ -170,6 +170,8 @@ def _case_command(source: Path, args: argparse.Namespace) -> list[str]:
         command.append("--internal-procedures")
     if args.parameterize_constants:
         command.append("--parameterize-constants")
+    if args.no_j2j:
+        command.append("--no-j2j")
     command.extend(["--compiler", args.compiler, "--timeout", str(args.timeout)])
     if args.run_diff:
         command.extend(["--diff-rtol", str(args.diff_rtol)])
@@ -306,6 +308,11 @@ def build_argument_parser() -> argparse.ArgumentParser:
         "--internal-procedures",
         action="store_true",
         help="place generated procedures inside each main program",
+    )
+    parser.add_argument(
+        "--no-j2j",
+        action="store_true",
+        help="disable xj2f.py's default xj2j.py fallback, to measure raw xj2f.py support",
     )
     parser.add_argument(
         "--parameterize-constants",
