@@ -460,14 +460,14 @@ class Parser:
         r"(?P<expression>.+?)\s*$"
     )
     _for = re.compile(
-        r"^for(?:_(?P<variable>[A-Za-z][A-Za-z0-9_]*))?\.\s+"
-        r"(?P<expression>.+?)\s+do\.\s*$"
+        r"^for(?:_(?P<variable>[A-Za-z][A-Za-z0-9_]*))?\.\s*"
+        r"(?P<expression>.+?)\s*do\.\s*$"
     )
-    _while = re.compile(r"^(?:while|whilst)\.\s+(.+?)\s+do\.\s*$")
-    _if = re.compile(r"^if\.\s+(.+?)\s+do\.\s*$")
-    _elseif = re.compile(r"^elseif\.\s+(.+?)\s+do\.\s*$")
-    _select = re.compile(r"^select\.\s+(.+?)\s*$")
-    _case = re.compile(r"^case\.\s*(.*?)\s+do\.\s*$")
+    _while = re.compile(r"^(?:while|whilst)\.\s*(.+?)\s*do\.\s*$")
+    _if = re.compile(r"^if\.\s*(.+?)\s*do\.\s*$")
+    _elseif = re.compile(r"^elseif\.\s*(.+?)\s*do\.\s*$")
+    _select = re.compile(r"^select\.\s*(.+?)\s*$")
+    _case = re.compile(r"^case\.\s*(.*?)\s*do\.\s*$")
     _dependency_directive = re.compile(r"^(?P<command>load|require)\s*(?P<target>.+)$")
     _numeric_block_start = re.compile(
         r"^(?P<name>[A-Za-z][A-Za-z0-9_]*)\s*(?P<copula>=[:.])\s*"
