@@ -114,7 +114,9 @@ class ExpressionParser:
             center = self._verb()
             if self.index >= len(self.tokens):
                 token = self.tokens[-1]
-                raise ExpressionParseError("tacit fork requires a right verb", token)
+                raise ExpressionParseError(
+                    "2-verb hook trains (u v) are not supported yet", token
+                )
             right = self._verb()
             verb = ForkVerb(verb, center, right, _cover(verb.span, right.span))
         if self.index != len(self.tokens):
@@ -196,6 +198,12 @@ class ExpressionParser:
                     _cover(verb.span, _token_span(modifier)),
                 )
                 continue
+            if modifier.value == "^:":
+                raise ExpressionParseError(
+                    "power conjunction '^:' (repeat/converge iteration) is "
+                    "not supported yet",
+                    modifier,
+                )
             if modifier.value == '"':
                 self._take()
                 parenthesized = (
@@ -334,6 +342,12 @@ class ExpressionParser:
         elif token.kind is TokenKind.NAME:
             self._take()
             verb: Verb = NamedVerb(token.value, _token_span(token))
+        elif token.kind is TokenKind.PRIMITIVE and token.value == "^:":
+            raise ExpressionParseError(
+                "power conjunction '^:' (repeat/converge iteration) is not "
+                "supported yet",
+                token,
+            )
         elif token.kind is TokenKind.PRIMITIVE and token.value not in _ADVERBS | {'"'}:
             self._take()
             verb = PrimitiveVerb(token.value, _token_span(token))

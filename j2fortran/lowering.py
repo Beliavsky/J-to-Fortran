@@ -2109,6 +2109,17 @@ def infer_type(
                 )
             )
             return TypeInfo(atom_type, shape)
+        if (
+            spelling == ":"
+            and isinstance(ungroup(expression.left), NumberLiteral)
+            and integer_value(expression.left) in {3, 4}
+        ):
+            raise LoweringError(
+                "assigning an explicit verb definition to a local name is "
+                "not supported (J verb values held in local variables and "
+                "dispatched at runtime cannot be represented as static "
+                "Fortran procedures)"
+            )
         raise LoweringError(f"cannot infer the result type of dyadic {spelling!r}")
     raise LoweringError(f"cannot infer type for {type(expression).__name__}")
 

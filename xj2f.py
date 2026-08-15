@@ -5764,6 +5764,24 @@ def _lower_known_top_level_invocations(program: Program) -> Program:
     return dataclasses.replace(program, items=tuple(items))
 
 
+def _lower_implicit_top_level_display(program: Program) -> Program:
+    """Print a bare top-level sentence, matching J's script-loader behavior.
+
+    A top-level sentence that is not an assignment, and whose result was not
+    already consumed by a more specific rule (file write, discarded call to
+    a script-defined verb), is displayed the same way `echo` would display
+    it.
+    """
+
+    items: list[TopLevel] = [
+        EchoStatement(item.line, item.expression)
+        if isinstance(item, ExpressionStatement)
+        else item
+        for item in program.items
+    ]
+    return dataclasses.replace(program, items=tuple(items))
+
+
 def _expand_top_level_boxed_match(program: Program) -> Program:
     """Decompose a final boxed result match into independently typed matches."""
 
@@ -6616,20 +6634,17 @@ def emit_fortran(
     top_expressions = [
         item for item in program.items if isinstance(item, ExpressionStatement)
     ]
-    if top_expressions:
-        first = top_expressions[0]
-        if re.match(r"^\d+\s*!:\s*\d+\b", first.expression.strip()):
+    for expression_statement in top_expressions:
+        if re.match(
+            r"^\d+\s*!:\s*\d+\b", expression_statement.expression.strip()
+        ):
             raise _error_at(
                 UnsupportedJError,
-                first.line,
+                expression_statement.line,
                 "the foreign conjunction 'N!:M' (operating-system, file, or "
                 "runtime interface) used here is not supported",
             )
-        raise _error_at(
-            UnsupportedJError,
-            first.line,
-            "top-level verb invocation needs a dedicated lowering rule",
-        )
+    program = _lower_implicit_top_level_display(program)
     program = _expand_top_level_boxed_match(program)
     leading_comments, comment_groups, trailing_comments = (
         _top_level_comment_groups(program)
