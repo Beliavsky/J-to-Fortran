@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import re
 
 import pytest
 
@@ -233,4 +234,8 @@ def test_batch_prints_total_elapsed_time(tmp_path: Path, capsys, monkeypatch) ->
 
     assert xj2f_batch.main([str(source), "--terse"]) == 0
 
-    assert capsys.readouterr().out.endswith("Elapsed: 1.235 s\n")
+    output = capsys.readouterr().out
+    assert re.search(
+        r"Elapsed: 1\.235 s at \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} [AP]M\n$",
+        output,
+    )

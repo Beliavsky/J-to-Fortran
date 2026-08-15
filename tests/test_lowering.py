@@ -1010,6 +1010,14 @@ def test_vector_reductions_use_fortran_intrinsics(
     assert render_fortran_expression(expression, names=names) == expected_fortran
 
 
+def test_reduction_of_a_scalar_atom_is_the_identity() -> None:
+    expression = parse_expression("+/ a")
+    names = {"a": TypeInfo(AtomType.INTEGER)}
+
+    assert infer_type(expression, names) == TypeInfo(AtomType.INTEGER)
+    assert render_fortran_expression(expression, names=names) == "a"
+
+
 @pytest.mark.parametrize(
     ("source", "expected_fortran", "helper"),
     [

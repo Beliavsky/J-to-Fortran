@@ -139,6 +139,8 @@ RUNTIME_PROCEDURES = {
     "prefix_max_real": "j_prefix_max_real",
     "prefix_sum_int": "j_prefix_sum_int",
     "prefix_sum_real": "j_prefix_sum_real",
+    "alternating_sum_int": "j_alternating_sum_int",
+    "alternating_sum_real": "j_alternating_sum_real",
     "power_table_int": "j_power_table_int",
     "polynomial_int": "j_polynomial_int",
     "polynomial_real": "j_polynomial_real",
@@ -1131,6 +1133,26 @@ def _fortran_name(name: str) -> str:
 
 def _normalized_expression(expression: str) -> str:
     return " ".join(expression.strip().split())
+
+
+def _echo_needs_real_kind(
+    echo: EchoStatement,
+    top_types: dict[str, TypeInfo],
+    top_noun_names: set[str],
+    function_types: dict[str, TypeInfo],
+) -> bool:
+    """Whether displaying `echo` renders a real/complex literal needing `dp`."""
+
+    try:
+        echo_ast = parse_expression(
+            _normalized_expression(echo.expression), noun_names=top_noun_names
+        )
+        result_type = infer_type(
+            echo_ast, top_types, _fortran_name, named_verbs=function_types
+        )
+    except (ExpressionParseError, LexerError, LoweringError):
+        return False
+    return result_type.atom_type in {AtomType.REAL, AtomType.COMPLEX}
 
 
 def _echo_items(expression: Expression) -> list[Expression]:
@@ -3299,6 +3321,38 @@ def _runtime_helpers(helpers: set[str]) -> list[str]:
                 "    prefixes(value_index) = prefixes(value_index - 1) + values(value_index)",
                 "  end do",
                 "end function j_prefix_sum_real",
+                "",
+            ]
+        )
+    if "alternating_sum_int" in helpers:
+        result.extend(
+            [
+                "pure function j_alternating_sum_int(values) result(total)",
+                "  integer, intent(in) :: values(:)",
+                "  integer :: total",
+                "  integer :: value_index",
+                "",
+                "  total = values(size(values))",
+                "  do value_index = size(values) - 1, 1, -1",
+                "    total = values(value_index) - total",
+                "  end do",
+                "end function j_alternating_sum_int",
+                "",
+            ]
+        )
+    if "alternating_sum_real" in helpers:
+        result.extend(
+            [
+                "pure function j_alternating_sum_real(values) result(total)",
+                "  real(kind=dp), intent(in) :: values(:)",
+                "  real(kind=dp) :: total",
+                "  integer :: value_index",
+                "",
+                "  total = values(size(values))",
+                "  do value_index = size(values) - 1, 1, -1",
+                "    total = values(value_index) - total",
+                "  end do",
+                "end function j_alternating_sum_real",
                 "",
             ]
         )
@@ -6901,6 +6955,9 @@ def emit_fortran(
     ) or any(
         result_type.atom_type in {AtomType.REAL, AtomType.COMPLEX}
         for result_type in function_types.values()
+    ) or any(
+        _echo_needs_real_kind(echo, top_types, top_noun_names, function_types)
+        for echo in echos
     ):
         lines.append("  use, intrinsic :: iso_fortran_env, only: dp => real64")
     lines.append("  implicit none")

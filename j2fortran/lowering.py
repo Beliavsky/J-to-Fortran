@@ -930,13 +930,20 @@ def infer_type(
                 return operand_type
             if expression.verb.adverb == "/" and reduction in {
                 "+",
+                "-",
                 "*",
                 "<.",
                 ">.",
                 "+.",
                 "*.",
             }:
-                if operand_type.rank not in {1, 2, 3}:
+                if reduction == "-":
+                    if operand_type.rank not in {0, 1}:
+                        raise LoweringError(
+                            "alternating-sum reduction currently requires a "
+                            "scalar or vector"
+                        )
+                elif operand_type.rank not in {0, 1, 2, 3}:
                     raise LoweringError(
                         "reduction currently requires a vector or array of rank at most 3"
                     )
@@ -947,7 +954,10 @@ def infer_type(
                         )
                     result_shape = Shape(operand_type.shape.extents[1:])
                     return TypeInfo(AtomType.LOGICAL, result_shape)
-                if reduction == "+" and operand_type.atom_type is AtomType.LOGICAL:
+                if (
+                    reduction in {"+", "-", "*", "<.", ">."}
+                    and operand_type.atom_type is AtomType.LOGICAL
+                ):
                     result_shape = Shape(operand_type.shape.extents[1:])
                     return TypeInfo(AtomType.INTEGER, result_shape)
                 numeric_types = {AtomType.INTEGER, AtomType.REAL}
@@ -955,9 +965,14 @@ def infer_type(
                     numeric_types.add(AtomType.COMPLEX)
                 if operand_type.atom_type not in numeric_types:
                     raise LoweringError("numeric reduction requires a numeric operand")
-                if reduction in {"<.", ">."} and operand_type.shape.extents[0] == 0:
+                if (
+                    reduction in {"<.", ">.", "-"}
+                    and operand_type.rank >= 1
+                    and operand_type.shape.extents[0] == 0
+                ):
                     raise LoweringError(
-                        "minimum and maximum reduction require a nonempty vector"
+                        "minimum, maximum, and alternating-sum reduction "
+                        "require a nonempty vector"
                     )
                 result_shape = Shape(operand_type.shape.extents[1:])
                 return TypeInfo(operand_type.atom_type, result_shape)
@@ -974,8 +989,6 @@ def infer_type(
                 )
             return TypeInfo(AtomType.REAL, operand_type.shape)
         if spelling == "#":
-            if operand_type.rank < 1:
-                raise LoweringError("tally currently requires an array operand")
             return TypeInfo(AtomType.INTEGER)
         if spelling == ",":
             if operand_type.rank == 0:
@@ -2412,12 +2425,15 @@ def _render_fortran_expression(
         )
         if spelling == "]":
             return operand, operand_precedence, None
-        if spelling == "+":
+        if spelling in {"+", "-"}:
             operand = _parenthesize(operand, operand_precedence, _UNARY_PRECEDENCE)
-            return f"+{operand}", _UNARY_PRECEDENCE, "unary+"
-        if spelling == "-":
-            operand = _parenthesize(operand, operand_precedence, _UNARY_PRECEDENCE)
-            return f"-{operand}", _UNARY_PRECEDENCE, "unary-"
+            # A unary sign directly before another leading sign is not valid
+            # Fortran syntax (`--6`, or a negative literal like `-_5`);
+            # force parentheses whenever the text itself starts with one.
+            if operand.startswith(("+", "-")):
+                operand = f"({operand})"
+            sign = "+" if spelling == "+" else "-"
+            return f"{sign}{operand}", _UNARY_PRECEDENCE, f"unary{sign}"
         if spelling == "*:":
             operand = _parenthesize(operand, operand_precedence, _POWER_PRECEDENCE)
             return f"{operand}**2", _POWER_PRECEDENCE, "**"
@@ -2437,6 +2453,8 @@ def _render_fortran_expression(
         if spelling == "%":
             precedence = _FORTRAN_PRECEDENCE["/"]
             operand = _parenthesize(operand, operand_precedence, precedence + 1)
+            if operand.startswith(("+", "-")):
+                operand = f"({operand})"
             return f"1.0_dp / {operand}", precedence, "/"
         if spelling == "|":
             return f"abs({operand})", _ATOM_PRECEDENCE, "call"
@@ -2757,6 +2775,49 @@ def render_fortran_expression(
             names=names,
             named_verbs=named_verbs,
         )
+    if (
+        isinstance(bare_expression, MonadicApply)
+        and primitive_spelling(bare_expression.verb) == "#"
+        and names is not None
+    ):
+        operand_type = infer_type(
+            bare_expression.operand, names, name_transform, named_verbs=named_verbs
+        )
+        if operand_type.rank == 0:
+            # An atom's tally is 1; `size(atom, 1)` is not valid Fortran.
+            return "1"
+        if operand_type.atom_type is AtomType.CHARACTER:
+            operand = render_fortran_expression(
+                bare_expression.operand,
+                name_transform,
+                names=names,
+                named_verbs=named_verbs,
+            )
+            return f"len({operand})"
+        operand = render_fortran_expression(
+            bare_expression.operand,
+            name_transform,
+            names=names,
+            named_verbs=named_verbs,
+        )
+        return f"size({operand}, 1)"
+    if (
+        isinstance(bare_expression, MonadicApply)
+        and primitive_spelling(bare_expression.verb) in {"<.", ">."}
+        and names is not None
+    ):
+        operand_type = infer_type(
+            bare_expression.operand, names, name_transform, named_verbs=named_verbs
+        )
+        if operand_type.atom_type is AtomType.INTEGER:
+            # Floor/ceiling of an already-integer value is itself; Fortran's
+            # floor()/ceiling() intrinsics require a REAL argument.
+            return render_fortran_expression(
+                bare_expression.operand,
+                name_transform,
+                names=names,
+                named_verbs=named_verbs,
+            )
     if isinstance(bare_expression, DyadicApply) and names is not None:
         spelling = primitive_spelling(bare_expression.verb)
         if spelling in {"*:", "+:"}:
@@ -3264,7 +3325,9 @@ def render_fortran_expression(
             )
             if operand_type.atom_type is AtomType.LOGICAL:
                 operand = f"merge(1, 0, {operand})"
-            elif isinstance(ungroup(bare_expression.operand), DyadicApply):
+            elif isinstance(
+                ungroup(bare_expression.operand), DyadicApply
+            ) or operand.startswith(("+", "-")):
                 operand = f"({operand})"
             return f"2 * {operand}"
         if spelling in {"+", "-", "|"} and not (
@@ -3281,7 +3344,12 @@ def render_fortran_expression(
             if spelling == "-" and operand_type.atom_type is AtomType.LOGICAL:
                 return f"-merge(1, 0, {operand})"
             operand_expression = ungroup(bare_expression.operand)
-            if (
+            if operand.startswith(("+", "-")):
+                # A unary sign directly before another leading sign is not
+                # valid Fortran syntax (`--6`, or a negative literal like
+                # `-_5`); always parenthesize it.
+                operand = f"({operand})"
+            elif (
                 isinstance(operand_expression, DyadicApply)
                 and match_index_selection(operand_expression) is None
             ):
@@ -3636,7 +3704,9 @@ def render_fortran_expression(
         right = render_fortran_expression(
             divided[1], name_transform, names=names, named_verbs=named_verbs
         )
-        if isinstance(ungroup(divided[1]), DyadicApply):
+        if isinstance(ungroup(divided[1]), DyadicApply) or right.startswith(
+            ("+", "-")
+        ):
             right = f"({right})"
         if left_type.atom_type is AtomType.INTEGER:
             left = _as_real_dp(left)
@@ -3656,15 +3726,24 @@ def render_fortran_expression(
             name_transform,
             named_verbs=named_verbs,
         )
-        if reduction in {"+", "*", "<.", ">.", "+.", "*."}:
+        if reduction in {"+", "-", "*", "<.", ">.", "+.", "*."}:
             operand = render_fortran_expression(
                 bare_expression.operand,
                 name_transform,
                 names=names,
                 named_verbs=named_verbs,
             )
-            if reduction == "+" and operand_type.atom_type is AtomType.LOGICAL:
+            if (
+                reduction in {"+", "-", "*", "<.", ">."}
+                and operand_type.atom_type is AtomType.LOGICAL
+            ):
                 operand = f"merge(1, 0, {operand})"
+            if operand_type.rank == 0:
+                # Reducing a single atom is the identity: `+/ 5` is `5`.
+                return operand
+            if reduction == "-":
+                suffix = "real" if operand_type.atom_type is AtomType.REAL else "int"
+                return f"j_alternating_sum_{suffix}({operand})"
             intrinsic = {
                 "+": "sum",
                 "*": "product",
@@ -4028,6 +4107,12 @@ def render_fortran_expression(
                 left_type.atom_type is AtomType.LOGICAL
             ):
                 left = f"merge(1, 0, {left})"
+            elif (
+                spelling in {"=", "~:", "<", "<:", ">", ">:"}
+                and left_type.atom_type is AtomType.LOGICAL
+                and right_type.atom_type is not AtomType.LOGICAL
+            ):
+                left = f"merge(1, 0, {left})"
             if (
                 spelling == "*"
                 and left_type.atom_type is not AtomType.LOGICAL
@@ -4052,6 +4137,12 @@ def render_fortran_expression(
                 right_type.atom_type is AtomType.LOGICAL
             ):
                 right = f"merge(1, 0, {right})"
+            elif (
+                spelling in {"=", "~:", "<", "<:", ">", ">:"}
+                and right_type.atom_type is AtomType.LOGICAL
+                and left_type.atom_type is not AtomType.LOGICAL
+            ):
+                right = f"merge(1, 0, {right})"
             left, right = _apply_vector_matrix_agreement(
                 left, right, left_type, right_type
             )
@@ -4060,13 +4151,17 @@ def render_fortran_expression(
                     bare_expression.left, name_transform
                 )
             except LoweringError:
-                left_precedence, left_operator = _ATOM_PRECEDENCE, None
+                # The type-blind renderer cannot analyze this operand (it
+                # needs type info render_fortran_expression already used
+                # above); assume the lowest precedence so it is always
+                # parenthesized rather than risk dropping needed parens.
+                left_precedence, left_operator = 0, None
             try:
                 _, right_precedence, right_operator = _render_fortran_expression(
                     bare_expression.right, name_transform
                 )
             except LoweringError:
-                right_precedence, right_operator = _ATOM_PRECEDENCE, None
+                right_precedence, right_operator = 0, None
             left = _parenthesize(left, left_precedence, precedence)
             right_requires = precedence
             if right_precedence == precedence:
@@ -4257,6 +4352,22 @@ def required_runtime_helpers(
             operand_spelling = primitive_spelling(expression.verb.operand)
             if expression.verb.adverb == "~" and operand_spelling in {"/:", "\\:"}:
                 helpers.add("sort_int_vector")
+            if expression.verb.adverb == "/" and operand_spelling == "-":
+                operand_type = (
+                    infer_type(
+                        expression.operand,
+                        names,
+                        name_transform,
+                        named_verbs=named_verbs,
+                    )
+                    if names is not None
+                    else TypeInfo(AtomType.INTEGER, Shape.vector())
+                )
+                if operand_type.rank == 1:
+                    suffix = (
+                        "real" if operand_type.atom_type is AtomType.REAL else "int"
+                    )
+                    helpers.add(f"alternating_sum_{suffix}")
         if spelling == "i.":
             helpers.add("iota")
         if spelling == "I.":

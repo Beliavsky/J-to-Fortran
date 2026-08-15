@@ -937,11 +937,12 @@ def test_avoided_j_variable_names_are_renamed_consistently() -> None:
 
 
 def test_unsupported_j_reports_the_source_line() -> None:
-    source = "mystery =: 3 : 0\n  +/ y\n)\n"
+    source = "mystery =: 3 : 0\n  #. y\n)\n"
     program = xj2f.parse_j_source(Path("mystery.ijs"), source)
 
     with pytest.raises(
-        xj2f.UnsupportedJError, match=r"2: reduction currently requires a vector"
+        xj2f.UnsupportedJError,
+        match=r"2: cannot infer the result type of monadic '#\.'",
     ):
         xj2f.emit_fortran(program)
 

@@ -15,6 +15,7 @@ module j2f_runtime
   public :: j_power_table_int, j_prefix_max_int, j_prefix_max_real
   public :: j_prefix_product_int, j_prefix_product_real
   public :: j_prefix_sum_int, j_prefix_sum_real
+  public :: j_alternating_sum_int, j_alternating_sum_real
   public :: j_polynomial_int, j_polynomial_real
   public :: j_reverse_int_vector, j_signum_int, j_sort_int_vector
   public :: j_reverse_character
@@ -317,6 +318,28 @@ pure function j_prefix_sum_real(values) result(prefixes)
     prefixes(value_index) = prefixes(value_index - 1) + values(value_index)
   end do
 end function j_prefix_sum_real
+
+pure function j_alternating_sum_int(values) result(total)
+  integer, intent(in) :: values(:)
+  integer :: total
+  integer :: value_index
+
+  total = values(size(values))
+  do value_index = size(values) - 1, 1, -1
+    total = values(value_index) - total
+  end do
+end function j_alternating_sum_int
+
+pure function j_alternating_sum_real(values) result(total)
+  real(kind=dp), intent(in) :: values(:)
+  real(kind=dp) :: total
+  integer :: value_index
+
+  total = values(size(values))
+  do value_index = size(values) - 1, 1, -1
+    total = values(value_index) - total
+  end do
+end function j_alternating_sum_real
 
 pure function j_prefix_product_int(values) result(prefixes)
   integer, intent(in) :: values(:)
