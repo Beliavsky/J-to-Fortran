@@ -148,6 +148,7 @@ RUNTIME_PROCEDURES = {
     "reverse_character": "j_reverse_character",
     "reverse_int_vector": "j_reverse_int_vector",
     "select_character": "j_select_character",
+    "reshape_character": "j_reshape_character",
     "signum_int": "j_signum_int",
     "solve_2x2_matrix_int": "j_solve_2x2_matrix_int",
     "solve_2x2_vector_int": "j_solve_2x2_vector_int",
@@ -3686,6 +3687,29 @@ def _runtime_helpers(helpers: set[str]) -> list[str]:
                 "",
             ]
         )
+    if "reshape_character" in helpers:
+        result.extend(
+            [
+                "pure function j_reshape_character(source, rows, cols) result(values)",
+                "  character(len=*), intent(in) :: source",
+                "  integer, intent(in) :: rows, cols",
+                "  character(len=cols), allocatable :: values(:)",
+                "  integer :: row_index, col_index, source_index",
+                "",
+                "  allocate(values(rows))",
+                "  source_index = 0",
+                "  do row_index = 1, rows",
+                "    do col_index = 1, cols",
+                "      values(row_index)(col_index:col_index) = &",
+                "        source(mod(source_index, len(source)) + 1 : &",
+                "        mod(source_index, len(source)) + 1)",
+                "      source_index = source_index + 1",
+                "    end do",
+                "  end do",
+                "end function j_reshape_character",
+                "",
+            ]
+        )
     if "factorial" in helpers:
         result.extend(
             [
@@ -4460,7 +4484,16 @@ def _main_entity_declaration(assignment: LoweredTopAssignment) -> tuple[str, str
             raise UnsupportedJError("boxed character width must be known")
         return f"character(len={width}), allocatable", f"{assignment.name}(:)"
     if assignment.type_info.atom_type is AtomType.CHARACTER:
-        return f"{intrinsic}, allocatable", assignment.name
+        if assignment.type_info.rank <= 1:
+            return f"{intrinsic}, allocatable", assignment.name
+        width = assignment.type_info.character_length
+        if not isinstance(width, int):
+            raise UnsupportedJError("character array row length must be known")
+        dimensions = ",".join(":" for _ in range(assignment.type_info.rank - 1))
+        return (
+            f"character(len={width}), allocatable",
+            f"{assignment.name}({dimensions})",
+        )
     if assignment.type_info.rank > 0:
         dimensions = ",".join(":" for _ in range(assignment.type_info.rank))
         return f"{intrinsic}, allocatable", f"{assignment.name}({dimensions})"

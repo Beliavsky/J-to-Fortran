@@ -22,6 +22,7 @@ module j2f_runtime
   public :: j_raze_character
   public :: j_read_numeric_csv
   public :: j_select_character
+  public :: j_reshape_character
   public :: j_solve_2x2_matrix_int, j_solve_2x2_vector_int
   public :: j_solve_real_vector
   public :: j_true_indices
@@ -560,6 +561,24 @@ pure function j_select_character(values, indices) result(selected)
       values(indices(index_position):indices(index_position))
   end do
 end function j_select_character
+
+pure function j_reshape_character(source, rows, cols) result(values)
+  character(len=*), intent(in) :: source
+  integer, intent(in) :: rows, cols
+  character(len=cols), allocatable :: values(:)
+  integer :: row_index, col_index, source_index
+
+  allocate(values(rows))
+  source_index = 0
+  do row_index = 1, rows
+    do col_index = 1, cols
+      values(row_index)(col_index:col_index) = &
+        source(mod(source_index, len(source)) + 1 : &
+        mod(source_index, len(source)) + 1)
+      source_index = source_index + 1
+    end do
+  end do
+end function j_reshape_character
 
 pure function j_reverse_int_vector(values) result(reversed_values)
   integer, intent(in) :: values(:)

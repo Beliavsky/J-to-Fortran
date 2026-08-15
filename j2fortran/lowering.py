@@ -1715,6 +1715,13 @@ def infer_type(
                 raise LoweringError(
                     "reshape from a source above rank 1 is not supported yet"
                 )
+            if source_type.atom_type is AtomType.CHARACTER and len(extents) >= 2:
+                trailing = extents[-1]
+                return TypeInfo(
+                    AtomType.CHARACTER,
+                    Shape(extents),
+                    trailing if isinstance(trailing, int) else None,
+                )
             return TypeInfo(source_type.atom_type, Shape(extents))
         if spelling == ";":
             items = _flatten_semicolon_list(expression)
@@ -1767,9 +1774,9 @@ def infer_type(
             expression.right, names, name_transform, named_verbs=named_verbs
         )
         if spelling == ",":
-            if left_type.rank not in {0, 1} or right_type.rank not in {0, 1}:
+            if left_type.rank not in {0, 1, 2} or right_type.rank not in {0, 1, 2}:
                 raise LoweringError(
-                    "catenate currently requires scalar or vector arguments"
+                    "catenate currently requires scalar, vector, or matrix arguments"
                 )
             atom_types = {left_type.atom_type, right_type.atom_type}
             compatible_mixed_types = (
@@ -1779,11 +1786,6 @@ def infer_type(
             )
             if len(atom_types) > 1 and atom_types not in compatible_mixed_types:
                 raise LoweringError("catenate currently requires matching atom types")
-            left_extent = 1 if left_type.is_scalar else left_type.shape.extents[0]
-            right_extent = 1 if right_type.is_scalar else right_type.shape.extents[0]
-            extent = _sum_extents(
-                left_extent, right_extent
-            )
             atom_type = (
                 AtomType.REAL
                 if AtomType.REAL in atom_types
@@ -1792,6 +1794,49 @@ def infer_type(
                     if AtomType.INTEGER in atom_types
                     else left_type.atom_type
                 )
+            )
+            if left_type.rank == 2 or right_type.rank == 2:
+                # A vector or scalar operand is promoted to a single row
+                # (matching J's rank-extension), then rows are stacked.
+                matrix_type = left_type if left_type.rank == 2 else right_type
+                columns = matrix_type.shape.extents[1]
+                for operand_type in (left_type, right_type):
+                    if operand_type.rank == 1:
+                        operand_extent = operand_type.shape.extents[0]
+                        check, expected = operand_extent, columns
+                        message = (
+                            "length error: catenated vector length does not "
+                            "match the matrix column count"
+                        )
+                    elif operand_type.rank == 2 and operand_type is not matrix_type:
+                        check, expected = (
+                            operand_type.shape.extents[1],
+                            columns,
+                        )
+                        message = (
+                            "length error: catenated matrices have "
+                            "different column counts"
+                        )
+                    else:
+                        continue
+                    if (
+                        isinstance(check, int)
+                        and isinstance(expected, int)
+                        and check != expected
+                    ):
+                        raise LoweringError(message)
+                left_rows = (
+                    1 if left_type.rank in {0, 1} else left_type.shape.extents[0]
+                )
+                right_rows = (
+                    1 if right_type.rank in {0, 1} else right_type.shape.extents[0]
+                )
+                rows = _sum_extents(left_rows, right_rows)
+                return TypeInfo(atom_type, Shape.matrix(rows, columns))
+            left_extent = 1 if left_type.is_scalar else left_type.shape.extents[0]
+            right_extent = 1 if right_type.is_scalar else right_type.shape.extents[0]
+            extent = _sum_extents(
+                left_extent, right_extent
             )
             return TypeInfo(atom_type, Shape.vector(extent))
         if spelling == ",:":
@@ -1993,14 +2038,14 @@ def infer_type(
             vector_type = left_type if left_type.rank == 1 else right_type
             matrix_type = left_type if left_type.rank == 2 else right_type
             vector_extent = vector_type.shape.extents[0]
-            trailing_extent = matrix_type.shape.extents[1]
+            leading_extent = matrix_type.shape.extents[0]
             if (
                 isinstance(vector_extent, int)
-                and isinstance(trailing_extent, int)
-                and vector_extent != trailing_extent
+                and isinstance(leading_extent, int)
+                and vector_extent != leading_extent
             ):
                 raise LoweringError(
-                    "length error: vector length does not match the matrix trailing axis"
+                    "length error: vector length does not match the matrix leading axis"
                 )
             shape = matrix_type.shape
         else:
@@ -2187,12 +2232,20 @@ def _apply_vector_matrix_agreement(
     left_type: TypeInfo,
     right_type: TypeInfo,
 ) -> tuple[str, str]:
-    """Render J trailing-axis agreement between a vector and matrix."""
+    """Render J leading-axis agreement between a vector and matrix.
+
+    J's array agreement for a rank-0 dyadic verb (``+``, ``*``, ...)
+    requires the vector's shape to be a prefix of the matrix's shape --
+    i.e. the vector's length must match the matrix's *leading* (row)
+    axis, broadcasting each vector element across that row. (A vector
+    matching the matrix's trailing/column axis is a J length error, not
+    a supported form of agreement.)
+    """
 
     if left_type.rank == 1 and right_type.rank == 2:
-        left = f"spread({left}, dim=1, ncopies=size({right}, 1))"
+        left = f"spread({left}, dim=2, ncopies=size({right}, 2))"
     elif left_type.rank == 2 and right_type.rank == 1:
-        right = f"spread({right}, dim=1, ncopies=size({left}, 1))"
+        right = f"spread({right}, dim=2, ncopies=size({left}, 2))"
     return left, right
 
 
@@ -2820,6 +2873,57 @@ def render_fortran_expression(
             )
     if isinstance(bare_expression, DyadicApply) and names is not None:
         spelling = primitive_spelling(bare_expression.verb)
+        if spelling == ",":
+            left_type = infer_type(
+                bare_expression.left, names, name_transform, named_verbs=named_verbs
+            )
+            right_type = infer_type(
+                bare_expression.right, names, name_transform, named_verbs=named_verbs
+            )
+            if left_type.rank == 2 or right_type.rank == 2:
+                result_type = infer_type(
+                    bare_expression, names, name_transform, named_verbs=named_verbs
+                )
+                if result_type.atom_type is AtomType.CHARACTER:
+                    # A J character "matrix" is already a rank-1 Fortran
+                    # array of one string per row (and a rank-1 J value is
+                    # a single Fortran string, i.e. one row): stacking
+                    # rows is just array concatenation, no transpose or
+                    # reshape needed.
+                    left = render_fortran_expression(
+                        bare_expression.left,
+                        name_transform,
+                        names=names,
+                        named_verbs=named_verbs,
+                    )
+                    right = render_fortran_expression(
+                        bare_expression.right,
+                        name_transform,
+                        names=names,
+                        named_verbs=named_verbs,
+                    )
+                    return f"[{left}, {right}]"
+                columns = result_type.shape.extents[1]
+
+                def _row_major_flat(
+                    operand: Expression, operand_type: TypeInfo
+                ) -> str:
+                    rendered = render_fortran_expression(
+                        operand, name_transform, names=names, named_verbs=named_verbs
+                    )
+                    if operand_type.rank == 2:
+                        return f"transpose({rendered})"
+                    if operand_type.rank == 1:
+                        return rendered
+                    return f"spread({rendered}, dim=1, ncopies={columns})"
+
+                left_flat = _row_major_flat(bare_expression.left, left_type)
+                right_flat = _row_major_flat(bare_expression.right, right_type)
+                rows = result_type.shape.extents[0]
+                return (
+                    f"transpose(reshape([{left_flat}, {right_flat}], "
+                    f"[{columns}, {rows}]))"
+                )
         if spelling in {"*:", "+:"}:
             infer_type(
                 bare_expression,
@@ -3704,14 +3808,32 @@ def render_fortran_expression(
         right = render_fortran_expression(
             divided[1], name_transform, names=names, named_verbs=named_verbs
         )
-        if isinstance(ungroup(divided[1]), DyadicApply) or right.startswith(
-            ("+", "-")
+        try:
+            _, right_precedence, _ = _render_fortran_expression(
+                divided[1], name_transform
+            )
+        except LoweringError:
+            right_precedence = 0
+        if (
+            isinstance(ungroup(divided[1]), DyadicApply)
+            or right_precedence < _FORTRAN_PRECEDENCE["/"]
+            or right.startswith(("+", "-"))
         ):
             right = f"({right})"
         if left_type.atom_type is AtomType.INTEGER:
             left = _as_real_dp(left)
-        elif isinstance(ungroup(divided[0]), DyadicApply):
-            left = f"({left})"
+        else:
+            try:
+                _, left_precedence, _ = _render_fortran_expression(
+                    divided[0], name_transform
+                )
+            except LoweringError:
+                left_precedence = 0
+            if (
+                isinstance(ungroup(divided[0]), DyadicApply)
+                or left_precedence < _FORTRAN_PRECEDENCE["/"]
+            ):
+                left = f"({left})"
         return f"{left} / {right}"
     if (
         isinstance(bare_expression, MonadicApply)
@@ -3838,6 +3960,19 @@ def render_fortran_expression(
         )
         if not extents:
             return source if source_type.is_scalar else f"{source}(1)"
+        if source_type.atom_type is AtomType.CHARACTER and len(extents) >= 2:
+            if len(extents) > 2:
+                raise LoweringError(
+                    "reshape to a character array above rank 2 is not "
+                    "supported yet"
+                )
+            rows, cols = extents
+            if not isinstance(cols, int):
+                raise LoweringError(
+                    "reshape to a character array requires a constant row "
+                    "length"
+                )
+            return f"j_reshape_character({source}, {rows}, {cols})"
         source_array = f"[{source}]" if source_type.is_scalar else source
         arguments = [source_array, f"[{', '.join(map(str, extents))}]"]
         source_size = (
@@ -4434,6 +4569,18 @@ def required_runtime_helpers(
             )
             if source_type.atom_type is AtomType.CHARACTER:
                 helpers.add("select_character")
+        reshaped = dyad(expression, "$")
+        if reshaped is not None and names is not None:
+            reshape_source_type = infer_type(
+                reshaped[1], names, name_transform, named_verbs=named_verbs
+            )
+            extents = constant_shape_extents(reshaped[0], names, name_transform)
+            if (
+                reshape_source_type.atom_type is AtomType.CHARACTER
+                and extents is not None
+                and len(extents) >= 2
+            ):
+                helpers.add("reshape_character")
         scan = insert_scan_spelling(expression.verb)
         if scan == "+":
             helpers.add("infix_sum_int")

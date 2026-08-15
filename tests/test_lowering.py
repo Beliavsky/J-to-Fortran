@@ -714,6 +714,47 @@ def test_catenate_promotes_integer_and_real_items() -> None:
     assert "real(kind=dp)" in render_fortran_expression(expression, names=names)
 
 
+def test_matrix_catenate_stacks_rows() -> None:
+    expression = parse_expression("a , b")
+    names = {
+        "a": TypeInfo(AtomType.INTEGER, Shape.matrix(2, 3)),
+        "b": TypeInfo(AtomType.INTEGER, Shape.matrix(2, 3)),
+    }
+
+    assert infer_type(expression, names) == TypeInfo(
+        AtomType.INTEGER, Shape.matrix(4, 3)
+    )
+    assert render_fortran_expression(expression, names=names) == (
+        "transpose(reshape([transpose(a), transpose(b)], [3, 4]))"
+    )
+
+
+def test_matrix_catenate_rejects_mismatched_column_counts() -> None:
+    expression = parse_expression("a , b")
+    names = {
+        "a": TypeInfo(AtomType.INTEGER, Shape.matrix(2, 3)),
+        "b": TypeInfo(AtomType.INTEGER, Shape.matrix(2, 4)),
+    }
+
+    with pytest.raises(LoweringError, match="different column counts"):
+        infer_type(expression, names)
+
+
+def test_vector_promotes_to_a_matrix_row_when_catenated() -> None:
+    expression = parse_expression("a , row")
+    names = {
+        "a": TypeInfo(AtomType.INTEGER, Shape.matrix(2, 3)),
+        "row": TypeInfo(AtomType.INTEGER, Shape.vector(3)),
+    }
+
+    assert infer_type(expression, names) == TypeInfo(
+        AtomType.INTEGER, Shape.matrix(3, 3)
+    )
+    assert render_fortran_expression(expression, names=names) == (
+        "transpose(reshape([transpose(a), row], [3, 3]))"
+    )
+
+
 def test_division_parenthesizes_composite_numerator_and_denominator() -> None:
     expression = parse_expression("(observed - fitted) % step * scale")
     names = {
@@ -775,19 +816,19 @@ def test_ranked_row_broadcasting_lowers_to_spread(
     [
         (
             "vector * matrix",
-            "spread(vector, dim=1, ncopies=size(matrix, 1)) * matrix",
+            "spread(vector, dim=2, ncopies=size(matrix, 2)) * matrix",
         ),
         (
             "matrix + vector",
-            "matrix + spread(vector, dim=1, ncopies=size(matrix, 1))",
+            "matrix + spread(vector, dim=2, ncopies=size(matrix, 2))",
         ),
         (
             "matrix >. vector",
-            "max(matrix, spread(vector, dim=1, ncopies=size(matrix, 1)))",
+            "max(matrix, spread(vector, dim=2, ncopies=size(matrix, 2)))",
         ),
         (
             "matrix ^ vector",
-            "matrix**spread(vector, dim=1, ncopies=size(matrix, 1))",
+            "matrix**spread(vector, dim=2, ncopies=size(matrix, 2))",
         ),
     ],
 )
@@ -796,7 +837,7 @@ def test_implicit_vector_matrix_agreement_uses_spread(
 ) -> None:
     expression = parse_expression(source)
     names = {
-        "vector": TypeInfo(AtomType.REAL, Shape.vector(4)),
+        "vector": TypeInfo(AtomType.REAL, Shape.vector(20)),
         "matrix": TypeInfo(AtomType.REAL, Shape.matrix(20, 4)),
     }
 

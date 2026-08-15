@@ -2924,7 +2924,7 @@ def test_implicit_vector_matrix_agreement_compiles_and_runs(
     if compiler is None:
         pytest.skip("gfortran is not installed")
     source_text = """matrix =: 2 3 $ 1 2 3 4 5 6
-vector =: 10 20 30
+vector =: 10 20
 smoutput vector * matrix
 """
     program = xj2f.parse_j_source(tmp_path / "agreement.ijs", source_text)
@@ -2950,11 +2950,58 @@ smoutput vector * matrix
     assert completed.returncode == 0, completed.stdout + completed.stderr
     assert [int(token) for token in completed.stdout.split()] == [
         10,
-        40,
-        90,
-        40,
+        20,
+        30,
+        80,
         100,
-        180,
+        120,
+    ]
+
+
+@pytest.mark.requires_gfortran
+def test_matrix_catenate_stacks_rows_compiles_and_runs(tmp_path: Path) -> None:
+    compiler = shutil.which("gfortran")
+    if compiler is None:
+        pytest.skip("gfortran is not installed")
+    source_text = """a =: 2 3 $ 1 2 3 4 5 6
+b =: 2 3 $ 10 20 30 40 50 60
+smoutput a , b
+"""
+    program = xj2f.parse_j_source(tmp_path / "catenate.ijs", source_text)
+    generated = xj2f.emit_fortran(program)
+    source = tmp_path / "catenate.f90"
+    executable = tmp_path / "catenate.exe"
+    source.write_text(generated, encoding="utf-8")
+    compiled = subprocess.run(
+        [compiler, "-std=f2018", str(source), "-o", str(executable)],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert compiled.returncode == 0, compiled.stdout + compiled.stderr
+    completed = subprocess.run(
+        [str(executable)],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    # Verified against real J: 4 rows of 3, "a" stacked above "b".
+    assert [int(token) for token in completed.stdout.split()] == [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        10,
+        20,
+        30,
+        40,
+        50,
+        60,
     ]
 
 
