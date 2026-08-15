@@ -1,14 +1,15 @@
 # J-to-Fortran
 
-`xj2f.py` is an experimental source-to-source transpiler from a deliberately
-small, numeric subset of J to modern Fortran.  It follows the command-line
+`xj2f.py` is an experimental source-to-source transpiler from a selective,
+primarily numeric subset of J to modern Fortran. It follows the command-line
 workflow of the neighboring R-to-Fortran project, while using a J-specific
 parser and lowering layer.
 
-This is not a J implementation. The first milestone translates the explicit
-loop and array-oriented Pythagorean-triple examples and the array-oriented
-prime-number example in this repository. When it encounters syntax outside
-the supported subset, it stops with the J source line and an explanation
+This is not a J implementation. The supported subset now covers the repository's
+17 examples, ranging from array-oriented Pythagorean triples and indexing to
+file I/O, return statistics, simulation, mixture models, and option pricing.
+Coverage is still pattern- and shape-sensitive. When the transpiler encounters
+syntax outside the subset, it stops with the J source line and an explanation
 rather than silently guessing.
 
 ## Why Fortran?
@@ -96,7 +97,6 @@ The relevant generated Fortran is:
 pure function sumsq(y) result(j_result)
   integer, intent(in) :: y(:)
   integer :: j_result
-
   ! *: squares each item and +/ sums the result.
   ! J: +/ *: y
   j_result = sum(y**2)
@@ -106,7 +106,6 @@ program sumsq_j
   use sumsq_j_mod, only: sumsq
   implicit none
   integer, allocatable :: values(:)
-
   values = [3, 4]
   write (*,"(i0)") sumsq(values)
 end program sumsq_j
@@ -118,6 +117,9 @@ end program sumsq_j
 - `--run`: compile and run the generated Fortran.
 - `--run-j`: run the original J script.
 - `--run-both`: run J and Fortran and display both outputs.
+- `--round N`: round displayed Fortran real values to `N` decimal places.
+- `--round-both N`: round displayed J and Fortran real values to `N` places.
+- Displayed J output normalizes negative-number notation from `_` to `-`.
 - `--run-diff`: run both and compare output tokens; real values use numerical
   tolerances so J's shorter display precision can match Fortran output.
 - `--diff-rtol VALUE`: set the relative real-value tolerance (default `5e-6`).
@@ -125,6 +127,7 @@ end program sumsq_j
 - `--time`: time translation, compilation, and Fortran execution.
 - `--time-both`: time both implementations and compare their output.
 - `--run-repeat N`: repeat executions after a single translation/build.
+- `--verbose-runs`: display every repeated run rather than only its summary.
 - `--tee`: print generated Fortran.
 - `--tee-both`: print both J and generated Fortran source.
 - `--emit-ast [FILE]`: write expression AST JSON, or print it when no file is given.
@@ -181,8 +184,9 @@ The initial implementation replays all saved source for every evaluation; it
 does not preserve a live Fortran process. Random assignments therefore draw
 new values, and file operations execute again, whenever the session is replayed.
 
-Use `--ofort` to execute generated source directly with the ofort interpreter
-instead of compiling and linking on every replay:
+Use `--ofort` to execute generated source directly with the
+[`ofort`](https://github.com/Beliavsky/ofort) interpreter instead of compiling
+and linking on every replay:
 
 ```powershell
 python xj2f_repl.py --ofort --no-save
@@ -201,7 +205,7 @@ patterns, and nested `@list` files. With no inputs it scans `examples`; its
 default mode is the read-only `--check`:
 
 ```powershell
-python xj2f_batch.py test_suite indexing_tests --jobs 4
+python xj2f_batch.py examples indexing_tests --jobs 4
 python xj2f_batch.py
 python xj2f_batch.py examples --translate --out-dir examples\fortran --output-names source
 python xj2f_batch.py "examples\*.ijs" --recursive --compile
@@ -212,9 +216,10 @@ python xj2f_batch.py @programs.txt --run-diff --jconsole C:\J\bin\jconsole.exe
 Use `--translate` to write Fortran without compiling, `--limit` for a small
 sample, and `--max-fail` with sequential execution to stop early. The summary
 distinguishes translation, compilation, execution, J, comparison, and timeout
-failures. An editable or regular installation also provides the `xj2f-batch`
-command. Output defaults to `<input>_j.f90`; `--output-names source` instead
-uses the J source base name, such as `pythag.f90`.
+failures, then reports elapsed duration and completion time. An editable or
+regular installation also provides the `xj2f-batch` command. Output defaults
+to `<input>_j.f90`; `--output-names source` instead uses the J source base name,
+such as `pythag.f90`.
 
 ## Runtime helpers
 
@@ -231,7 +236,7 @@ External output imports only the procedures it needs from `j2f_runtime`.
 Compilation through `xj2f.py` automatically includes the adjacent `j.f90`;
 use `--runtime-file FILE` to select another copy.
 
-## Initially supported J subset
+## Supported J subset
 
 The [J to Fortran syntax guide](j_to_fortran_syntax_guide.md) explains the
 language mappings and common pitfalls behind this implementation inventory.
@@ -256,6 +261,7 @@ The parser currently recognizes:
 - right-to-left chained assignments, including assignments nested in
   parenthesized subexpressions;
 - `for_name. 1 + i. expression do. ... end.`;
+- bare `for. sequence do. ... end.` iteration when the item value is not needed;
 - structured `if.`/`elseif.`/`else.` branches;
 - integer arithmetic, comparisons, Boolean `*.` and `-.`, integer residue `|`,
   and rank-1 Boolean OR reduction `+./` in the demonstrated forms;
@@ -301,6 +307,9 @@ The parser currently recognizes:
   `case. do.` branch;
 - explicit `for_name.` iteration over zero-based `i. y` sequences;
 - explicit `for_name.` iteration over integer vectors using regular indexed loops;
+- `assert.` over scalar or array conditions, lowered to an `error stop` check;
+- `break.` and `continue.` within loops, lowered to `exit` and `cycle`;
+- bare and value-bearing `return.` from explicit verbs;
 - pure recursive scalar integer explicit verbs;
 - integer-vector dummy-rank inference from call sites, homogeneous
   destructuring, and constant argument indexing;
@@ -357,7 +366,7 @@ The parser currently recognizes:
   using dyadic `-:`, including Matches nested in Boolean expressions;
 - a final noun as an array-valued verb result;
 - top-level `echo` and `smoutput`, including character literals, translated verb
-  calls, and assigned nouns, plus `exit 0`.
+  calls, and assigned nouns, plus `exit 0`;
 - whole-file character-vector overwrite and append through dyadic `1!:2` and
   `1!:3`, plus `fwrite` and `fappend`; write expressions return their character
   count, and `load 'files'` is consumed when these supported aliases are used;
@@ -373,10 +382,14 @@ the same observable ordering.
 
 The emitter applies these rules to generated procedures:
 
-- Procedures are declared `pure`; procedures are declared explicitly
-  `pure elemental` only when every dummy and any function result are scalar.
+- Procedures are declared `pure` when their operations permit it. A pure
+  procedure is declared explicitly `pure elemental` only when every dummy and
+  any function result are scalar.
 - A function's dummy arguments are declared first. Its result is declared on a
-  separate line immediately afterward.
+  separate line immediately afterward in named-result style. Eligible concise
+  scalar functions instead place the type in the function statement.
+- Generated procedures do not insert a blank line between declarations and the
+  first executable statement.
 - Standalone J `NB.` comments remain near the corresponding generated statement
   as indented Fortran `!` comments. In the default `commented` mode, the
   associated original sentence follows as `! J: ...`; `all` annotates every
@@ -430,9 +443,9 @@ The implementation has four stages:
 2. A right-to-left expression parser creates AST nodes for nouns, primitive
    applications, parentheses, strands, adverbs, and rank conjunctions. A
    line-aware program parser builds explicit verbs and control flow.
-3. Semantic lowering performs structural primitive matching and initial
-   scalar/vector/matrix and integer/logical inference, then emits allocatable
-   Fortran arrays and small runtime helpers.
+3. Semantic lowering performs structural primitive matching and type, rank, and
+   shape inference, then emits typed Fortran entities and selected runtime
+   helpers.
 4. The driver can compile, execute, time, and compare J/Fortran output.
 
 This separation is intended to make the subset grow incrementally. Natural
@@ -446,6 +459,8 @@ changing the CLI or process runner.
 - `gfortran` for compilation and Fortran execution, or Intel `ifx` with
   `--ifx`.
 - J's `jconsole` for `--run-j`, `--run-both`, `--run-diff`, and `--time-both`.
+- Optionally, `ofort` for direct generated-source execution in the REPL through
+  `xj2f_repl.py --ofort`.
 
 Run the regression suite with:
 

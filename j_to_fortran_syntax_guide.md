@@ -3,7 +3,7 @@
 This guide summarizes common mappings from J to modern Fortran. It is not a
 complete J or Fortran tutorial, and it does not imply that `xj2f.py` supports
 every possible composition of the constructs shown here. The
-[README](README.md#initially-supported-j-subset) is the authoritative inventory
+[README](README.md#supported-j-subset) is the authoritative inventory
 of the currently supported subset.
 
 J and Fortran are both strong array-oriented numerical languages, but their
@@ -121,7 +121,6 @@ count = 10
 pure elemental function square(y) result(j_result)
   integer, intent(in) :: y
   integer :: j_result
-
   j_result = y**2
 end function square
 ```
@@ -177,7 +176,6 @@ sumsq =: 3 : 0
 pure function sumsq(y) result(j_result)
   integer, intent(in) :: y(:)
   integer :: j_result
-
   j_result = sum(y**2)
 end function sumsq
 ```
@@ -230,7 +228,6 @@ The corresponding Fortran procedure has two dummy arguments:
 pure function weighted(x, y) result(j_result)
   integer, intent(in) :: x, y(:)
   integer :: j_result
-
   j_result = x * sum(y)
 end function weighted
 ```
@@ -240,8 +237,7 @@ all arguments and the result are scalar. A function result is declared on its
 own line after the argument declarations.
 
 With `--function-result-style concise`, eligible nonrecursive scalar functions
-put the result type in the function statement and assign the function name.
-The concise form also omits the blank line after declarations:
+put the result type in the function statement and assign the function name:
 
 ```fortran
 pure elemental integer function square(y)
@@ -679,14 +675,24 @@ for_i. 1 + i. n do.
   total =. total + i
 end.
 
+for. tasks do.           NB. repeat without binding an item
+  count =. count + 1
+end.
+
 while. error > tolerance do.
   error =. update error
 end.
 ```
 
-`whilst.` is accepted as J's equivalent spelling of `while.`. Control words
-may also share a physical source line; for example, this is parsed as the same
-structured conditional:
+A loop written as `for_name.` exposes the current item as `name` and its
+zero-based position as `name_index`. Bare `for.` is supported when only the
+number of iterations or side effects matter. `break.` exits the enclosing loop
+and `continue.` advances to its next iteration; these map to Fortran `exit` and
+`cycle`.
+
+`whilst.` is accepted by the transpiler as an equivalent spelling of `while.`.
+Control words may also share a physical source line; for example, this is
+parsed as the same structured conditional:
 
 ```j
 if. y < 0 do. -y else. y end.
@@ -705,6 +711,22 @@ end.
 
 The final `case. do.` is the optional default branch. Boxed case lists and
 fall-through `fcase.` remain outside the current subset.
+
+Assertions require every atom of their condition to be true:
+
+```j
+assert. y > 0
+```
+
+```fortran
+if (.not. all(y > 0)) error stop "J assertion failure"
+```
+
+Inside an explicit verb, `value return.` assigns the function result and
+returns immediately. Bare `return.` is supported after a result has already
+been computed. Fortran emits an ordinary `return` after the result assignment.
+The unstructured `goto_label.` form and J exception control words `throw.`,
+`try.`, and `catch.` are not currently translated.
 
 Fortran equivalents:
 
@@ -740,6 +762,12 @@ write (*,"(*(i0,1x))") values
 
 `xj2f.py` can preserve J comments and associated source sentences. Use
 `--source-comments all`, `commented`, or `none` to select the desired level.
+
+For runtime comparisons, `--round N` rounds displayed Fortran real values and
+`--round-both N` rounds both J and Fortran output. Modes that display J output
+show its negative-number notation with `-` rather than `_`. `--run-diff`
+compares real tokens numerically using configurable relative and absolute
+tolerances.
 
 Adjacent literal output records and compatible nonadvancing writes may be
 combined in generated Fortran. Simple output loops may become implied-DO output
