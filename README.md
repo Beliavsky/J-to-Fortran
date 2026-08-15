@@ -134,6 +134,8 @@ end program sumsq_j
 - `--tee-both`: print both J and generated Fortran source.
 - `--emit-ast [FILE]`: write expression AST JSON, or print it when no file is given.
 - `--check`: verify that the input is in the supported subset without writing Fortran.
+- `--j2j`/`--no-j2j`: retry a failed translation after normalizing the source
+  with `xj2j.py` (on by default; see [J-to-J normalization](#j-to-j-normalization-xj2jpy)).
 - `--runtime embedded|external`: embed required helpers or use `j.f90`.
 - `--runtime-file FILE`: select the `j.f90` used to compile external-runtime output.
 - `--source-comments all|commented|none`: control migrated `NB.` prose and
@@ -223,6 +225,38 @@ regular installation also provides the `xj2f-batch` command. Output defaults
 to `<input>_j.f90`; `--output-names source` instead uses the J source base name,
 such as `pythag.f90`.
 
+## J-to-J normalization (xj2j.py)
+
+Some J idioms are hard to translate to Fortran directly but have an
+equivalent, translatable form in J itself. `xj2j.py` is a source-to-source
+normalizer that rewrites a script into such a form before `xj2f.py` sees it:
+
+- `verb^:n` / `verb^:_` (repeat/converge) become an explicit `for.`/`while.`
+  loop.
+- A two-verb tacit hook, either `name =: u v` or `(u v)` applied directly to
+  an argument, becomes an explicit monadic definition using J's own hook
+  identity `y u (v y)`.
+- Repeated top-level reassignment of a name becomes SSA-style versioned names
+  (`x`, `x_v2`, `x_v3`, ...), which also handles a name changing shape across
+  reassignments, since each version is an independent Fortran variable.
+
+Each rewrite is applied only where it can be recognized with confidence; see
+`xj2j.py`'s module docstring for the exact, narrower conditions it requires.
+Run it directly to inspect the rewritten source:
+
+```powershell
+python xj2j.py examples\some_script.ijs --out normalized.ijs
+```
+
+`xj2f.py` uses `xj2j.py` automatically: by default (`--j2j`), a translation
+failure is retried once against the normalized source. On success, the
+normalized script is written next to the input as `<name>.j2j.ijs` for
+inspection; the original `.ijs` is never modified. Pass `--no-j2j` to see
+`xj2f.py`'s raw support for a script without this fallback; if normalization
+would have helped, the error message includes a hint to retry without
+`--no-j2j`. `xj2f_batch.py` accepts the same `--no-j2j` flag for corpus runs
+that want to measure raw support separately from `xj2j.py`-assisted support.
+
 ## Runtime helpers
 
 The default `--runtime embedded` mode places only the required helper procedures
@@ -273,7 +307,8 @@ The parser currently recognizes:
   lowered through a pure helper;
 - monadic shape and constant-shape reshape through rank 3, including cyclic fill;
 - rectangular numeric `\". ;. _2 ] 0 : 0 ... )` data blocks;
-- tally, scalar/vector/rank-2 ravel, vector catenate, and equal-length vector
+- tally, scalar/vector/rank-2 ravel, scalar/vector/matrix catenate with
+  row-stacking and vector/scalar promotion-to-a-row, and equal-length vector
   laminate;
 - constant in-bounds vector take/drop, plus head, tail, behead, and curtail;
 - rank-1 behead and curtail on trailing array cells, including parenthesized
@@ -330,6 +365,8 @@ The parser currently recognizes:
 - direct determinants of statically known 2 by 2 matrices;
 - vector and matrix division by integer 2 by 2 matrices;
 - character literals and character-array matching;
+- character matrix construction (e.g. `2 3 $ 'catdog'`), represented as a
+  Fortran array of fixed-length rows rather than a single string;
 - character tally, catenate, and reverse;
 - zero-based character indexing;
 - transparent single homogeneous box/open pairs;
@@ -351,7 +388,7 @@ The parser currently recognizes:
 - equal-length homogeneous boxed numeric vectors lowered to matrix rows;
 - homogeneous boxed row arguments inferred as matrices when unpacked items are
   subsequently used as arrays;
-- implicit vector-matrix agreement on the trailing matrix axis, lowered with
+- implicit vector-matrix agreement on the leading matrix axis, lowered with
   `spread`;
 - straight-line local reuse across type or rank changes, lowered to versioned
   Fortran variables;
