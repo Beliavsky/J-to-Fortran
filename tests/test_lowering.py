@@ -597,6 +597,15 @@ def test_other_file_foreigns_have_an_explicit_diagnostic() -> None:
         infer_type(expression, {})
 
 
+def test_local_explicit_verb_value_assignment_has_an_explicit_diagnostic() -> None:
+    expression = parse_expression("3 : '_2%~ 2&EIn y'")
+
+    with pytest.raises(
+        LoweringError, match="explicit verb definition to a local name"
+    ):
+        infer_type(expression, {})
+
+
 @pytest.mark.parametrize(
     ("dividend", "expected_type", "helper"),
     [
@@ -1235,6 +1244,18 @@ def test_nested_stitch_flattens_all_columns_into_one_reshape() -> None:
             TypeInfo(AtomType.INTEGER, Shape.matrix(3, 4)),
             "j_power_table_int(a, [0, 1, 2, 3])",
             "power_table_int",
+        ),
+        (
+            ">:/~ a",
+            TypeInfo(AtomType.LOGICAL, Shape.matrix(3, 3)),
+            "j_reflex_ge_table_int(a)",
+            "reflex_ge_table_int",
+        ),
+        (
+            "</~ a",
+            TypeInfo(AtomType.LOGICAL, Shape.matrix(3, 3)),
+            "j_reflex_lt_table_int(a)",
+            "reflex_lt_table_int",
         ),
     ],
 )
@@ -2281,6 +2302,16 @@ def test_logical_numeric_conversion_is_preserved_in_named_verb_argument() -> Non
     assert render_fortran_expression(
         expression, names=names, named_verbs=named_verbs
     ) == "component_update(1 + 0 * merge(1, 0, component1))"
+
+
+def test_monadic_negate_converts_a_logical_operand_to_integer() -> None:
+    expression = parse_expression("- flag")
+    names = {"flag": TypeInfo(AtomType.LOGICAL)}
+
+    assert infer_type(expression, names) == TypeInfo(AtomType.INTEGER)
+    assert render_fortran_expression(expression, names=names) == (
+        "-merge(1, 0, flag)"
+    )
 
 
 def test_ranked_logical_vector_is_converted_before_broadcasting() -> None:

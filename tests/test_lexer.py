@@ -91,12 +91,22 @@ def test_comments_end_at_newline_and_strings_can_contain_nb() -> None:
         "_2r5",
         "_",
         "_.",
+        "2x",
+        "_5x",
     ],
 )
 def test_numeric_atoms(literal: str) -> None:
     token = tokenize(literal)[0]
     assert token.kind is TokenKind.NUMBER
     assert token.value == literal
+
+
+def test_extended_precision_suffix_stays_attached_to_the_number() -> None:
+    assert significant("2x*y") == [
+        (TokenKind.NUMBER, "2x"),
+        (TokenKind.PRIMITIVE, "*"),
+        (TokenKind.NAME, "y"),
+    ]
 
 
 def test_tokens_preserve_offsets_and_line_columns() -> None:

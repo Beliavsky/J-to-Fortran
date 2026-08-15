@@ -320,3 +320,13 @@ def test_missing_right_argument_is_diagnostic() -> None:
 def test_unclosed_parenthesis_is_diagnostic() -> None:
     with pytest.raises(ExpressionParseError, match="unclosed parenthesized expression"):
         parse_expression("(1 + 2")
+
+
+def test_power_conjunction_is_a_diagnostic() -> None:
+    with pytest.raises(ExpressionParseError, match="power conjunction '\\^:'"):
+        parse_expression("x +&1^:(10) y")
+
+
+def test_two_verb_hook_is_a_diagnostic() -> None:
+    with pytest.raises(ExpressionParseError, match="2-verb hook trains"):
+        parse_verb("p. sin")

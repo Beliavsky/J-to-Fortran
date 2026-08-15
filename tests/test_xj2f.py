@@ -404,6 +404,82 @@ def test_character_literals_emit_deferred_length_strings() -> None:
     assert "ok = result_j == expected" in generated
 
 
+def test_bare_top_level_expression_is_implicitly_displayed() -> None:
+    program = xj2f.parse_j_source(Path("bare.ijs"), "2 + 3\n")
+    generated = xj2f.emit_fortran(program)
+
+    assert 'write (*,"(i0)") 2 + 3' in generated
+
+
+def test_if_condition_supports_an_embedded_assignment() -> None:
+    source = """f =: 3 : 0
+if. 7 >: (u=. |y) do.
+  r =. u + 1
+else.
+  r =. u - 1
+end.
+r
+)
+"""
+    program = xj2f.parse_j_source(Path("cond.ijs"), source)
+    generated = xj2f.emit_fortran(program)
+
+    assert "u = abs(y)" in generated
+    assert "if (7 >= u) then" in generated
+
+
+def test_print_inside_a_verb_body_emits_an_impure_write() -> None:
+    source = """report =: 3 : 0
+n =. y
+print 'n =';n
+n * n
+)
+"""
+    program = xj2f.parse_j_source(Path("report.ijs"), source)
+    generated = xj2f.emit_fortran(program)
+
+    assert "impure function report" in generated
+    assert 'write (*,"(a,i0)") "n =", n' in generated
+
+
+def test_result_of_a_printing_verb_is_materialized_not_inlined() -> None:
+    source = """report =: 3 : 0
+n =. y
+print 'n =';n
+n * n
+)
+result =. report 7
+echo result
+"""
+    program = xj2f.parse_j_source(Path("materialize.ijs"), source)
+    generated = xj2f.emit_fortran(program)
+
+    assert "result_j = report(7)" in generated
+    assert 'write (*,"(i0)") result_j' in generated
+
+
+def test_echo_of_a_printing_verb_call_is_rejected() -> None:
+    source = """report =: 3 : 0
+n =. y
+print 'n =';n
+n * n
+)
+echo report 7
+"""
+    program = xj2f.parse_j_source(Path("nested.ijs"), source)
+
+    with pytest.raises(xj2f.UnsupportedJError, match="nested console I/O"):
+        xj2f.emit_fortran(program)
+
+
+def test_capped_dyadic_fork_lowers_to_a_reduction_of_a_product() -> None:
+    source = "dot =: [: +/ *\nresult =: 1 2 3 dot 4 5 6\necho result\n"
+    program = xj2f.parse_j_source(Path("dot.ijs"), source)
+    generated = xj2f.emit_fortran(program)
+
+    assert "j_result = sum(x * y)" in generated
+
+
 def test_single_box_and_open_reuse_the_underlying_array() -> None:
     source = """b =: < 10 20 30
 result =: > b
