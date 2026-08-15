@@ -249,7 +249,11 @@ class ExpressionParser:
             and self._peek().kind is TokenKind.PRIMITIVE
             and self._peek().value == "."
         ):
-            self._take()
+            dot = self._take()
+            if self.index >= len(self.tokens):
+                raise ExpressionParseError(
+                    "inner product '.' requires a verb on both sides", dot
+                )
             product = self._verb(allow_inner_product=False)
             return InnerProductVerb(verb, product, _cover(verb.span, product.span))
         return verb
