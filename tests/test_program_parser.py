@@ -1977,9 +1977,9 @@ exit 0
     source.write_text(generated, encoding="utf-8")
 
     assert "j_echo_1 = reshape(j_iota(12), [2, 2, 3]" in generated
-    assert "do j_plane = 1, size(j_echo_1, 1)" in generated
+    assert "do j_plane_1 = 1, size(j_echo_1, 1)" in generated
     assert (
-        'write (*,"(3(i0, 1x))") transpose(j_echo_1(j_plane, :, :))'
+        'write (*,"(3(i0, 1x))") transpose(j_echo_1(j_plane_1, :, :))'
         in generated
     )
     compiled = subprocess.run(
@@ -1995,6 +1995,42 @@ exit 0
     )
     assert completed.returncode == 0
     assert completed.stdout.split() == [str(value) for value in range(12)]
+
+
+@pytest.mark.requires_gfortran
+def test_known_shape_rank_four_array_prints_by_nested_plane(tmp_path: Path) -> None:
+    compiler = shutil.which("gfortran")
+    if compiler is None:
+        pytest.skip("gfortran is not installed")
+    j_source = """hyper =: 2 2 2 3 $ i. 24
+smoutput hyper
+exit 0
+"""
+    source = tmp_path / "rank_four_echo_j.f90"
+    executable = tmp_path / "rank_four_echo.exe"
+    program = xj2f.parse_j_source(Path("rank_four_echo.ijs"), j_source)
+    generated = xj2f.emit_fortran(program)
+    source.write_text(generated, encoding="utf-8")
+
+    assert "do j_plane_1 = 1, size(j_echo_1, 1)" in generated
+    assert "do j_plane_2 = 1, size(j_echo_1, 2)" in generated
+    assert (
+        'write (*,"(3(i0, 1x))") transpose(j_echo_1(j_plane_1, j_plane_2, :, :))'
+        in generated
+    )
+    compiled = subprocess.run(
+        [compiler, "-std=f2018", str(source), "-o", str(executable)],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert compiled.returncode == 0, compiled.stdout + compiled.stderr
+    completed = subprocess.run(
+        [str(executable)], cwd=tmp_path, capture_output=True, text=True, check=False
+    )
+    assert completed.returncode == 0
+    assert completed.stdout.split() == [str(value) for value in range(24)]
 
 
 @pytest.mark.requires_gfortran

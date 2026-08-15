@@ -4365,11 +4365,11 @@ def _lower_top_assignments(
             AtomType.COMPLEX,
             AtomType.LOGICAL,
             AtomType.CHARACTER,
-        } or type_info.rank not in {0, 1, 2, 3}:
+        } or type_info.rank not in {0, 1, 2, 3, 4, 5}:
             raise _error_at(
                 UnsupportedJError,
                 assignment.line,
-                "top-level assignments currently require a value of rank 3 or less",
+                "top-level assignments currently require a value of rank 5 or less",
             )
         types[name] = type_info
         noun_names.add(assignment.name)
@@ -7127,8 +7127,11 @@ def emit_fortran(
     materialized_rank_three = [
         index
         for index, (expression, result_type, _, _) in enumerate(echo_calls, 1)
-        if result_type.rank == 3
-        and re.fullmatch(r"[A-Za-z][A-Za-z0-9_]*", expression) is None
+        if (
+            result_type.rank == 3
+            and re.fullmatch(r"[A-Za-z][A-Za-z0-9_]*", expression) is None
+        )
+        or result_type.rank >= 4
     ]
     for index in unknown_echoes:
         result_type = echo_calls[index - 1][1]
@@ -7145,7 +7148,8 @@ def emit_fortran(
             AtomType.REAL: "real(kind=dp)",
             AtomType.LOGICAL: "logical",
         }[result_type.atom_type]
-        lines.append(f"  {intrinsic}, allocatable :: j_echo_{index}(:,:,:)")
+        dimensions = ",".join(":" for _ in range(result_type.rank))
+        lines.append(f"  {intrinsic}, allocatable :: j_echo_{index}({dimensions})")
     mapped_echoes = [
         (index, expression, result_type, mapped_echo)
         for index, (expression, result_type, _, mapped_echo) in enumerate(
@@ -7175,8 +7179,11 @@ def emit_fortran(
         ) else ["j_cell_1"])
     if any(mapped_echo[0] == "infix" for _, _, _, mapped_echo in mapped_echoes):
         echo_indices.append("j_window")
-    if any(result_type.rank == 3 for _, result_type, _, _ in echo_calls):
-        echo_indices.append("j_plane")
+    max_plane_loops = max(
+        (result_type.rank - 2 for _, result_type, _, _ in echo_calls if result_type.rank >= 3),
+        default=0,
+    )
+    echo_indices.extend(f"j_plane_{depth}" for depth in range(1, max_plane_loops + 1))
     if echo_indices:
         lines.append(f"  integer :: {', '.join(echo_indices)}")
     lines.append("")
@@ -7289,18 +7296,28 @@ def emit_fortran(
                 f'  write (*,"(*({descriptor}, 1x))") {output_expression}'
             )
             continue
-        if result_type.rank == 3:
-            columns = result_type.shape.extents[2]
+        if result_type.rank >= 3:
+            columns = result_type.shape.extents[-1]
             repeat = str(columns) if isinstance(columns, int) else "*"
             descriptor = "g0" if result_type.atom_type is AtomType.REAL else "i0"
-            plane = f"transpose({display_expression}(j_plane, :, :))"
+            plane_depth = result_type.rank - 2
+            plane_vars = [f"j_plane_{depth}" for depth in range(1, plane_depth + 1)]
+            indent = "  "
+            for axis, plane_var in enumerate(plane_vars, 1):
+                lines.append(
+                    f"{indent}do {plane_var} = 1, size({display_expression}, {axis})"
+                )
+                indent += "  "
+            subscript = ", ".join(plane_vars) + ", :, :"
+            plane = f"transpose({display_expression}({subscript}))"
             if result_type.atom_type is AtomType.LOGICAL:
                 plane = f"merge(1, 0, {plane})"
-            lines.append(f"  do j_plane = 1, size({display_expression}, 1)")
             lines.append(
-                f'    write (*,"({repeat}({descriptor}, 1x))") {plane}'
+                f'{indent}write (*,"({repeat}({descriptor}, 1x))") {plane}'
             )
-            lines.append("  end do")
+            for _ in plane_vars:
+                indent = indent[:-2]
+                lines.append(f"{indent}end do")
             continue
         columns = result_type.shape.extents[1]
         if isinstance(columns, int):
