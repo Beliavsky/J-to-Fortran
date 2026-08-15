@@ -2236,6 +2236,16 @@ class FunctionEmitter:
             else:
                 rendered, amendment_updates = amendment
         except LoweringError as exc:
+            if str(exc) == "selection requires an array argument" and re.fullmatch(
+                r">\s*\d+\s*\{\s*[A-Za-z][A-Za-z0-9_]*", assignment.expression
+            ):
+                raise _error_at(
+                    UnsupportedJError,
+                    assignment.line,
+                    "destructuring assignment of a boxed argument whose "
+                    "items have different shapes is not supported (only "
+                    "same-shape, one-item-per-name unpacking is)",
+                ) from exc
             raise _error_at(UnsupportedJError, assignment.line, str(exc)) from exc
         self.expression_helpers.update(
             required_runtime_helpers(
@@ -6607,9 +6617,17 @@ def emit_fortran(
         item for item in program.items if isinstance(item, ExpressionStatement)
     ]
     if top_expressions:
+        first = top_expressions[0]
+        if re.match(r"^\d+\s*!:\s*\d+\b", first.expression.strip()):
+            raise _error_at(
+                UnsupportedJError,
+                first.line,
+                "the foreign conjunction 'N!:M' (operating-system, file, or "
+                "runtime interface) used here is not supported",
+            )
         raise _error_at(
             UnsupportedJError,
-            top_expressions[0].line,
+            first.line,
             "top-level verb invocation needs a dedicated lowering rule",
         )
     program = _expand_top_level_boxed_match(program)

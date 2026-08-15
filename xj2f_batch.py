@@ -8,6 +8,7 @@ from collections import Counter
 from collections.abc import Iterable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+from datetime import datetime
 import glob
 import subprocess
 import sys
@@ -394,7 +395,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             if outcome != "pass"
         )
         print(f"Failures: {details}")
-    print(f"Elapsed: {time.perf_counter() - started:.3f} s")
+    elapsed = time.perf_counter() - started
+    finished = datetime.now().strftime("%Y-%m-%d %I:%M:%S %p")
+    print(f"Elapsed: {elapsed:.3f} s at {finished}")
     return 1 if failed else 0
 
 
