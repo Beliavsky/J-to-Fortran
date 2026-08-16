@@ -815,6 +815,90 @@ def apply_concise_procedure_style(lines: Iterable[str]) -> list[str]:
     return concise
 
 
+_MATMUL_OPERATOR_CALL = re.compile(r"\b(?:matmul|dot_product)\(")
+
+
+def _matching_close_paren(text: str, open_index: int) -> int | None:
+    depth = 0
+    index = open_index
+    quote: str | None = None
+    while index < len(text):
+        char = text[index]
+        if quote is not None:
+            if char == quote:
+                quote = None
+        elif char in "'\"":
+            quote = char
+        elif char == "(":
+            depth += 1
+        elif char == ")":
+            depth -= 1
+            if depth == 0:
+                return index
+        index += 1
+    return None
+
+
+def _split_top_level_commas(text: str) -> list[str]:
+    parts: list[str] = []
+    depth = 0
+    start = 0
+    quote: str | None = None
+    for index, char in enumerate(text):
+        if quote is not None:
+            if char == quote:
+                quote = None
+        elif char in "'\"":
+            quote = char
+        elif char in "([":
+            depth += 1
+        elif char in ")]":
+            depth -= 1
+        elif char == "," and depth == 0:
+            parts.append(text[start:index])
+            start = index + 1
+    parts.append(text[start:])
+    return parts
+
+
+def rewrite_matmul_operator_calls(text: str) -> str:
+    """Rewrite ``matmul(a, b)``/``dot_product(a, b)`` calls to ``(a .x. b)``.
+
+    Always fully parenthesized: Fortran's user-defined operators bind looser
+    than the intrinsic arithmetic operators, so an unparenthesized
+    substitution could silently change precedence if it ever lands inside a
+    larger expression. Nested calls are rewritten bottom-up so a chain like
+    ``matmul(matmul(a, b), c)`` becomes ``((a .x. b) .x. c)``.
+    """
+
+    match = _MATMUL_OPERATOR_CALL.search(text)
+    if match is None:
+        return text
+    open_paren = match.end() - 1
+    close_paren = _matching_close_paren(text, open_paren)
+    if close_paren is None:
+        return text[: match.end()] + rewrite_matmul_operator_calls(text[match.end() :])
+    inner = text[open_paren + 1 : close_paren]
+    args = _split_top_level_commas(inner)
+    prefix = text[: match.start()]
+    suffix = rewrite_matmul_operator_calls(text[close_paren + 1 :])
+    if len(args) != 2:
+        return prefix + text[match.start() : close_paren + 1] + suffix
+    left = rewrite_matmul_operator_calls(args[0].strip())
+    right = rewrite_matmul_operator_calls(args[1].strip())
+    return f"{prefix}({left} .x. {right}){suffix}"
+
+
+def uses_matmul_operator_call(lines: Iterable[str]) -> bool:
+    return any(_MATMUL_OPERATOR_CALL.search(line) for line in lines)
+
+
+def apply_matmul_operator_style(lines: Iterable[str]) -> list[str]:
+    """Rewrite every ``matmul``/``dot_product`` call in `lines` to ``.x.``."""
+
+    return [rewrite_matmul_operator_calls(line) for line in lines]
+
+
 def move_module_procedures_into_program(lines: Iterable[str]) -> list[str]:
     """Move one generated module's procedures under its main program."""
 

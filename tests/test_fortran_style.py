@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from j2fortran.fortran_style import (
     apply_concise_procedure_style,
+    apply_matmul_operator_style,
     collapse_short_fortran_continuations,
     coalesce_adjacent_allocate_statements,
     combine_adjacent_literal_writes,
@@ -13,7 +14,9 @@ from j2fortran.fortran_style import (
     procedure_prefix,
     replace_nonadvancing_write_loops,
     remove_procedure_declaration_gaps,
+    rewrite_matmul_operator_calls,
     safe_fortran_identifier,
+    uses_matmul_operator_call,
     wrap_fortran_comment,
     wrap_long_fortran_lines,
 )
@@ -323,6 +326,43 @@ def test_concise_procedure_style_shortens_attributes_and_endings() -> None:
         "end",
         "end module example",
     ]
+
+
+def test_matmul_operator_rewrite_wraps_calls_in_parens() -> None:
+    assert rewrite_matmul_operator_calls("j_result = matmul(a, b)") == (
+        "j_result = (a .x. b)"
+    )
+    assert rewrite_matmul_operator_calls("j_result = dot_product(a, b) + 1") == (
+        "j_result = (a .x. b) + 1"
+    )
+
+
+def test_matmul_operator_rewrite_handles_nested_and_adjacent_calls() -> None:
+    assert rewrite_matmul_operator_calls("matmul(matmul(a, b), c)") == (
+        "((a .x. b) .x. c)"
+    )
+    assert rewrite_matmul_operator_calls("matmul(a, b) + matmul(c, d)") == (
+        "(a .x. b) + (c .x. d)"
+    )
+
+
+def test_matmul_operator_rewrite_ignores_other_calls() -> None:
+    assert rewrite_matmul_operator_calls("f(matmul(a, b), other(1, 2))") == (
+        "f((a .x. b), other(1, 2))"
+    )
+    assert rewrite_matmul_operator_calls("no calls here") == "no calls here"
+
+
+def test_uses_matmul_operator_call_detects_either_intrinsic() -> None:
+    assert uses_matmul_operator_call(["x = matmul(a, b)"])
+    assert uses_matmul_operator_call(["x = dot_product(a, b)"])
+    assert not uses_matmul_operator_call(["x = a + b"])
+
+
+def test_apply_matmul_operator_style_rewrites_every_line() -> None:
+    assert apply_matmul_operator_style(
+        ["x = matmul(a, b)", "y = dot_product(c, d)"]
+    ) == ["x = (a .x. b)", "y = (c .x. d)"]
 
 
 def test_module_procedures_can_be_moved_inside_main_program() -> None:

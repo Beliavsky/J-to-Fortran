@@ -52,6 +52,8 @@ from j2fortran.expression_parser import (
 )
 from j2fortran.fortran_style import (
     apply_concise_procedure_style,
+    apply_matmul_operator_style,
+    uses_matmul_operator_call,
     collapse_short_fortran_continuations,
     coalesce_adjacent_allocate_statements,
     combine_adjacent_literal_writes,
@@ -2965,6 +2967,80 @@ class FunctionEmitter:
                 line,
                 f"expected known vector variable, got {name!r}",
             )
+
+
+def _matmul_operator_functions() -> list[str]:
+    def specific(name: str, kind: str, left_rank: int, right_rank: int) -> list[str]:
+        declare = lambda rank: "(:,:)" if rank == 2 else "(:)"
+        result_declare = "(:,:)" if left_rank == 2 and right_rank == 2 else (
+            "(:)" if left_rank == 2 or right_rank == 2 else ""
+        )
+        allocatable = ", allocatable" if result_declare else ""
+        return [
+            f"pure function {name}(a, b) result(c)",
+            f"  {kind}, intent(in) :: a{declare(left_rank)}, b{declare(right_rank)}",
+            f"  {kind}{allocatable} :: c{result_declare}",
+            "  c = " + ("dot_product" if result_declare == "" else "matmul") + "(a, b)",
+            f"end function {name}",
+            "",
+        ]
+
+    lines: list[str] = []
+    lines.extend(specific("j_x_dot_int", "integer", 1, 1))
+    lines.extend(specific("j_x_dot_real", "real(kind=dp)", 1, 1))
+    lines.extend(specific("j_x_mv_int", "integer", 2, 1))
+    lines.extend(specific("j_x_mv_real", "real(kind=dp)", 2, 1))
+    lines.extend(specific("j_x_vm_int", "integer", 1, 2))
+    lines.extend(specific("j_x_vm_real", "real(kind=dp)", 1, 2))
+    lines.extend(specific("j_x_mm_int", "integer", 2, 2))
+    lines.extend(specific("j_x_mm_real", "real(kind=dp)", 2, 2))
+    return lines
+
+
+def _apply_matmul_operator(
+    lines: list[str], *, module_name: str, program_name: str
+) -> list[str]:
+    """Rewrite matmul/dot_product calls to a ``.x.`` operator and declare it.
+
+    Scoped to --runtime embedded, non-internal-procedures output, where the
+    module always has exactly one "  private" and one "contains" line and
+    the generated program imports from exactly one module.
+    """
+
+    if not uses_matmul_operator_call(lines):
+        return lines
+    lines = apply_matmul_operator_style(lines)
+
+    private_index = lines.index("  private")
+    lines.insert(private_index + 1, "  public :: operator(.x.)")
+
+    contains_index = lines.index("contains")
+    lines[contains_index:contains_index] = [
+        "",
+        "  interface operator(.x.)",
+        "    module procedure j_x_dot_int, j_x_dot_real, j_x_mv_int, j_x_mv_real, &",
+        "      j_x_vm_int, j_x_vm_real, j_x_mm_int, j_x_mm_real",
+        "  end interface",
+    ]
+
+    end_module_index = lines.index(f"end module {module_name}")
+    lines[end_module_index:end_module_index] = _matmul_operator_functions() + [""]
+
+    program_index = lines.index(f"program {program_name}")
+    use_prefix = f"  use {module_name}, only:"
+    use_index = next(
+        (
+            index
+            for index in range(program_index, len(lines))
+            if lines[index].startswith(use_prefix)
+        ),
+        None,
+    )
+    if use_index is not None:
+        lines[use_index] = lines[use_index] + ", operator(.x.)"
+    else:
+        lines.insert(program_index + 1, f"{use_prefix} operator(.x.)")
+    return lines
 
 
 def _runtime_helpers(helpers: set[str]) -> list[str]:
@@ -6674,11 +6750,16 @@ def emit_fortran(
     concise: bool = False,
     internal_procedures: bool = False,
     parameterize_constants: bool = False,
+    matmul_operator: bool = False,
 ) -> str:
     if runtime not in {"embedded", "external"}:
         raise J2FError(f"unknown runtime mode {runtime!r}")
     if source_comments not in SOURCE_COMMENT_MODES:
         raise J2FError(f"unknown source-comment mode {source_comments!r}")
+    if matmul_operator and runtime != "embedded":
+        raise J2FError("--matmul-operator currently requires --runtime embedded")
+    if matmul_operator and internal_procedures:
+        raise J2FError("--matmul-operator cannot be combined with --internal-procedures")
     if function_result_style is not None and function_result_style not in FUNCTION_RESULT_STYLES:
         raise J2FError(f"unknown function-result style {function_result_style!r}")
     effective_result_style = function_result_style or (
@@ -7402,6 +7483,10 @@ def emit_fortran(
     lines = remove_procedure_declaration_gaps(lines)
     if concise:
         lines = apply_concise_procedure_style(lines)
+    if matmul_operator:
+        lines = _apply_matmul_operator(
+            lines, module_name=module_name, program_name=program_name
+        )
     lines = wrap_long_fortran_lines(lines)
     return _prepend_file_comments(
         "\n".join(lines), leading_comments, source_comments
@@ -7924,6 +8009,16 @@ def build_argument_parser() -> argparse.ArgumentParser:
         help="emit safe top-level constant nouns as Fortran parameters",
     )
     parser.add_argument(
+        "--matmul-operator",
+        action="store_true",
+        help=(
+            "render the sum-product inner product (+/ .*) as a custom "
+            "'.x.' infix operator instead of matmul()/dot_product() calls; "
+            "requires --runtime embedded and is incompatible with "
+            "--internal-procedures"
+        ),
+    )
+    parser.add_argument(
         "--j2j",
         action=argparse.BooleanOptionalAction,
         default=True,
@@ -8008,6 +8103,7 @@ def _emit_fortran_for_args(parsed_program: Program, args: argparse.Namespace) ->
         concise=args.concise,
         internal_procedures=args.internal_procedures,
         parameterize_constants=args.parameterize_constants,
+        matmul_operator=args.matmul_operator,
     )
 
 

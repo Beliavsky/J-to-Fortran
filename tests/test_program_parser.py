@@ -3005,6 +3005,69 @@ smoutput a , b
     ]
 
 
+@pytest.mark.requires_gfortran
+def test_matmul_operator_style_compiles_and_runs(tmp_path: Path) -> None:
+    compiler = shutil.which("gfortran")
+    if compiler is None:
+        pytest.skip("gfortran is not installed")
+    source_text = """a =: 2 3 $ 1 2 3 4 5 6
+b =: 3 2 $ 2 5 7 3 1 9
+c =: a +/ .* b
+smoutput c
+v =: 3 4 5
+smoutput a +/ .* v
+smoutput v +/ .* v
+"""
+    program = xj2f.parse_j_source(tmp_path / "matmul_operator.ijs", source_text)
+    generated = xj2f.emit_fortran(program, matmul_operator=True)
+    program_text = generated[generated.index("program matmul_operator_j") :]
+    assert " .x. " in program_text
+    assert "matmul(" not in program_text
+    assert "dot_product(" not in program_text
+    source = tmp_path / "matmul_operator.f90"
+    executable = tmp_path / "matmul_operator.exe"
+    source.write_text(generated, encoding="utf-8")
+    compiled = subprocess.run(
+        [compiler, "-std=f2018", str(source), "-o", str(executable)],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert compiled.returncode == 0, compiled.stdout + compiled.stderr
+    completed = subprocess.run(
+        [str(executable)],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    # Verified against real J.
+    assert [int(token) for token in completed.stdout.split()] == [
+        19, 38,
+        49, 89,
+        26, 62,
+        50,
+    ]
+
+
+def test_matmul_operator_requires_embedded_runtime() -> None:
+    source_text = "c =: a +/ .* b\n"
+    program = xj2f.parse_j_source(Path("matmul_operator.ijs"), source_text)
+    with pytest.raises(xj2f.J2FError, match="--matmul-operator currently requires --runtime embedded"):
+        xj2f.emit_fortran(program, matmul_operator=True, runtime="external")
+
+
+def test_matmul_operator_rejects_internal_procedures() -> None:
+    source_text = "c =: a +/ .* b\n"
+    program = xj2f.parse_j_source(Path("matmul_operator.ijs"), source_text)
+    with pytest.raises(
+        xj2f.J2FError, match="--matmul-operator cannot be combined with --internal-procedures"
+    ):
+        xj2f.emit_fortran(program, matmul_operator=True, internal_procedures=True)
+
+
 def test_conditional_without_else_is_not_a_total_result() -> None:
     source = """f =: 3 : 0
   if. y > 0 do.

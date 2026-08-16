@@ -136,6 +136,12 @@ end program sumsq_j
 - `--check`: verify that the input is in the supported subset without writing Fortran.
 - `--j2j`/`--no-j2j`: retry a failed translation after normalizing the source
   with `xj2j.py` (on by default; see [J-to-J normalization](#j-to-j-normalization-xj2jpy)).
+- `--matmul-operator`: render the sum-product inner product (`+/ .*`) as a
+  custom `.x.` infix operator instead of `matmul()`/`dot_product()` calls, so
+  a chain like `a +/ .* b +/ .* c` reads left to right in the generated
+  Fortran instead of nesting as `matmul(matmul(a, b), c)`. Off by default;
+  requires `--runtime embedded` and is incompatible with
+  `--internal-procedures`.
 - `--runtime embedded|external`: embed required helpers or use `j.f90`.
 - `--runtime-file FILE`: select the `j.f90` used to compile external-runtime output.
 - `--source-comments all|commented|none`: control migrated `NB.` prose and
@@ -361,7 +367,8 @@ The parser currently recognizes:
 - monadic and dyadic reflexes of supported primitives, integer-noun bond,
   left-noun bond of translated dyadic verbs,
   monadic `@:` composition, and monadic forks;
-- sum-product inner products lowered to `dot_product` and `matmul`;
+- sum-product inner products lowered to `dot_product` and `matmul`, or
+  optionally to a custom `.x.` infix operator with `--matmul-operator`;
 - direct determinants of statically known 2 by 2 matrices;
 - vector and matrix division by integer 2 by 2 matrices;
 - character literals and character-array matching;
